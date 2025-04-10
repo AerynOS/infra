@@ -143,7 +143,7 @@ fn install_manifest(db: &meta::Database, work_dir: &Path, manifest: &Path) -> Re
 
     let mut meta = Meta::from_stone_payload(&first.body).context("convert meta payload to metadata")?;
 
-    // Overwrite from root pacakge since we don't know if root package
+    // Overwrite from root package since we don't know if root package
     // was first meta payload that seeded this
     meta.summary = recipe.package.summary.clone().unwrap_or_default();
     meta.description = recipe.package.description.clone().unwrap_or_default();

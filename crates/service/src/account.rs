@@ -128,7 +128,7 @@ impl Account {
               name,
               public_key
             FROM account
-            WHERE 
+            WHERE
               username = ?
               AND public_key = ?
               AND (type = 'admin' OR type = 'standard');
@@ -156,7 +156,7 @@ impl Account {
               public_key
             )
             VALUES (?,?,?,?,?,?)
-            ON CONFLICT(account_id) DO UPDATE SET 
+            ON CONFLICT(account_id) DO UPDATE SET
               type=excluded.type,
               username=excluded.username,
               email=excluded.email,
@@ -265,10 +265,10 @@ pub(crate) async fn sync_admin(db: &Database, admin: Admin) -> Result<(), Error>
 
     let account: Option<(Uuid,)> = sqlx::query_as(
         "
-        SELECT 
+        SELECT
           account_id
         FROM account
-        WHERE 
+        WHERE
           type = 'admin'
           AND username = ?
           AND name = ?

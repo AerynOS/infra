@@ -131,7 +131,7 @@ async fn enroll(state: Arc<State>, request: tonic::Request<EnrollmentRequest>) -
 
     debug!(%endpoint, %account, "Generated endpoint & account IDs for enrollment request");
 
-    let recieved = enrollment::Received {
+    let received = enrollment::Received {
         endpoint,
         account,
         remote: enrollment::Remote {
@@ -149,7 +149,7 @@ async fn enroll(state: Arc<State>, request: tonic::Request<EnrollmentRequest>) -
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_secs(1)).await;
 
-        if let Err(e) = recieved.accept(&state.db, state.issuer.clone()).await {
+        if let Err(e) = received.accept(&state.db, state.issuer.clone()).await {
             error!(error=%error::chain(e), "Auto accept failed")
         };
     });
@@ -259,7 +259,7 @@ enum Error {
     InvalidPublicKey,
     #[error("Public key not defined in downstreams: {provided}")]
     DownstreamMismatch { provided: PublicKey },
-    #[error("Uknown role: {0}")]
+    #[error("Unknown role: {0}")]
     UnknownRole(i32),
     #[error("Role mismatch, expected {expected:?} provided {provided:?}")]
     RoleMismatch { expected: Role, provided: Role },
