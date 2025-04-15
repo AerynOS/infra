@@ -31,3 +31,6 @@ restart *ARGS:
 # Bring down docker containers
 down *ARGS:
 	docker compose down -v {{ARGS}}
+
+summit-dev:
+	cargo run -p summit --no-default-features --features templates-autoreload -- -c ./test/summit/config.toml --root $(mktemp -d) --static ./crates/summit/static
