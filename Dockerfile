@@ -1,4 +1,4 @@
-FROM rust:alpine3.20 AS rust-builder
+FROM docker.io/rust:alpine3.20 AS rust-builder
 ENV RUSTUP_HOME="/usr/local/rustup" \
     CARGO_HOME="/usr/local/cargo" \
     CARGO_TARGET_DIR="/tmp/target"
@@ -22,7 +22,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     done
 EOT
 
-FROM alpine:3.20 AS summit
+FROM docker.io/alpine:3.20 AS summit
 WORKDIR /app
 RUN apk add --no-cache sudo git
 COPY --from=rust-builder /summit .
@@ -34,7 +34,7 @@ EXPOSE 5000
 ENTRYPOINT ["/app/summit"]
 CMD ["0.0.0.0", "--port", "5000", "--root", "/app", "--seed", "/app/seed.toml"]
 
-FROM alpine:3.20 AS vessel
+FROM docker.io/alpine:3.20 AS vessel
 WORKDIR /app
 COPY --from=rust-builder /vessel .
 VOLUME /app/state
@@ -44,7 +44,7 @@ EXPOSE 5001
 ENTRYPOINT ["/app/vessel"]
 CMD ["0.0.0.0", "--port", "5001", "--root", "/app", "--import", "/import"]
 
-FROM alpine:3.20 AS avalanche
+FROM docker.io/alpine:3.20 AS avalanche
 WORKDIR /app
 RUN apk add --no-cache sudo git
 COPY --from=rust-builder /avalanche .
