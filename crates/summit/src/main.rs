@@ -14,7 +14,6 @@ pub use self::queue::Queue;
 pub use self::repository::Repository;
 pub use self::seed::seed;
 pub use self::task::Task;
-pub use self::templates::{render_html_template, template_context_layer};
 
 pub type Result<T, E = color_eyre::eyre::Error> = std::result::Result<T, E>;
 pub type Config = service::Config;
@@ -70,7 +69,6 @@ async fn main() -> Result<()> {
                 .route("/tasks", get(routes::tasks))
                 .nest_service("/static", serve_static)
                 .fallback(get(routes::fallback))
-                .layer(template_context_layer())
                 .with_state(state.clone()),
         )
         .with_grpc((host, grpc_port))

@@ -4,21 +4,15 @@ use serde::Serialize;
 
 #[cfg_attr(
     all(feature = "templates-bundled", not(feature = "templates-autoreload")),
-    path = "templates/impl_bundled.rs"
+    path = "templates/bundled.rs"
 )]
-#[cfg_attr(feature = "templates-autoreload", path = "templates/impl_autoreload.rs")]
+#[cfg_attr(feature = "templates-autoreload", path = "templates/autoreload.rs")]
 mod implementation;
 
-pub use self::implementation::TemplateContextLayer;
-
-pub type TemplateResponse = axum::response::Result<Html<String>>;
-
-pub fn template_context_layer() -> TemplateContextLayer {
-    TemplateContextLayer::new()
-}
+pub type Response = axum::response::Result<Html<String>>;
 
 #[allow(clippy::result_large_err)]
-pub fn render_html_template<S>(name: &str, ctx: S) -> TemplateResponse
+pub fn render_html<S>(name: &str, ctx: S) -> Response
 where
     S: Serialize,
 {

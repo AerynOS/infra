@@ -7,10 +7,10 @@ use http::StatusCode;
 use serde::Deserialize;
 use snafu::Snafu;
 
-use crate::{project, task, templates::render_html_template};
+use crate::{project, task, templates::render_html};
 
 pub async fn index() -> impl IntoResponse {
-    render_html_template("index.html.jinja", ())
+    render_html("index.html.jinja", ())
 }
 
 #[derive(Debug, Deserialize)]
@@ -36,14 +36,11 @@ pub async fn tasks(
         .await
         .context("query tasks")?;
 
-    Ok(render_html_template(
-        "tasks.html.jinja",
-        minijinja::context! { projects, query },
-    ))
+    Ok(render_html("tasks.html.jinja", minijinja::context! { projects, query }))
 }
 
 pub async fn fallback() -> impl IntoResponse {
-    render_html_template("404.html.jinja", ())
+    render_html("404.html.jinja", ())
 }
 
 #[derive(Debug, Snafu)]
