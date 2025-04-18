@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package vessel;
+
+import "collectable.proto";
+import "options.proto";
+import "google/protobuf/empty.proto";
+
+message ImportRequest {
+  uint64 task_id = 1;
+  repeated collectable.Collectable collectables = 2;
+}
+
+service VesselService {
+  rpc Import(ImportRequest) returns (google.protobuf.Empty) {
+    option (options.flags) = "ACCESS_TOKEN | SERVICE_ACCOUNT | NOT_EXPIRED";
+  }
+}

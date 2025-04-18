@@ -1,7 +1,8 @@
 use color_eyre::eyre::{Context, Result};
 use service::{
-    Collectable, Endpoint, State,
+    Endpoint, State,
     endpoint::{self, builder},
+    grpc::collectable::Collectable,
 };
 use tracing::{error, info};
 

@@ -1,13 +1,18 @@
 use std::path::Path;
 
-use color_eyre::eyre::{Context, OptionExt, Report, Result};
+use color_eyre::eyre::{self, Context, OptionExt, Report, Result};
 use http::Uri;
 use itertools::Itertools;
-use service::{Collectable, Remote, collectable, git};
 use service::{
     Endpoint, State,
-    api::{self, v1::avalanche::PackageBuild},
-    error,
+    client::{AuthClient, EndpointAuth, SummitServiceClient},
+    error, git,
+    grpc::{
+        avalanche::BuildRequest,
+        collectable::{self, Collectable},
+        remote::Remote,
+        summit,
+    },
 };
 use sha2::{Digest, Sha256};
 use tokio::fs::{self, File};
@@ -18,55 +23,62 @@ use crate::Config;
 #[tracing::instrument(
     skip_all,
     fields(
-        build_id = request.build_id,
+        task_id = request.task_id,
         endpoint = %endpoint.id,
     )
 )]
-pub async fn build(request: PackageBuild, endpoint: Endpoint, state: State, config: Config) {
+pub async fn build(request: BuildRequest, endpoint: Endpoint, state: State, config: Config) {
     info!("Starting build");
 
-    let client =
-        service::Client::new(endpoint.host_address.clone()).with_endpoint_auth(endpoint.id, state.service_db.clone());
+    let run = async || {
+        let mut client = SummitServiceClient::connect_with_auth(
+            endpoint.host_address.clone(),
+            EndpointAuth::new(&endpoint, state.service_db.clone(), state.key_pair.clone()),
+        )
+        .await?;
 
-    let task_id = request.build_id;
+        let task_id = request.task_id;
 
-    let status = match run(request, endpoint, state, config).await {
-        Ok((None, collectables)) => {
-            info!("Build succeeded");
+        match run(request, endpoint, state, config).await {
+            Ok((None, collectables)) => {
+                info!("Build succeeded");
 
-            client
-                .send::<api::v1::summit::BuildSucceeded>(&api::v1::summit::BuildBody { task_id, collectables })
-                .await
+                client
+                    .build_succeeded(summit::BuildRequest { task_id, collectables })
+                    .await?;
+            }
+            Ok((Some(e), collectables)) => {
+                let error = error::chain(e.as_ref() as &dyn std::error::Error);
+                error!(%error, "Build failed");
+
+                client
+                    .build_failed(summit::BuildRequest { task_id, collectables })
+                    .await?;
+            }
+            Err(e) => {
+                let error = error::chain(e.as_ref() as &dyn std::error::Error);
+                error!(%error, "Build failed");
+
+                client
+                    .build_failed(summit::BuildRequest {
+                        task_id,
+                        collectables: vec![],
+                    })
+                    .await?;
+            }
         }
-        Ok((Some(e), collectables)) => {
-            let error = error::chain(e.as_ref() as &dyn std::error::Error);
-            error!(%error, "Build failed");
 
-            client
-                .send::<api::v1::summit::BuildFailed>(&api::v1::summit::BuildBody { task_id, collectables })
-                .await
-        }
-        Err(e) => {
-            let error = error::chain(e.as_ref() as &dyn std::error::Error);
-            error!(%error, "Build failed");
-
-            client
-                .send::<api::v1::summit::BuildFailed>(&api::v1::summit::BuildBody {
-                    task_id,
-                    collectables: vec![],
-                })
-                .await
-        }
+        Result::<_, eyre::Report>::Ok(())
     };
 
-    if let Err(e) = status {
-        let error = error::chain(e);
+    if let Err(e) = run().await {
+        let error = error::chain(&*e);
         error!(%error, "Failed to send build status response");
     }
 }
 
 async fn run(
-    request: PackageBuild,
+    request: BuildRequest,
     _endpoint: Endpoint,
     state: State,
     config: Config,
@@ -89,7 +101,7 @@ async fn run(
     let worktree_dir = work_dir.join("source");
     ensure_dir_exists(&worktree_dir).await.context("create worktree dir")?;
 
-    let asset_dir = state.root.join("assets").join(request.build_id.to_string());
+    let asset_dir = state.root.join("assets").join(request.task_id.to_string());
     recreate_dir(&asset_dir).await.context("recreate asset dir")?;
 
     let log_file = asset_dir.join("build.log");
@@ -122,9 +134,13 @@ async fn run(
         .context("spawn blocking")?
         .context("compress log file")?;
 
-    let collectables = scan_collectables(request.build_id, &config.host_address, &asset_dir)
-        .await
-        .context("scan collectables")?;
+    let collectables = scan_collectables(
+        request.task_id,
+        config.http_address.as_ref().ok_or_eyre("missing configured http uri")?,
+        &asset_dir,
+    )
+    .await
+    .context("scan collectables")?;
 
     info!("Removing worktree");
     git::remove_worktree(&mirror_dir, &worktree_dir)
@@ -272,7 +288,11 @@ async fn scan_collectables(build_id: u64, host_address: &Uri, asset_dir: &Path) 
             .context("spawn blocking")?
             .context("compute asset sha256")?;
 
-        collectables.push(Collectable { kind, uri, sha256sum })
+        collectables.push(Collectable {
+            kind: kind as i32,
+            uri,
+            sha256sum,
+        })
     }
 
     Ok(collectables)

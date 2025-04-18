@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package avalanche;
+
+import "google/protobuf/empty.proto";
+import "options.proto";
+import "remote.proto";
+
+message BuildRequest {
+  uint64 task_id = 1;
+  string uri = 2;
+  string commit_ref = 3;
+  string relative_path = 4;
+  string build_architecture = 5;
+  repeated remote.Remote remotes = 6;
+}
+
+service AvalancheService {
+  rpc Build(BuildRequest) returns (google.protobuf.Empty) {
+    option (options.flags) = "ACCESS_TOKEN | SERVICE_ACCOUNT | NOT_EXPIRED";
+  }
+}

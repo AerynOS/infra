@@ -1,0 +1,39 @@
+syntax = "proto3";
+
+package account;
+
+import "google/protobuf/empty.proto";
+import "options.proto";
+
+message Credentials {
+  string username = 1;
+  string public_key = 2;
+}
+
+message AuthenticateRequest {
+  oneof body {
+    Credentials credentials = 1;
+    string signature = 2;
+  }
+}
+
+message AuthenticateResponse {
+  oneof body {
+    string challenge = 1;
+    TokenResponse tokens = 2;
+  }
+}
+
+message TokenResponse {
+  string bearer_token = 1;
+  string access_token = 2;
+}
+
+service AccountService {
+  rpc Authenticate(stream AuthenticateRequest) returns (stream AuthenticateResponse) {
+    option (options.flags) = "NO_AUTH";
+  }
+  rpc RefreshToken(google.protobuf.Empty) returns (TokenResponse) {
+    option (options.flags) = "BEARER_TOKEN | NOT_EXPIRED";
+  }
+}

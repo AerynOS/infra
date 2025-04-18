@@ -1,5 +1,6 @@
 description = "Avalanche (test)"
-host_address = "http://avalanche:5002"
+http_address = "http://avalanche:5000"
+grpc_address = "http://avalanche:5001"
 
 upstream = "gjbJc9Tyuj6nttjQBWV0E813d3ZnH2hZ9EtBEl6Tdn4"
 

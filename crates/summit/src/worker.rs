@@ -1,7 +1,7 @@
 use std::{convert::Infallible, future::Future, time::Duration};
 
 use color_eyre::{Result, eyre::Context};
-use service::{Collectable, endpoint};
+use service::{endpoint, grpc::collectable::Collectable};
 use tokio::{
     sync::mpsc,
     time::{self, Instant},
@@ -32,6 +32,10 @@ pub enum Message {
         task_id: task::Id,
     },
     ImportFailed {
+        task_id: task::Id,
+    },
+    Refresh,
+    Retry {
         task_id: task::Id,
     },
     Timer(Instant),
@@ -90,6 +94,8 @@ async fn handle_message(sender: &Sender, manager: &mut Manager, message: Message
         } => build_failed(sender, manager, task_id, builder, collectables).await,
         Message::ImportSucceeded { task_id } => import_succeeded(sender, manager, task_id).await,
         Message::ImportFailed { task_id } => import_failed(sender, manager, task_id).await,
+        Message::Refresh => todo!(),
+        Message::Retry { .. } => todo!(),
         Message::Timer(_) => timer(sender, manager).await,
     }
 }

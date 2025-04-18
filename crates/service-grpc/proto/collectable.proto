@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package collectable;
+
+message Collectable {
+  Kind kind = 1;
+  string uri = 2;
+  string sha256sum = 3;
+}
+
+enum Kind {
+  KIND_UNKNOWN = 0;
+  KIND_LOG = 1;
+  KIND_JSON_MANIFEST = 2;
+  KIND_BINARY_MANIFEST = 3;
+  KIND_PACKAGE = 4;
+}

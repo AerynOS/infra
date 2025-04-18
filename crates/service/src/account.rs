@@ -1,27 +1,53 @@
 //! Manage data for admin, user, bot & service accounts
 
+use std::str::FromStr;
+
 use chrono::{DateTime, Utc};
 use derive_more::{Display, From, Into};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
-use strum::EnumString;
 use thiserror::Error;
 use tracing::debug;
+use uuid::Uuid;
 
 use crate::{Database, crypto::EncodedPublicKey, database};
 
+pub use service_core::account::Kind;
+
+pub(crate) use self::service::service;
+
+mod service;
+
 /// Unique identifier of an [`Account`]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, From, Into, Display, FromRow)]
-pub struct Id(i64);
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, From, Into, Display)]
+pub struct Id(Uuid);
 
 impl Id {
     /// Generate a new [`Id`]
     pub fn generate() -> Self {
-        // TODO: Hacky way to support u64 ID that dlang infra expects
-        // without having to create temporary DB records
-        //
-        // Move to proper UUID once we're off D infra
-        Self(Utc::now().timestamp_nanos_opt().unwrap_or(0))
+        Self(Uuid::new_v4())
+    }
+}
+
+impl FromStr for Id {
+    type Err = uuid::Error;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        value.parse::<Uuid>().map(Id)
+    }
+}
+
+impl<'a> TryFrom<&'a str> for Id {
+    type Error = uuid::Error;
+
+    fn try_from(value: &'a str) -> Result<Self, Self::Error> {
+        value.parse::<Uuid>().map(Id)
+    }
+}
+
+impl From<Id> for String {
+    fn from(id: Id) -> Self {
+        id.to_string()
     }
 }
 
@@ -29,7 +55,7 @@ impl Id {
 #[derive(Debug, Clone, Serialize, FromRow)]
 pub struct Account {
     /// Unique identifier of the account
-    #[sqlx(rename = "account_id", try_from = "i64")]
+    #[sqlx(rename = "account_id", try_from = "Uuid")]
     pub id: Id,
     /// Account type
     #[sqlx(rename = "type", try_from = "&'a str")]
@@ -151,47 +177,6 @@ impl Account {
     }
 }
 
-/// Type of account
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, EnumString, strum::Display)]
-#[repr(u8)]
-#[serde(into = "u8", try_from = "u8")]
-#[strum(serialize_all = "kebab-case")]
-pub enum Kind {
-    /// Standard account
-    Standard = 0,
-    /// Bot account
-    Bot,
-    /// Service account (endpoint)
-    Service,
-    /// Admin account
-    Admin,
-}
-
-impl From<Kind> for u8 {
-    fn from(kind: Kind) -> Self {
-        kind as u8
-    }
-}
-
-impl TryFrom<u8> for Kind {
-    type Error = UnknownKind;
-
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
-        match value {
-            0 => Ok(Kind::Standard),
-            1 => Ok(Kind::Bot),
-            2 => Ok(Kind::Service),
-            3 => Ok(Kind::Admin),
-            x => Err(UnknownKind(x)),
-        }
-    }
-}
-
-/// Unknown [`Kind`] from [`u8`]
-#[derive(Debug, Error)]
-#[error("Unkown account kind: {0}")]
-pub struct UnknownKind(u8);
-
 /// [`Account`] bearer token provisioned for the account after authentication
 #[derive(Debug, Clone, FromRow)]
 pub struct Token {
@@ -278,7 +263,7 @@ pub struct Admin {
 pub(crate) async fn sync_admin(db: &Database, admin: Admin) -> Result<(), Error> {
     let mut tx = db.begin().await?;
 
-    let account: Option<Id> = sqlx::query_as(
+    let account: Option<(Uuid,)> = sqlx::query_as(
         "
         SELECT 
           account_id

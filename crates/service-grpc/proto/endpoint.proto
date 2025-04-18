@@ -1,0 +1,65 @@
+syntax = "proto3";
+
+package endpoint;
+
+import "google/protobuf/empty.proto";
+import "options.proto";
+
+message Id {
+  string id = 1;
+}
+
+message Endpoint {
+  Id id = 1;
+  string host_address = 2;
+  string public_key = 3;
+  Status status = 4;
+}
+
+enum Status {
+  STATUS_UNKNOWN = 0;
+  STATUS_AWAITING_ACCEPTANCE = 1;
+  STATUS_FAILED = 2;
+  STATUS_OPERATIONAL = 3;
+  STATUS_FORBIDDEN = 4;
+  STATUS_UNREACHABLE = 5;
+}
+
+message Issuer {
+  string public_key = 1;
+  string url = 2;
+  Role role = 3;
+  string admin_name = 4;
+  string admin_email = 5;
+  string description = 6;
+}
+
+enum Role {
+  ROLE_UNKNOWN = 0;
+  ROLE_BUILDER = 1;
+  ROLE_REPOSITORY_MANAGER = 2;
+  ROLE_HUB = 3;
+}
+
+message EnrollmentRequest {
+  Issuer issuer = 1;
+  string issue_token = 2;
+  Role role = 3;
+}
+
+message PendingResponse {
+  repeated Endpoint endpoints = 1;
+}
+
+service EndpointService {
+  // Enrollment functions
+  rpc Enroll(EnrollmentRequest) returns (google.protobuf.Empty) {
+    option (options.flags) = "NO_AUTH";
+  }
+  rpc Accept(EnrollmentRequest) returns (google.protobuf.Empty) {
+    option (options.flags) = "BEARER_TOKEN | SERVICE_ACCOUNT | NOT_EXPIRED";
+  }
+  rpc Decline(google.protobuf.Empty) returns (google.protobuf.Empty) {
+    option (options.flags) = "BEARER_TOKEN | SERVICE_ACCOUNT | NOT_EXPIRED";
+  }
+}

@@ -1,7 +1,6 @@
 //! Parse the authorization token from incoming requests, validate it and provide
 //! the verified token & flags as extensions to downstream middleware / handlers
 
-use axum::body::Body;
 use tracing::{debug, warn};
 
 use crate::{
@@ -44,9 +43,9 @@ pub struct Service<S> {
     validation: Validation,
 }
 
-impl<S> tower::Service<http::Request<Body>> for Service<S>
+impl<S, ReqBody, ResBody> tower::Service<http::Request<ReqBody>> for Service<S>
 where
-    S: tower::Service<http::Request<Body>, Response = http::Response<Body>> + Clone + Send + 'static,
+    S: tower::Service<http::Request<ReqBody>, Response = http::Response<ResBody>> + Clone + Send + 'static,
     S::Future: Send + 'static,
 {
     type Response = S::Response;
@@ -57,7 +56,7 @@ where
         tower::Service::poll_ready(&mut self.inner, cx)
     }
 
-    fn call(&mut self, mut req: http::Request<Body>) -> Self::Future {
+    fn call(&mut self, mut req: http::Request<ReqBody>) -> Self::Future {
         let clone = self.inner.clone();
         let mut inner = std::mem::replace(&mut self.inner, clone);
 
@@ -100,7 +99,11 @@ where
     }
 }
 
-fn extract_token(req: &http::Request<Body>, pub_key: &PublicKey, validation: &Validation) -> Option<VerifiedToken> {
+fn extract_token<Body>(
+    req: &http::Request<Body>,
+    pub_key: &PublicKey,
+    validation: &Validation,
+) -> Option<VerifiedToken> {
     let header = req.headers().get("authorization")?;
     let token_str = header.to_str().ok()?.strip_prefix("Bearer ")?;
 

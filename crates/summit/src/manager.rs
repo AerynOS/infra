@@ -2,10 +2,10 @@ use std::collections::{HashMap, VecDeque};
 
 use color_eyre::eyre::{self, Context, OptionExt, Result};
 use moss::db::meta;
-use service::{Collectable, Endpoint, State, database::Transaction, endpoint};
+use service::{Endpoint, State, database::Transaction, endpoint, grpc::collectable::Collectable};
 use sqlx::{Sqlite, pool::PoolConnection};
 use tokio::task::spawn_blocking;
-use tracing::{Span, error, info, warn};
+use tracing::{Span, debug, error, info, warn};
 
 use crate::{Project, Queue, profile, project, repository, task};
 
@@ -125,11 +125,22 @@ impl Manager {
         let mut available = self.queue.available().collect::<VecDeque<_>>();
         let mut next_task = available.pop_front();
 
+        if next_task.is_none() {
+            debug!("No tasks available");
+            return Ok(());
+        }
+
         let builders = Endpoint::list(&mut *conn)
             .await
             .context("list endpoints")?
             .into_iter()
-            .filter(Endpoint::is_idle_builder);
+            .filter(Endpoint::is_idle_builder)
+            .collect::<Vec<_>>();
+
+        if builders.is_empty() {
+            debug!("No builders available");
+            return Ok(());
+        }
 
         // We will use a TX within each build to atomically
         // update all the things together, so we don't need

@@ -2,13 +2,9 @@
 
 // #![warn(missing_docs)]
 
-pub use self::collectable::Collectable;
-pub use self::remote::Remote;
-pub use self::role::Role;
+pub use self::token::Token;
 
-pub mod api;
+pub mod account;
 pub mod auth;
-pub mod collectable;
-pub mod endpoint;
-pub mod remote;
-pub mod role;
+pub mod crypto;
+pub mod token;

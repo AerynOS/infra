@@ -1,0 +1,42 @@
+syntax = "proto3";
+
+package summit;
+
+import "collectable.proto";
+import "options.proto";
+import "google/protobuf/empty.proto";
+
+message BuildRequest {
+  uint64 task_id = 1;
+  repeated collectable.Collectable collectables = 2;
+}
+
+message ImportRequest {
+  uint64 task_id = 1;
+}
+
+message RetryRequest {
+  uint64 task_id = 1;
+}
+
+service SummitService {
+  rpc BuildSucceeded(BuildRequest) returns (google.protobuf.Empty) {
+    option (options.flags) = "ACCESS_TOKEN | SERVICE_ACCOUNT | NOT_EXPIRED";
+  }
+  rpc BuildFailed(BuildRequest) returns (google.protobuf.Empty) {
+    option (options.flags) = "ACCESS_TOKEN | SERVICE_ACCOUNT | NOT_EXPIRED";
+  }
+  rpc ImportSucceeded(ImportRequest) returns (google.protobuf.Empty) {
+    option (options.flags) = "ACCESS_TOKEN | SERVICE_ACCOUNT | NOT_EXPIRED";
+  }
+  rpc ImportFailed(ImportRequest) returns (google.protobuf.Empty) {
+    option (options.flags) = "ACCESS_TOKEN | SERVICE_ACCOUNT | NOT_EXPIRED";
+  }
+
+  rpc Refresh(google.protobuf.Empty) returns (google.protobuf.Empty) {
+    option (options.flags) = "ACCESS_TOKEN | ADMIN_ACCOUNT | NOT_EXPIRED";
+  }
+  rpc Retry(RetryRequest) returns (google.protobuf.Empty) {
+    option (options.flags) = "ACCESS_TOKEN | ADMIN_ACCOUNT | NOT_EXPIRED";
+  }
+}

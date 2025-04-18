@@ -1,7 +1,16 @@
 use http::Uri;
-use service::{Remote, database::Transaction};
+use serde::Serialize;
+use service::database::Transaction;
 
 use crate::profile;
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Remote {
+    #[serde(with = "http_serde::uri")]
+    pub index_uri: Uri,
+    pub name: String,
+    pub priority: u64,
+}
 
 pub async fn create(
     tx: &mut Transaction,

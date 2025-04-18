@@ -1,12 +1,7 @@
 //! Log the request and if applicable, error
 
-use std::sync::Arc;
-
-use axum::body::Body;
 use futures_util::{FutureExt, future::BoxFuture};
-use tracing::{Instrument, debug, error, info_span};
-
-use crate::error;
+use tracing::{Instrument, debug, info_span};
 
 /// Logging middleware which logs the request and if applicable, error
 #[derive(Debug, Clone, Copy)]
@@ -26,10 +21,11 @@ pub struct Service<S> {
     inner: S,
 }
 
-impl<S> tower::Service<http::Request<Body>> for Service<S>
+impl<S, ReqBody, ResBody> tower::Service<http::Request<ReqBody>> for Service<S>
 where
-    S: tower::Service<http::Request<Body>, Response = http::Response<Body>> + Clone + Send + 'static,
+    S: tower::Service<http::Request<ReqBody>, Response = http::Response<ResBody>> + Clone + Send + 'static,
     S::Future: Send + 'static,
+    ReqBody: Send + 'static,
 {
     type Response = S::Response;
     type Error = S::Error;
@@ -39,7 +35,7 @@ where
         tower::Service::poll_ready(&mut self.inner, cx)
     }
 
-    fn call(&mut self, req: http::Request<Body>) -> Self::Future {
+    fn call(&mut self, req: http::Request<ReqBody>) -> Self::Future {
         // This is necessary because tonic internally uses `tower::buffer::Buffer`.
         // See https://github.com/tower-rs/tower/issues/547#issuecomment-767629149
         // for details on why this is necessary
@@ -55,11 +51,6 @@ where
                 Ok(resp) => {
                     let (parts, body) = resp.into_parts();
 
-                    if let Some(Error(e)) = parts.extensions.get() {
-                        let error = error::chain(e);
-                        error!(%error, "Handler error");
-                    }
-
                     let resp = http::Response::from_parts(parts, body);
 
                     debug!(status = %resp.status(), "Sending response");
@@ -71,15 +62,5 @@ where
         }
         .instrument(info_span!("request", path))
         .boxed()
-    }
-}
-
-/// If set as a response extension, it will be logged by this middleware
-#[derive(Clone)]
-pub struct Error(Arc<dyn std::error::Error + Send + Sync>);
-
-impl Error {
-    pub fn new(error: impl std::error::Error + Send + Sync + 'static) -> Self {
-        Self(Arc::new(error))
     }
 }
