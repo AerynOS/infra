@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use color_eyre::eyre::{Context, Result};
 use itertools::Itertools;
+use serde::Serialize;
 use sqlx::{Sqlite, SqliteConnection, prelude::FromRow, query::QueryAs, sqlite::SqliteArguments};
 
 use crate::{profile, project, repository};
@@ -98,7 +99,7 @@ impl Params {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub struct Query {
     pub tasks: Vec<Task>,
     pub count: usize,

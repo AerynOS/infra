@@ -27,6 +27,7 @@ mod repository;
 mod routes;
 mod seed;
 mod task;
+mod templates;
 mod worker;
 
 #[tokio::main]
