@@ -1,10 +1,14 @@
 use derive_more::derive::{Display, From, Into};
 use http::Uri;
 use serde::{Deserialize, Serialize};
-use service::{Remote, database::Transaction};
+use service::database::Transaction;
 use sqlx::{FromRow, SqliteConnection};
 
-use crate::{Profile, Repository, profile, repository};
+use crate::{
+    Profile, Repository,
+    profile::{self, Remote},
+    repository,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, From, Into, Display, FromRow)]
 pub struct Id(i64);

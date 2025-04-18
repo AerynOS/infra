@@ -1,5 +1,5 @@
 description = "Vessel (test)"
-host_address = "http://vessel:5001"
+grpc_address = "http://vessel:5001"
 
 upstream = "gjbJc9Tyuj6nttjQBWV0E813d3ZnH2hZ9EtBEl6Tdn4"
 

@@ -1,5 +1,6 @@
 description = "Summit (test)"
-host_address = "http://summit:5000"
+http_address = "http://summit:5000"
+grpc_address = "http://summit:5001"
 
 [tracing]
 level_filter = "info,summit=debug,service=debug"
@@ -15,11 +16,9 @@ public_key = "9eBMCOKXlF16-yCNqHhBdg7S3CY9gOu8qqH_zPX1yp0"
 [[downstream]]
 host_address = "http://vessel:5001"
 public_key = "uxV-S0soSdALp8G-IVbjJMmATzTCfA-8abkNbJ7PKt8"
-# D serializes these as integers :/
-role = 2
+role = "repository-manager"
 
 [[downstream]]
-host_address = "http://avalanche:5002"
+host_address = "http://avalanche:5001"
 public_key = "ZZFERyM1phMGH1PQ0AeoQ0KNE7-cS-O7oEYtPVqr36M"
-# D serializes these as integers :/
-role = 1
+role = "builder"

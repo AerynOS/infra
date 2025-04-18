@@ -4,8 +4,16 @@ version = "0.1.0"
 edition.workspace = true
 
 [dependencies]
+base64.workspace = true
 bitflags.workspace = true
+chrono.workspace = true
+derive_more.workspace = true
+ed25519-dalek.workspace = true
 http.workspace = true
 http-serde.workspace = true
+jsonwebtoken.workspace = true
+rand.workspace = true
 serde.workspace = true
 strum.workspace = true
+thiserror.workspace = true
+uuid.workspace = true

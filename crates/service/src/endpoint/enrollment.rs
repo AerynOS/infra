@@ -2,17 +2,19 @@
 
 use http::Uri;
 use serde::{Deserialize, Serialize};
+use service_client::{AuthClient, EndpointServiceClient, TokensAuth, VerifiedTokens};
+use service_grpc::endpoint::{EnrollmentRequest, Issuer as ProtoIssuer, Role as ProtoRole};
 use thiserror::Error;
 use tracing::{debug, error, info, info_span};
 
 use crate::{
-    Account, Client, Database, Endpoint, Role, State, account, api, client,
+    Account, Database, Endpoint, State, account, client,
     crypto::{EncodedPublicKey, KeyPair, PublicKey},
-    database, endpoint, error,
+    database,
+    endpoint::{self, Role},
+    error,
     token::{self, VerifiedToken},
 };
-
-pub use service_core::endpoint::enrollment::Request;
 
 /// An issuer of enrollment requests
 #[derive(Debug, Clone)]
@@ -31,19 +33,24 @@ pub struct Issuer {
     pub admin_email: String,
 }
 
-impl From<Issuer> for service_core::endpoint::enrollment::Issuer {
+impl From<Issuer> for ProtoIssuer {
     fn from(issuer: Issuer) -> Self {
         let Issuer {
             key_pair,
             host_address,
             role,
-            ..
+            admin_name,
+            admin_email,
+            description,
         } = issuer;
 
-        service_core::endpoint::enrollment::Issuer {
+        ProtoIssuer {
             public_key: key_pair.public_key().encode().to_string(),
             url: host_address.to_string(),
-            role,
+            role: ProtoRole::from(role) as i32,
+            admin_name,
+            admin_email,
+            description,
         }
     }
 }
@@ -98,7 +105,7 @@ pub struct Target {
 }
 
 /// Send auto-enrollment to the list of targets if the endpoint isn't already configured
-pub(crate) async fn auto_enrollment(targets: &[Target], ourself: Issuer, state: &State) -> Result<(), Error> {
+pub(crate) async fn auto_enroll(targets: &[Target], ourself: Issuer, state: &State) -> Result<(), Error> {
     let mut conn = state.service_db.acquire().await?;
 
     let endpoints = Endpoint::list(conn.as_mut()).await.map_err(Error::ListEndpoints)?;
@@ -163,15 +170,13 @@ pub async fn send(target: Target, ourself: Issuer) -> Result<Sent, Error> {
 
     let bearer_token = endpoint::create_token(token::Purpose::Authorization, endpoint, account, target.role, &ourself)?;
 
-    let client = Client::new(target.host_address.clone());
+    let mut client = EndpointServiceClient::connect(target.host_address.clone()).await?;
 
     let resp = client
-        .send::<api::v1::services::Enroll>(&api::v1::services::EnrollRequestBody {
-            request: Request {
-                issuer: ourself.into(),
-                issue_token: bearer_token.encoded.clone(),
-                role: target.role,
-            },
+        .enroll(EnrollmentRequest {
+            issuer: Some(ourself.into()),
+            issue_token: bearer_token.encoded.clone(),
+            role: ProtoRole::from(target.role) as i32,
         })
         .await;
 
@@ -193,7 +198,7 @@ pub async fn send(target: Target, ourself: Issuer) -> Result<Sent, Error> {
                 bearer_token,
             })
         }
-        Err(error) => Err(Error::Client(error)),
+        Err(error) => Err(Error::GrpcRequest(error)),
     }
 }
 
@@ -238,6 +243,7 @@ impl Received {
             status: endpoint::Status::AwaitingAcceptance,
             error: None,
             account: account_id,
+            remote_account: self.remote.bearer_token.decoded.payload.account_id.into(),
             kind,
         };
         endpoint.save(&mut tx).await.map_err(Error::CreateEndpoint)?;
@@ -269,17 +275,20 @@ impl Received {
             "Bearer token created",
         );
 
-        let resp = Client::new(self.remote.host_address)
-            .with_tokens(client::Tokens {
+        let mut client = EndpointServiceClient::connect_with_auth(
+            self.remote.host_address,
+            TokensAuth::new(VerifiedTokens {
                 bearer_token: Some(self.remote.bearer_token.clone()),
                 access_token: None,
-            })
-            .send::<api::v1::services::Accept>(&api::v1::services::AcceptRequestBody {
-                request: Request {
-                    issuer: ourself.into(),
-                    issue_token: bearer_token.encoded,
-                    role: self.remote.role,
-                },
+            }),
+        )
+        .await?;
+
+        let resp = client
+            .accept(EnrollmentRequest {
+                issuer: Some(ourself.into()),
+                issue_token: bearer_token.encoded,
+                role: ProtoRole::from(self.remote.role) as i32,
             })
             .await;
 
@@ -301,20 +310,23 @@ impl Received {
 
                 tx.commit().await?;
 
-                Err(Error::Client(error))
+                Err(Error::GrpcRequest(error))
             }
         }
     }
 
     /// Decline the received enrollment
     pub async fn decline(self) -> Result<(), Error> {
-        Client::new(self.remote.host_address)
-            .with_tokens(client::Tokens {
+        let mut client = EndpointServiceClient::connect_with_auth(
+            self.remote.host_address,
+            TokensAuth::new(VerifiedTokens {
                 bearer_token: Some(self.remote.bearer_token.clone()),
                 access_token: None,
-            })
-            .send::<api::v1::services::Decline>(&())
-            .await?;
+            }),
+        )
+        .await?;
+
+        client.decline(()).await?;
 
         Ok(())
     }
@@ -375,6 +387,7 @@ impl Sent {
             status: endpoint::Status::Operational,
             error: None,
             account,
+            remote_account: remote.bearer_token.decoded.payload.account_id.into(),
             kind,
         }
         .save(&mut tx)
@@ -454,4 +467,10 @@ pub enum Error {
     /// Database error
     #[error("database")]
     Database(#[from] database::Error),
+    /// Grpc transport error
+    #[error("grpc transport")]
+    GrpcTransport(#[from] tonic::transport::Error),
+    /// Grpc request
+    #[error("grpc request")]
+    GrpcRequest(#[from] tonic::Status),
 }

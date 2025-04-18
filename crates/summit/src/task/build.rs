@@ -3,8 +3,10 @@ use std::path::PathBuf;
 use color_eyre::eyre::{Context, OptionExt, Result};
 use futures_util::StreamExt;
 use moss::request;
-use service::{Collectable, collectable};
-use service::{Endpoint, State, api::v1::avalanche, endpoint::builder};
+use service::client::{AuthClient, AvalancheServiceClient, EndpointAuth};
+use service::grpc::collectable::{self, Collectable};
+use service::grpc::{avalanche::BuildRequest, remote::Remote as ProtoRemote};
+use service::{Endpoint, State, endpoint::builder};
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 use tracing::{info, warn};
@@ -29,12 +31,16 @@ pub mod succeeded;
     )
 )]
 pub async fn build(state: &State, builder: &mut Endpoint, queued: &Queued) -> Result<()> {
-    let client =
-        service::Client::new(builder.host_address.clone()).with_endpoint_auth(builder.id, state.service_db.clone());
+    let mut client = AvalancheServiceClient::connect_with_auth(
+        builder.host_address.clone(),
+        EndpointAuth::new(builder, state.service_db.clone(), state.key_pair.clone()),
+    )
+    .await
+    .context("connect avalanche client")?;
 
-    let body = avalanche::BuildRequestBody {
-        request: avalanche::PackageBuild {
-            build_id: i64::from(queued.task.id) as u64,
+    client
+        .build(BuildRequest {
+            task_id: i64::from(queued.task.id) as u64,
             uri: queued.origin_uri.to_string(),
             commit_ref: queued.commit_ref.clone(),
             relative_path: queued
@@ -48,17 +54,13 @@ pub async fn build(state: &State, builder: &mut Endpoint, queued: &Queued) -> Re
                 .remotes
                 .iter()
                 .enumerate()
-                .map(|(idx, uri)| service::Remote {
-                    index_uri: uri.clone(),
+                .map(|(idx, uri)| ProtoRemote {
+                    index_uri: uri.to_string(),
                     name: format!("repo{idx}"),
                     priority: idx as u64 * 10,
                 })
                 .collect(),
-        },
-    };
-
-    client
-        .send::<avalanche::Build>(&body)
+        })
         .await
         .context("send build request")?;
 
@@ -82,7 +84,7 @@ pub async fn build(state: &State, builder: &mut Endpoint, queued: &Queued) -> Re
 }
 
 async fn stash_log(state: &State, task_id: Id, collectables: &[Collectable]) -> Result<Option<PathBuf>> {
-    let Some(log) = collectables.iter().find(|c| matches!(c.kind, collectable::Kind::Log)) else {
+    let Some(log) = collectables.iter().find(|c| matches!(c.kind(), collectable::Kind::Log)) else {
         warn!("Missing log from builder");
         return Ok(None);
     };

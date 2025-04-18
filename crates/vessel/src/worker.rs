@@ -9,7 +9,14 @@ use std::{
 use color_eyre::eyre::{self, Context, Result, eyre};
 use futures_util::{StreamExt, TryStreamExt, stream};
 use moss::db::meta;
-use service::{Endpoint, api, database, request};
+use service::{
+    Endpoint,
+    client::{AuthClient, EndpointAuth, SummitServiceClient},
+    crypto::KeyPair,
+    database,
+    grpc::summit::ImportRequest,
+    request,
+};
 use sha2::{Digest, Sha256};
 use tokio::{fs, sync::mpsc, time::Instant};
 use tracing::{Instrument, error, info, info_span};
@@ -66,6 +73,7 @@ struct State {
     state_dir: PathBuf,
     service_db: service::Database,
     meta_db: meta::Database,
+    key_pair: KeyPair,
 }
 
 impl State {
@@ -77,6 +85,7 @@ impl State {
             state_dir: service_state.state_dir.clone(),
             service_db: service_state.service_db.clone(),
             meta_db,
+            key_pair: service_state.key_pair.clone(),
         })
     }
 }
@@ -96,15 +105,19 @@ async fn handle_message(state: &State, message: Message) -> Result<()> {
             );
 
             async move {
-                let client = service::Client::new(endpoint.host_address.clone())
-                    .with_endpoint_auth(endpoint.id, state.service_db.clone());
+                let mut client = SummitServiceClient::connect_with_auth(
+                    endpoint.host_address.clone(),
+                    EndpointAuth::new(&endpoint, state.service_db.clone(), state.key_pair.clone()),
+                )
+                .await
+                .context("connect summit client")?;
 
                 match import_packages(state, packages).await {
                     Ok(()) => {
                         info!("All packages imported");
 
                         client
-                            .send::<api::v1::summit::ImportSucceeded>(&api::v1::summit::ImportBody { task_id })
+                            .import_succeeded(ImportRequest { task_id })
                             .await
                             .context("send import succeeded request")?;
                     }
@@ -113,7 +126,7 @@ async fn handle_message(state: &State, message: Message) -> Result<()> {
                         error!(%error, "Failed to import packages");
 
                         client
-                            .send::<api::v1::summit::ImportFailed>(&api::v1::summit::ImportBody { task_id })
+                            .import_failed(ImportRequest { task_id })
                             .await
                             .context("send import failed request")?;
                     }

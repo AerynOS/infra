@@ -27,8 +27,6 @@ services:
       infra-test:
   vessel:
     image: serpentos/vessel:${RUST_PROFILE:-dev}
-    ports:
-      - "5001:5001"
     volumes:
       - vessel-state:/app/state
       - ./vessel/.privkey:/app/state/.privkey
@@ -41,8 +39,6 @@ services:
       infra-test:
   avalanche:
     image: serpentos/avalanche:${RUST_PROFILE:-dev}
-    ports:
-      - "5002:5002"
     privileged: true
     volumes:
       - avalanche-state:/app/state

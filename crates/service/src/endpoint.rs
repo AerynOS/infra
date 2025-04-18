@@ -7,15 +7,20 @@ use chrono::Utc;
 use derive_more::From;
 use http::Uri;
 use serde::{Deserialize, Serialize};
+use service_grpc::endpoint::Role as ProtoRole;
 use sqlx::FromRow;
 use uuid::Uuid;
 
 use crate::{
-    Role, Token, account, database,
+    Token, account, database,
     token::{self, VerifiedToken},
 };
 
+pub(crate) use self::service::service;
+
 pub mod enrollment;
+
+pub(crate) mod service;
 
 /// Unique identifier of an [`Endpoint`]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, From)]
@@ -74,8 +79,11 @@ pub struct Endpoint {
     /// error [`Status`]
     pub error: Option<String>,
     /// Related service account identifier for this endpoint
-    #[sqlx(rename = "account_id", try_from = "i64")]
+    #[sqlx(rename = "account_id", try_from = "Uuid")]
     pub account: account::Id,
+    /// Account identifier for us on the remote service
+    #[sqlx(rename = "remote_account_id", try_from = "Uuid")]
+    pub remote_account: account::Id,
     /// Role specific data
     #[sqlx(flatten)]
     #[serde(flatten)]
@@ -88,7 +96,7 @@ impl Endpoint {
     where
         &'a mut T: database::Executor<'a>,
     {
-        let endpoint: Endpoint = sqlx::query_as(
+        let endpoint = sqlx::query_as(
             "
             SELECT
               endpoint_id,
@@ -96,6 +104,7 @@ impl Endpoint {
               status,
               error,
               account_id,
+              remote_account_id,
               role,
               work_status
             FROM endpoint
@@ -104,6 +113,33 @@ impl Endpoint {
         )
         .bind(id.0)
         .fetch_one(conn)
+        .await?;
+
+        Ok(endpoint)
+    }
+
+    /// Get an endpoint associated to the provided [`account::Id`]
+    pub async fn get_by_account_id<'a, T>(conn: &'a mut T, id: account::Id) -> Result<Option<Self>, database::Error>
+    where
+        &'a mut T: database::Executor<'a>,
+    {
+        let endpoint = sqlx::query_as(
+            "
+            SELECT
+              endpoint_id,
+              host_address,
+              status,
+              error,
+              account_id,
+              remote_account_id,
+              role,
+              work_status
+            FROM endpoint
+            WHERE account_id = ?;
+            ",
+        )
+        .bind(Uuid::from(id))
+        .fetch_optional(conn)
         .await?;
 
         Ok(endpoint)
@@ -120,15 +156,17 @@ impl Endpoint {
               status,
               error,
               account_id,
+              remote_account_id,
               role,
               work_status
             )
-            VALUES (?,?,?,?,?,?,?)
+            VALUES (?,?,?,?,?,?,?,?)
             ON CONFLICT(account_id) DO UPDATE SET 
               host_address=excluded.host_address,
               status=excluded.status,
               error=excluded.error,
               account_id=excluded.account_id,
+              remote_account_id=excluded.remote_account_id,
               role=excluded.role,
               work_status=excluded.work_status;
             ",
@@ -137,7 +175,8 @@ impl Endpoint {
         .bind(self.host_address.to_string())
         .bind(self.status.to_string())
         .bind(&self.error)
-        .bind(i64::from(self.account))
+        .bind(Uuid::from(self.account))
+        .bind(Uuid::from(self.remote_account))
         .bind(self.kind.role().to_string())
         .bind(self.kind.work_status().map(ToString::to_string))
         .execute(tx.as_mut())
@@ -159,6 +198,7 @@ impl Endpoint {
               status,
               error,
               account_id,
+              remote_account_id,
               role,
               work_status
             FROM endpoint;
@@ -359,6 +399,50 @@ pub mod builder {
     }
 }
 
+/// Endpoint role
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, strum::Display, strum::EnumString)]
+#[serde(rename_all = "kebab-case")]
+#[strum(serialize_all = "kebab-case")]
+pub enum Role {
+    /// Builder
+    Builder,
+    /// Repository Manager
+    RepositoryManager,
+    /// Hub
+    Hub,
+}
+
+impl Role {
+    /// Service name associated to each role
+    pub fn service_name(&self) -> &'static str {
+        match self {
+            Role::Hub => "summit",
+            Role::RepositoryManager => "vessel",
+            Role::Builder => "avalanche",
+        }
+    }
+
+    /// Convert from a protobuf role into a [`Role`]
+    pub fn from_proto(role: ProtoRole) -> Option<Role> {
+        match role {
+            ProtoRole::Unknown => None,
+            ProtoRole::Builder => Some(Role::Builder),
+            ProtoRole::RepositoryManager => Some(Role::RepositoryManager),
+            ProtoRole::Hub => Some(Role::Hub),
+        }
+    }
+}
+
+impl From<Role> for ProtoRole {
+    fn from(role: Role) -> Self {
+        match role {
+            Role::Builder => ProtoRole::Builder,
+            Role::RepositoryManager => ProtoRole::RepositoryManager,
+            Role::Hub => ProtoRole::Hub,
+        }
+    }
+}
+
 pub(crate) fn create_token(
     purpose: token::Purpose,
     endpoint: Id,
@@ -376,9 +460,8 @@ pub(crate) fn create_token(
         iss: ourself.role.service_name().to_string(),
         sub: endpoint.to_string(),
         purpose,
-        account_id: account,
+        account_id: account.into(),
         account_type: account::Kind::Service,
-        admin: false,
     });
     let account_token = token.sign(&ourself.key_pair)?;
 

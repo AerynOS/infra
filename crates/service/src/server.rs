@@ -1,24 +1,33 @@
 //! Batteries included server that provides common service APIs
-//! over http, with the ability to handle additional consumer
-//! defined APIs
-use std::{future::IntoFuture, io, net::IpAddr, path::Path, time::Duration};
+//! over grpc, with the ability to handle additional consumer
+//! defined http & grpc APIs
+use std::{
+    convert::Infallible,
+    future::{self, IntoFuture},
+    net::IpAddr,
+    time::Duration,
+};
 
+use axum::response::IntoResponse;
 use thiserror::Error;
+use tonic::server::NamedService;
 use tracing::{error, info};
 
-use crate::{Config, Role, State, account, api, endpoint::enrollment, error, middleware, signal, task, token};
+use crate::{
+    Config, State, account,
+    endpoint::{self, Role, enrollment},
+    error, middleware, signal, task, token,
+};
 
 pub use crate::task::CancellationToken;
 
-/// Start the [`Server`] without additional configuration
-pub async fn start(addr: (IpAddr, u16), role: Role, config: &Config, state: &State) -> Result<(), Error> {
-    Server::new(role, config, state).start(addr).await
-}
-
-/// Routes http requests through logging & auth middlewares to common service API handlers by default, with
-/// the ability to handle additional consumer defined APIs via [`Server::merge_api`].
+/// Batteries included server which provides http & grpc serving w/ common
+/// middlewares and the ability to spawn & manage tasks.
 pub struct Server<'a> {
-    router: axum::Router,
+    http_router: axum::Router,
+    http_addr: Option<(IpAddr, u16)>,
+    grpc_router: tonic::service::Routes,
+    grpc_addr: Option<(IpAddr, u16)>,
     config: &'a Config,
     state: &'a State,
     role: Role,
@@ -30,11 +39,16 @@ pub struct Server<'a> {
 impl<'a> Server<'a> {
     /// Create a new [`Server`]
     pub fn new(role: Role, config: &'a Config, state: &'a State) -> Self {
-        let shared_services = api::v1::services(role, config, state);
-        let router = axum::Router::new().merge(shared_services.into_router());
+        let http_router = axum::Router::new();
+        let grpc_router = tonic::service::Routes::default()
+            .add_service(endpoint::service(role, config, state))
+            .add_service(account::service(role, state));
 
         Self {
-            router,
+            http_router,
+            http_addr: None,
+            grpc_router,
+            grpc_addr: None,
             config,
             state,
             role,
@@ -49,6 +63,22 @@ impl<'a> Server<'a> {
 }
 
 impl Server<'_> {
+    /// Enable & specify the http binding address
+    pub fn with_http(self, addr: (IpAddr, u16)) -> Self {
+        Self {
+            http_addr: Some(addr),
+            ..self
+        }
+    }
+
+    /// Enable & specify the grpc binding address
+    pub fn with_grpc(self, addr: (IpAddr, u16)) -> Self {
+        Self {
+            grpc_addr: Some(addr),
+            ..self
+        }
+    }
+
     /// Override the default graceful shutdown duration (5s)
     pub fn with_graceful_shutdown(self, duration: Duration) -> Self {
         Self {
@@ -85,29 +115,28 @@ impl Server<'_> {
         }
     }
 
-    /// Merges an [`api::Service`] with the server
-    pub fn merge_api(self, service: api::Service) -> Self {
+    /// Merges a tonic grpc service with the server
+    pub fn merge_grpc<S>(self, service: S) -> Self
+    where
+        S: tower::Service<http::Request<tonic::body::Body>, Error = Infallible>
+            + NamedService
+            + Clone
+            + Send
+            + Sync
+            + 'static,
+        S::Response: IntoResponse,
+        S::Future: Send + 'static,
+    {
         Self {
-            router: self.router.merge(service.into_router()),
+            grpc_router: self.grpc_router.add_service(service),
             ..self
         }
     }
 
-    /// Merges an [`axum::Router`] with the server
-    pub fn merge(self, router: impl Into<axum::Router>) -> Self {
+    /// Merges an http [`axum::Router`] with the server
+    pub fn merge_http(self, router: impl Into<axum::Router>) -> Self {
         Self {
-            router: self.router.merge(router),
-            ..self
-        }
-    }
-
-    /// Serve static files under `route` from the provided `directory`
-    pub fn serve_directory(self, route: &str, directory: impl AsRef<Path>) -> Self {
-        Self {
-            router: self.router.nest_service(
-                route,
-                tower_http::services::ServeDir::new(directory).precompressed_gzip(),
-            ),
+            http_router: self.http_router.merge(router),
             ..self
         }
     }
@@ -116,40 +145,55 @@ impl Server<'_> {
     ///
     /// - Sync the defined [`Config::admin`] to the service [`Database`] to ensure
     ///   it's credentials can authenticate and hit all admin endpoints.
+    /// - Start the underlying http & grpc servers, if configured & any configured tasks
     /// - Send auto-enrollment for all [`Config::downstream`] targets defined when [`Role::Hub`]
-    /// - Start the underlying server to handle endpoint API routes
-    ///   and any additional API routes added via [`Server::merge_api`].
     ///
     /// [`Database`]: crate::Database
-    pub async fn start(self, addr: (IpAddr, u16)) -> Result<(), Error> {
+    pub async fn start(self) -> Result<(), Error> {
         account::sync_admin(&self.state.service_db, self.config.admin.clone()).await?;
 
-        if self.role == Role::Hub {
-            if let Err(e) = enrollment::auto_enrollment(
-                &self.config.downstream,
-                self.config.issuer(self.role, self.state.key_pair.clone()),
-                self.state,
-            )
-            .await
-            {
-                error!(error = %error::chain(e), "Auto enrollment failed");
-            }
-        }
+        let mut runner = self
+            .runner
+            .with_task("signal capture", signal::capture(self.signals))
+            .with_task(
+                "auto enroll",
+                auto_enroll(self.role, self.config.clone(), self.state.clone()),
+            );
 
-        let listener = tokio::net::TcpListener::bind(addr).await?;
-        let router = self.router.layer(self.extract_token).layer(middleware::Log);
+        if let Some(addr) = self.http_addr {
+            let router = self
+                .http_router
+                .layer(self.extract_token.clone())
+                .layer(middleware::Log);
 
-        self.runner
-            .with_task("http server", async move {
+            runner = runner.with_task("http server", async move {
                 let (host, port) = addr;
 
-                info!("listening on {host}:{port}");
+                let listener = tokio::net::TcpListener::bind(addr).await?;
+
+                info!("listening http on {host}:{port}");
 
                 axum::serve(listener, router).await
-            })
-            .with_task("signal capture", signal::capture(self.signals))
-            .run()
-            .await;
+            });
+        }
+
+        if let Some(addr) = self.grpc_addr {
+            let server = tonic::transport::Server::builder()
+                .layer(middleware::Log)
+                .layer(middleware::GrpcMethod)
+                .layer(self.extract_token)
+                .add_routes(self.grpc_router);
+
+            runner = runner.with_task("grpc server", async move {
+                let (host, port) = addr;
+
+                info!("listening grpc on {host}:{port}");
+
+                server.serve(addr.into()).await
+            });
+        }
+
+        runner.run().await;
 
         Ok(())
     }
@@ -161,7 +205,16 @@ pub enum Error {
     /// Syncing admin account failed
     #[error("sync admin account")]
     SyncAdmin(#[from] account::Error),
-    /// Axum IO error
-    #[error(transparent)]
-    Serve(#[from] io::Error),
+}
+
+async fn auto_enroll(role: Role, config: Config, state: State) -> Result<(), Infallible> {
+    if role == Role::Hub {
+        if let Err(e) =
+            enrollment::auto_enroll(&config.downstream, config.issuer(role, state.key_pair.clone()), &state).await
+        {
+            error!(error = %error::chain(e), "Auto enrollment failed");
+        }
+    }
+
+    future::pending::<Result<(), Infallible>>().await
 }

@@ -5,6 +5,7 @@ use chrono::{DateTime, Duration, Utc};
 use jsonwebtoken::{DecodingKey, EncodingKey, Header};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use uuid::Uuid;
 
 use crate::{
     account,
@@ -188,15 +189,10 @@ pub struct Payload {
     pub purpose: Purpose,
     /// Account id of the holder
     #[serde(rename = "uid")]
-    pub account_id: account::Id,
+    pub account_id: Uuid,
     /// Account type of the holder
     #[serde(rename = "act")]
     pub account_type: account::Kind,
-    /// Is this an admin account?
-    ///
-    /// This is needed by legacy infra since it
-    /// doesn't define admin as an [`account::Kind`]
-    pub admin: bool,
 }
 
 /// Purpose of the token
@@ -270,9 +266,8 @@ mod test {
                 iss: "test".into(),
                 sub: "test".into(),
                 purpose: Purpose::Authorization,
-                account_id: 0.into(),
+                account_id: Uuid::new_v4(),
                 account_type: account::Kind::Admin,
-                admin: true,
             },
         };
 

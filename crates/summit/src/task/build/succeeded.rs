@@ -1,9 +1,12 @@
 use color_eyre::eyre::{Context, OptionExt, Result};
 use service::{
-    Collectable, Endpoint, State,
-    api::v1::vessel,
-    collectable,
+    Endpoint, State,
+    client::{AuthClient, EndpointAuth, VesselServiceClient},
     endpoint::{self, builder},
+    grpc::{
+        collectable::{self, Collectable},
+        vessel::ImportRequest,
+    },
 };
 use tracing::{error, info};
 
@@ -62,18 +65,23 @@ pub async fn succeeded(
         .ok()
         .flatten();
 
-    let client =
-        service::Client::new(vessel.host_address.clone()).with_endpoint_auth(vessel.id, state.service_db.clone());
+    let mut client = VesselServiceClient::connect_with_auth(
+        vessel.host_address.clone(),
+        EndpointAuth::new(&vessel, state.service_db.clone(), state.key_pair.clone()),
+    )
+    .await
+    .context("connect vessel client")?;
 
-    let body = vessel::BuildRequestBody {
-        task_id: i64::from(task_id) as u64,
-        collectables: collectables
-            .into_iter()
-            .filter(|c| matches!(c.kind, collectable::Kind::Package))
-            .collect(),
-    };
-
-    let result = client.send::<vessel::Build>(&body).await.context("send import request");
+    let result = client
+        .import(ImportRequest {
+            task_id: i64::from(task_id) as u64,
+            collectables: collectables
+                .into_iter()
+                .filter(|c| matches!(c.kind(), collectable::Kind::Package))
+                .collect(),
+        })
+        .await
+        .context("send import request");
 
     let (status, failed) = match result {
         Ok(_) => {

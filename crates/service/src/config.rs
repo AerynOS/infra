@@ -7,19 +7,24 @@ use serde::Deserialize;
 use tokio::fs;
 
 use crate::{
-    Role,
     account::Admin,
     crypto::{KeyPair, PublicKey},
-    endpoint::enrollment::{self, Issuer},
+    endpoint::{
+        Role,
+        enrollment::{self, Issuer},
+    },
     tracing,
 };
 
 /// Service configuration
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
-    /// [`Uri`] this service is reachable from
+    /// [`Uri`] this service's grpc is reachable from
     #[serde(with = "http_serde::uri")]
-    pub host_address: Uri,
+    pub grpc_address: Uri,
+    /// [`Uri`] this service's http is reachable from
+    #[serde(default, with = "http_serde::option::uri")]
+    pub http_address: Option<Uri>,
     /// Description of this service
     pub description: String,
     /// Admin details of this service
@@ -53,7 +58,7 @@ impl Config {
     pub fn issuer(&self, role: Role, key_pair: KeyPair) -> Issuer {
         Issuer {
             key_pair,
-            host_address: self.host_address.clone(),
+            host_address: self.grpc_address.clone(),
             role,
             admin_name: self.admin.name.clone(),
             admin_email: self.admin.email.clone(),

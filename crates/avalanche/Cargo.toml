@@ -6,6 +6,8 @@ edition.workspace = true
 [dependencies]
 service = { path = "../service" }
 
+async-trait.workspace = true
+axum.workspace = true
 clap.workspace = true
 color-eyre.workspace = true
 flate2.workspace = true
@@ -15,5 +17,7 @@ itertools.workspace = true
 sha2.workspace = true
 snafu.workspace = true
 tokio.workspace = true
+tonic.workspace = true
+tower-http.workspace = true
 tracing.workspace = true
 uuid.workspace = true

@@ -2,7 +2,7 @@ FROM docker.io/rust:alpine3.20 AS rust-builder
 ENV RUSTUP_HOME="/usr/local/rustup" \
     CARGO_HOME="/usr/local/cargo" \
     CARGO_TARGET_DIR="/tmp/target"
-RUN apk add --no-cache musl-dev openssl-dev openssl-libs-static git
+RUN apk add --no-cache musl-dev openssl-dev openssl-libs-static git protoc
 WORKDIR /src
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git <<"EOT" /bin/sh
@@ -31,8 +31,9 @@ VOLUME /app/state
 VOLUME /app/config.toml
 VOLUME /app/seed.toml
 EXPOSE 5000
+EXPOSE 5001
 ENTRYPOINT ["/app/summit"]
-CMD ["0.0.0.0", "--port", "5000", "--root", "/app", "--seed", "/app/seed.toml"]
+CMD ["0.0.0.0", "--root", "/app", "--seed", "/app/seed.toml"]
 
 FROM docker.io/alpine:3.20 AS vessel
 WORKDIR /app
@@ -42,7 +43,7 @@ VOLUME /app/config.toml
 VOLUME /import
 EXPOSE 5001
 ENTRYPOINT ["/app/vessel"]
-CMD ["0.0.0.0", "--port", "5001", "--root", "/app", "--import", "/import"]
+CMD ["0.0.0.0", "--root", "/app", "--import", "/import"]
 
 FROM docker.io/alpine:3.20 AS avalanche
 WORKDIR /app
@@ -52,6 +53,7 @@ COPY --from=rust-builder /usr/local/cargo/bin/boulder /usr/bin/boulder
 COPY --from=rust-builder /tools/boulder/data/macros /usr/share/boulder/macros
 VOLUME /app/state
 VOLUME /app/config.toml
-EXPOSE 5002
+EXPOSE 5000
+EXPOSE 5001
 ENTRYPOINT ["/app/avalanche"]
-CMD ["0.0.0.0", "--port", "5002", "--root", "/app"]
+CMD ["0.0.0.0", "--root", "/app"]

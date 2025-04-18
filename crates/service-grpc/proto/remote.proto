@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+package remote;
+
+message Remote {
+  string index_uri = 1;
+  string name = 2;
+  uint64 priority = 3;
+}

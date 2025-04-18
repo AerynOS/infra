@@ -1,21 +1,22 @@
 use std::{net::IpAddr, path::PathBuf};
 
 use clap::Parser;
-use service::{Role, Server, State};
+use service::{Server, State, endpoint::Role};
 
 pub type Result<T, E = color_eyre::eyre::Error> = std::result::Result<T, E>;
 pub type Config = service::Config;
 
 use self::build::build;
 
-mod api;
 mod build;
+mod grpc;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let Args {
         host,
-        port,
+        http_port,
+        grpc_port,
         config,
         root,
     } = Args::parse();
@@ -27,9 +28,14 @@ async fn main() -> Result<()> {
     let state = State::load(root).await?;
 
     Server::new(Role::Builder, &config, &state)
-        .merge_api(api::service(state.clone(), config.clone()))
-        .serve_directory("/assets", "assets")
-        .start((host, port))
+        .with_grpc((host, grpc_port))
+        .merge_grpc(grpc::service(state.clone(), config.clone()))
+        .with_http((host, http_port))
+        .merge_http(axum::Router::new().nest_service(
+            "/assets",
+            tower_http::services::ServeDir::new("assets").precompressed_gzip(),
+        ))
+        .start()
         .await?;
 
     Ok(())
@@ -39,8 +45,10 @@ async fn main() -> Result<()> {
 struct Args {
     #[arg(default_value = "127.0.0.1")]
     host: IpAddr,
-    #[arg(long, default_value = "5003")]
-    port: u16,
+    #[arg(long = "http", default_value = "5000")]
+    http_port: u16,
+    #[arg(long = "grpc", default_value = "5001")]
+    grpc_port: u16,
     #[arg(long, short)]
     config: Option<PathBuf>,
     #[arg(long, short, default_value = ".")]

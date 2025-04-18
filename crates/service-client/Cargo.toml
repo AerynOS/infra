@@ -1,0 +1,18 @@
+[package]
+name = "service-client"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+service-core = { path = "../service-core" }
+service-grpc = { path = "../service-grpc" }
+
+async-trait.workspace = true
+base64.workspace = true
+futures-util.workspace = true
+http.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+tonic.workspace = true
+tower.workspace = true
