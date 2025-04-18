@@ -185,6 +185,7 @@ pub struct RefreshedTokens {
 }
 
 /// Credentials used to authenticate
+#[derive(Debug, Clone)]
 pub struct Credentials {
     /// Account username
     pub username: String,
@@ -241,6 +242,31 @@ impl AuthProvider for TokensAuth {
 
     async fn tokens(&self) -> Result<VerifiedTokens, Self::Error> {
         Ok(self.0.clone())
+    }
+}
+
+/// Auth with credentials and no refresh persistence
+#[derive(Debug, Clone)]
+pub struct CredentialsAuth(Credentials);
+
+impl CredentialsAuth {
+    pub fn new(username: String, key_pair: KeyPair) -> Self {
+        Self(Credentials { username, key_pair })
+    }
+}
+
+#[async_trait]
+impl AuthProvider for CredentialsAuth {
+    type Error = Infallible;
+
+    const REFRESH_ENABLED: bool = true;
+
+    fn credentials(&self) -> Option<Credentials> {
+        Some(self.0.clone())
+    }
+
+    async fn tokens(&self) -> Result<VerifiedTokens, Self::Error> {
+        Ok(VerifiedTokens::default())
     }
 }
 
@@ -333,7 +359,7 @@ where
         };
 
         let signature =
-            base64::prelude::BASE64_STANDARD_NO_PAD.encode(credentials.key_pair.sign(challenge.as_bytes()).to_bytes());
+            base64::prelude::BASE64_URL_SAFE_NO_PAD.encode(credentials.key_pair.sign(challenge.as_bytes()).to_bytes());
 
         let _ = request_tx
             .send(AuthenticateRequest {

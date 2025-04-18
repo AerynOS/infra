@@ -16,6 +16,8 @@ services:
       - ./summit/.privkey:/app/state/.privkey
       - ./summit/config.toml:/app/config.toml
       - ./summit/seed.toml:/app/seed.toml
+    ports:
+      - "5001:5001"
     depends_on:
       vessel:
         condition: service_started

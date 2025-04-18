@@ -54,7 +54,7 @@ impl Manager {
         .await
         .context("join handle")??;
 
-        let mut manager = Self {
+        let manager = Self {
             state,
             queue: Queue::default(),
             profile_dbs,
@@ -82,12 +82,6 @@ impl Manager {
                     .context("create missing tasks")?;
             }
         }
-
-        manager
-            .queue
-            .recompute(&mut conn, &projects, &manager.repository_dbs)
-            .await
-            .context("recompute queue")?;
 
         Ok(manager)
     }
@@ -179,17 +173,10 @@ impl Manager {
         if publishing_failed {
             let mut tx = self.begin().await.context("begin db tx")?;
 
-            let projects = project::list(tx.as_mut()).await.context("list projects")?;
-
             self.queue
                 .task_failed(&mut tx, task_id)
                 .await
                 .context("add queue blockers")?;
-
-            self.queue
-                .recompute(tx.as_mut(), &projects, &self.repository_dbs)
-                .await
-                .context("recompute queue")?;
 
             tx.commit().await.context("commit db tx")?;
         }
@@ -209,17 +196,10 @@ impl Manager {
 
         let mut tx = self.begin().await.context("begin db tx")?;
 
-        let projects = project::list(tx.as_mut()).await.context("list projects")?;
-
         self.queue
             .task_failed(&mut tx, task_id)
             .await
             .context("add queue blockers")?;
-
-        self.queue
-            .recompute(tx.as_mut(), &projects, &self.repository_dbs)
-            .await
-            .context("recompute queue")?;
 
         tx.commit().await.context("commit db tx")?;
 
@@ -248,11 +228,6 @@ impl Manager {
             .await
             .context("add queue blockers")?;
 
-        self.queue
-            .recompute(tx.as_mut(), &projects, &self.repository_dbs)
-            .await
-            .context("recompute queue")?;
-
         tx.commit().await.context("commit db tx")?;
 
         let profile = projects
@@ -278,19 +253,39 @@ impl Manager {
             .await
             .context("set task as import failed")?;
 
-        let projects = project::list(tx.as_mut()).await.context("list projects")?;
-
         self.queue
             .task_failed(&mut tx, task_id)
             .await
             .context("add queue blockers")?;
 
-        self.queue
-            .recompute(tx.as_mut(), &projects, &self.repository_dbs)
+        tx.commit().await.context("commit db tx")?;
+
+        Ok(())
+    }
+
+    pub async fn retry(&mut self, task_id: task::Id) -> Result<()> {
+        let mut tx = self.begin().await.context("begin db tx")?;
+
+        let task = task::query(tx.as_mut(), task::query::Params::default().id(task_id))
             .await
-            .context("recompute queue")?;
+            .context("get task")?
+            .tasks
+            .into_iter()
+            .next()
+            .ok_or_eyre("task is missing")?;
+
+        if !matches!(task.status, task::Status::Failed) {
+            warn!(status = %task.status, "Task is in non-failed status and won't be retried");
+            return Ok(());
+        }
+
+        task::set_status(&mut tx, task_id, task::Status::New)
+            .await
+            .context("set task as import failed")?;
 
         tx.commit().await.context("commit db tx")?;
+
+        info!("Task marked for retry");
 
         Ok(())
     }

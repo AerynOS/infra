@@ -124,9 +124,9 @@ fn authenticate(
                 let mut rand = rand::thread_rng();
                 let mut challenge = String::default();
 
-                base64::prelude::BASE64_STANDARD_NO_PAD.encode_string(rand.r#gen::<[u8; 16]>(), &mut challenge);
+                base64::prelude::BASE64_URL_SAFE_NO_PAD.encode_string(rand.r#gen::<[u8; 16]>(), &mut challenge);
 
-                debug!(account = %account.id, challenge, "Authenticate challenge created");
+                debug!(account = %account.id, "Authenticate challenge created");
 
                 Ok(Some((
                     AuthenticateResponse {

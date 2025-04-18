@@ -34,7 +34,6 @@ pub enum Message {
     ImportFailed {
         task_id: task::Id,
     },
-    Refresh,
     Retry {
         task_id: task::Id,
     },
@@ -94,8 +93,7 @@ async fn handle_message(sender: &Sender, manager: &mut Manager, message: Message
         } => build_failed(sender, manager, task_id, builder, collectables).await,
         Message::ImportSucceeded { task_id } => import_succeeded(sender, manager, task_id).await,
         Message::ImportFailed { task_id } => import_failed(sender, manager, task_id).await,
-        Message::Refresh => todo!(),
-        Message::Retry { .. } => todo!(),
+        Message::Retry { task_id } => retry(sender, manager, task_id).await,
         Message::Timer(_) => timer(sender, manager).await,
     }
 }
@@ -169,6 +167,17 @@ async fn import_failed(sender: &Sender, manager: &mut Manager, task_id: task::Id
     debug!("Import failed");
 
     manager.import_failed(task_id).await.context("manager import failed")?;
+
+    let _ = sender.send(Message::AllocateBuilds);
+
+    Ok(())
+}
+
+#[tracing::instrument(skip_all)]
+async fn retry(sender: &Sender, manager: &mut Manager, task_id: task::Id) -> Result<()> {
+    debug!("Retry");
+
+    manager.retry(task_id).await.context("manager retry task")?;
 
     let _ = sender.send(Message::AllocateBuilds);
 

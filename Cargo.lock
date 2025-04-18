@@ -636,6 +636,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "cli"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "color-eyre",
+ "service-client",
+ "service-core",
+ "service-grpc",
+ "tokio",
+ "tonic",
+]
+
+[[package]]
 name = "color-eyre"
 version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"

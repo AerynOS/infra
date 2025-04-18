@@ -33,9 +33,6 @@ service SummitService {
     option (options.flags) = "ACCESS_TOKEN | SERVICE_ACCOUNT | NOT_EXPIRED";
   }
 
-  rpc Refresh(google.protobuf.Empty) returns (google.protobuf.Empty) {
-    option (options.flags) = "ACCESS_TOKEN | ADMIN_ACCOUNT | NOT_EXPIRED";
-  }
   rpc Retry(RetryRequest) returns (google.protobuf.Empty) {
     option (options.flags) = "ACCESS_TOKEN | ADMIN_ACCOUNT | NOT_EXPIRED";
   }
