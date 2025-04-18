@@ -1,4 +1,17 @@
 {% extends "skel.html.jinja" %}
 {% block body %}
+
 <p>Hello from Summit!</p>
+
+<p>{{ total }} total task(s)</p>
+
+{% for task in tasks %}
+  <li>{{ task.slug }}</li>
+{% endfor %}
+
+<p>Page {{ page }} of {{ total_pages }}</p>
+
+<a href="/tasks?page={{ page - 1 }}">Prev</a>
+<a href="/tasks?page={{ page + 1 }}">Next</a>
+
 {% endblock %}

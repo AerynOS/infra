@@ -3,12 +3,12 @@ use std::sync::LazyLock;
 use include_dir::{Dir, DirEntry, include_dir};
 use tracing::error;
 
-use super::Response;
+use super::{Response, env};
 
 static ENV: LazyLock<minijinja::Environment<'_>> = LazyLock::new(|| {
     static TEMPLATES: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/templates");
 
-    let mut env = minijinja::Environment::new();
+    let mut env = env();
     add_templates(&TEMPLATES, &mut env);
 
     env

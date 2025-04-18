@@ -1,10 +1,10 @@
 use http::Uri;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use service::database::Transaction;
 
 use crate::profile;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Remote {
     #[serde(with = "http_serde::uri")]
     pub index_uri: Uri,

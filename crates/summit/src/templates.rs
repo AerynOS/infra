@@ -1,6 +1,9 @@
 use axum::response::Html;
 use http::StatusCode;
+use minijinja::{Environment, Value, value::ViaDeserialize};
 use serde::Serialize;
+
+use crate::Project;
 
 #[cfg_attr(
     all(feature = "templates-bundled", not(feature = "templates-autoreload")),
@@ -10,6 +13,14 @@ use serde::Serialize;
 mod implementation;
 
 pub type Response = axum::response::Result<Html<String>>;
+
+fn env() -> Environment<'static> {
+    let mut env = Environment::new();
+    env.add_filter("repository", repository_filter);
+    env.add_filter("profile", profile_filter);
+
+    env
+}
 
 #[allow(clippy::result_large_err)]
 pub fn render_html<S>(name: &str, ctx: S) -> Response
@@ -32,4 +43,18 @@ where
     };
 
     implementation::with_environment(do_render)
+}
+
+fn repository_filter(projects: ViaDeserialize<Vec<Project>>, id: i64) -> Option<Value> {
+    projects
+        .iter()
+        .find_map(|p| p.repositories.iter().find(|r| r.id == id.into()))
+        .map(Value::from_serialize)
+}
+
+fn profile_filter(projects: ViaDeserialize<Vec<Project>>, id: i64) -> Option<Value> {
+    projects
+        .iter()
+        .find_map(|p| p.profiles.iter().find(|p| p.id == id.into()))
+        .map(Value::from_serialize)
 }
