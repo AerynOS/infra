@@ -35,3 +35,12 @@ just logs
 # Shut down containers
 just down
 ```
+
+## Running outside of Docker
+
+Update the `test/*/config.toml` files to point at `localhost` instead of docker container name if
+wanting to use those configs.
+
+For testing only the summit frontend, use this command:
+
+    cargo run -p summit -- -c ./test/summit/config.toml --root $(mktemp -d) --static ./crates/summit/static
