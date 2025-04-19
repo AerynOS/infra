@@ -32,15 +32,15 @@ pub struct Config {
     /// Tracing configuration
     #[serde(default)]
     pub tracing: tracing::Config,
-    /// Upstream hub to auto-accept enrollment with
+    /// Upstream (hub) service to send enrollment to
     ///
     /// Only applicable for non-hub services
-    pub upstream: Option<PublicKey>,
-    /// Downstream services to send enrollment to
+    pub upstream: Option<enrollment::Target>,
+    /// Downstream services to auto-accept enrollment with
     ///
     /// Only applicable for hub service
     #[serde(default)]
-    pub downstream: Vec<enrollment::Target>,
+    pub downstreams: Vec<PublicKey>,
 }
 
 impl Config {

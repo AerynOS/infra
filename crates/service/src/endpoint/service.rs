@@ -37,7 +37,7 @@ pub fn service(role: Role, config: &crate::Config, state: &crate::State) -> Serv
             issuer: config.issuer(role, state.key_pair.clone()),
             db: state.service_db.clone(),
             pending_sent: state.pending_sent.clone(),
-            upstream: config.upstream,
+            downstreams: config.downstreams.clone(),
         }),
     })
 }
@@ -53,10 +53,10 @@ struct State {
     ///
     /// Only applicable for hub service
     pending_sent: SharedMap<endpoint::Id, enrollment::Sent>,
-    /// Upstream hub to auto-accept enrollment with
+    /// Downstream services to auto-accept enrollment with
     ///
-    /// Only applicable for non-hub services
-    upstream: Option<PublicKey>,
+    /// Only applicable for hub services
+    downstreams: Vec<PublicKey>,
 }
 
 impl State {
@@ -94,8 +94,6 @@ impl EndpointService for Service {
 
 #[tracing::instrument(skip_all)]
 async fn enroll(state: Arc<State>, request: tonic::Request<EnrollmentRequest>) -> Result<(), Error> {
-    let upstream = *state.upstream.as_ref().ok_or(Error::UpstreamNotSet)?;
-
     let request = request.into_inner();
     let issuer = request.issuer.as_ref().ok_or(Error::MalformedRequest)?;
     let issue_token = request.issue_token.clone();
@@ -104,11 +102,8 @@ async fn enroll(state: Arc<State>, request: tonic::Request<EnrollmentRequest>) -
 
     let public_key = EncodedPublicKey::decode(&issuer.public_key).map_err(|_| Error::InvalidPublicKey)?;
 
-    if public_key != upstream {
-        return Err(Error::UpstreamMismatch {
-            expected: upstream,
-            provided: public_key,
-        });
+    if !state.downstreams.contains(&public_key) {
+        return Err(Error::DownstreamMismatch { provided: public_key });
     }
 
     let verified_token =
@@ -262,10 +257,8 @@ enum Error {
     RequireBearerToken,
     #[error("Invalid public key")]
     InvalidPublicKey,
-    #[error("Upstream public key not set for auto-enrollment")]
-    UpstreamNotSet,
-    #[error("Upstream public key mismatch, expected: {expected} provided {provided}")]
-    UpstreamMismatch { expected: PublicKey, provided: PublicKey },
+    #[error("Public key not defined in downstreams: {provided}")]
+    DownstreamMismatch { provided: PublicKey },
     #[error("Uknown role: {0}")]
     UnknownRole(i32),
     #[error("Role mismatch, expected {expected:?} provided {provided:?}")]
@@ -286,7 +279,7 @@ impl From<Error> for tonic::Status {
     fn from(error: Error) -> Self {
         match error {
             Error::MissingRequestToken => tonic::Status::unauthenticated(""),
-            Error::Enrollment(_) | Error::UpstreamNotSet => tonic::Status::internal(""),
+            Error::Enrollment(_) => tonic::Status::internal(""),
             Error::InvalidPublicKey
             | Error::InvalidUrl(_)
             | Error::InvalidEndpoint(_)
@@ -294,7 +287,7 @@ impl From<Error> for tonic::Status {
             | Error::VerifyToken(_)
             | Error::RoleMismatch { .. }
             | Error::MissingPendingEnrollment(_)
-            | Error::UpstreamMismatch { .. }
+            | Error::DownstreamMismatch { .. }
             | Error::MalformedRequest
             | Error::UnknownRole(_) => tonic::Status::invalid_argument(""),
         }

@@ -105,48 +105,46 @@ pub struct Target {
 }
 
 /// Send auto-enrollment to the list of targets if the endpoint isn't already configured
-pub(crate) async fn auto_enroll(targets: &[Target], ourself: Issuer, state: &State) -> Result<(), Error> {
+pub(crate) async fn auto_enroll(target: &Target, ourself: Issuer, state: &State) -> Result<(), Error> {
     let mut conn = state.service_db.acquire().await?;
 
     let endpoints = Endpoint::list(conn.as_mut()).await.map_err(Error::ListEndpoints)?;
 
-    for target in targets {
-        let mut enrolled = false;
+    let mut enrolled = false;
 
-        let span = info_span!(
-            "auto_enrollment",
-            url = %target.host_address,
-            public_key = %target.public_key,
-            role = %target.role,
-        );
-        let _guard = span.enter();
+    let span = info_span!(
+        "auto_enrollment",
+        url = %target.host_address,
+        public_key = %target.public_key,
+        role = %target.role,
+    );
+    let _guard = span.enter();
 
-        if let Some(endpoint) = endpoints.iter().find(|e| e.host_address == target.host_address) {
-            let account = Account::get(conn.as_mut(), endpoint.account)
-                .await
-                .map_err(Error::ReadAccount)?;
+    if let Some(endpoint) = endpoints.iter().find(|e| e.host_address == target.host_address) {
+        let account = Account::get(conn.as_mut(), endpoint.account)
+            .await
+            .map_err(Error::ReadAccount)?;
 
-            if account.public_key == target.public_key.encode() {
-                enrolled = true;
+        if account.public_key == target.public_key.encode() {
+            enrolled = true;
 
-                debug!("Endpoint already enrolled");
-            }
+            debug!("Endpoint already enrolled");
         }
+    }
 
-        if !enrolled {
-            debug!("Sending enrollment request");
+    if !enrolled {
+        debug!("Sending enrollment request");
 
-            let Ok(enrollment) = send(target.clone(), ourself.clone())
-                .await
-                .inspect_err(|e| error!(error=%error::chain(e), "Enrollment request failed"))
-            else {
-                continue;
-            };
+        let Ok(enrollment) = send(target.clone(), ourself.clone())
+            .await
+            .inspect_err(|e| error!(error=%error::chain(e), "Enrollment request failed"))
+        else {
+            return Ok(());
+        };
 
-            state.pending_sent.insert(enrollment.endpoint, enrollment).await;
+        state.pending_sent.insert(enrollment.endpoint, enrollment).await;
 
-            info!("Enrollment sent");
-        }
+        info!("Enrollment sent");
     }
 
     Ok(())

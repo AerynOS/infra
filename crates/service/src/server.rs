@@ -146,19 +146,20 @@ impl Server<'_> {
     /// - Sync the defined [`Config::admin`] to the service [`Database`] to ensure
     ///   it's credentials can authenticate and hit all admin endpoints.
     /// - Start the underlying http & grpc servers, if configured & any configured tasks
-    /// - Send auto-enrollment for all [`Config::downstream`] targets defined when [`Role::Hub`]
+    /// - Send auto-enrollment for [`Config::upstream`] target defined when not [`Role::Hub`]
     ///
     /// [`Database`]: crate::Database
     pub async fn start(self) -> Result<(), Error> {
         account::sync_admin(&self.state.service_db, self.config.admin.clone()).await?;
 
-        let mut runner = self
-            .runner
-            .with_task("signal capture", signal::capture(self.signals))
-            .with_task(
+        let mut runner = self.runner.with_task("signal capture", signal::capture(self.signals));
+
+        if self.role != Role::Hub {
+            runner = runner.with_task(
                 "auto enroll",
                 auto_enroll(self.role, self.config.clone(), self.state.clone()),
             );
+        }
 
         if let Some(addr) = self.http_addr {
             let router = self
@@ -208,11 +209,11 @@ pub enum Error {
 }
 
 async fn auto_enroll(role: Role, config: Config, state: State) -> Result<(), Infallible> {
-    if role == Role::Hub {
-        if let Err(e) =
-            enrollment::auto_enroll(&config.downstream, config.issuer(role, state.key_pair.clone()), &state).await
-        {
-            error!(error = %error::chain(e), "Auto enrollment failed");
+    if role != Role::Hub {
+        if let Some(target) = &config.upstream {
+            if let Err(e) = enrollment::auto_enroll(target, config.issuer(role, state.key_pair.clone()), &state).await {
+                error!(error = %error::chain(e), "Auto enrollment failed");
+            }
         }
     }
 

@@ -2,6 +2,13 @@ description = "Summit (test)"
 http_address = "http://summit:5000"
 grpc_address = "http://summit:5001"
 
+downstreams = [
+  # Vessel
+  "uxV-S0soSdALp8G-IVbjJMmATzTCfA-8abkNbJ7PKt8",
+  # Avalanche
+  "ZZFERyM1phMGH1PQ0AeoQ0KNE7-cS-O7oEYtPVqr36M"
+]
+
 [tracing]
 level_filter = "info,summit=debug,service=debug"
 # compact or json
@@ -12,13 +19,3 @@ username = "admin"
 name = "Admin"
 email = "admin@serpentos.com"
 public_key = "9eBMCOKXlF16-yCNqHhBdg7S3CY9gOu8qqH_zPX1yp0"
-
-[[downstream]]
-host_address = "http://vessel:5001"
-public_key = "uxV-S0soSdALp8G-IVbjJMmATzTCfA-8abkNbJ7PKt8"
-role = "repository-manager"
-
-[[downstream]]
-host_address = "http://avalanche:5001"
-public_key = "ZZFERyM1phMGH1PQ0AeoQ0KNE7-cS-O7oEYtPVqr36M"
-role = "builder"
