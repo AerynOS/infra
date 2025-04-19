@@ -177,10 +177,10 @@ pub async fn query(conn: &mut SqliteConnection, params: Params) -> Result<Query>
         "
     );
 
-    let (total,) = sqlx::query_as::<_, (i64,)>(&query_str)
-        .fetch_one(&mut *conn)
-        .await
-        .context("fetch tasks count")?;
+    let mut query = sqlx::query_as::<_, (i64,)>(&query_str);
+    query = params.bind_where(query);
+
+    let (total,) = query.fetch_one(&mut *conn).await.context("fetch tasks count")?;
 
     let mut tasks = rows
         .into_iter()

@@ -1,17 +1,53 @@
 {% extends "skel.html.jinja" %}
 {% block body %}
 
-<p>Hello from Summit!</p>
+<p>{{ total }} tasks</p>
 
-<p>{{ total }} total task(s)</p>
-
-{% for task in tasks %}
-  <li>{{ task.slug }}</li>
+<div>
+{% for status in statuses %}
+  <a href="/tasks?status={{ status }}">{{ status }}</a>
 {% endfor %}
+</div>
 
-<p>Page {{ page }} of {{ total_pages }}</p>
+<br />
 
-<a href="/tasks?page={{ page - 1 }}">Prev</a>
-<a href="/tasks?page={{ page + 1 }}">Next</a>
+<div>
+{% for task in tasks %}
+  {% set profile = projects | profile(task.profile_id) %}
+
+  <div class="row">
+    <div class="col mx-2">
+      <p>{{ task.id }}</p>
+    </div>
+    <div class="col-grow mx-2">
+      <a href="/tasks/{{ task.id }}">{{ task.build_id }}</a>
+      <p>{{ task.description }}</p>
+    </div>
+    <div class="col mx-2">
+      <p>{{ profile.arch }}</p>
+    </div>
+    <div class="col mx-2">
+      <p>{{ task.status }}</p>
+    </div>
+  </div>
+{% endfor %}
+</div>
+
+<div>
+  <p>Page {{ page }} of {{ total_pages }}</p>
+  
+  <div>
+    {% if page > 1 %}
+      <a href="/tasks?page={{ page - 1 }}">Prev</a>
+    {% else %}
+      <a>Prev</a>
+    {% endif %}
+    {% if page < total_pages %}
+      <a href="/tasks?page={{ page + 1 }}">Next</a>
+    {% else %}
+      <a>Next</a>
+    {% endif %}
+  </div>
+</div>
 
 {% endblock %}

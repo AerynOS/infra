@@ -8,10 +8,33 @@
 
     <title>Summit</title>
     <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
+
+    <style>
+        .row {
+            display: flex;
+            max-width: fit-content;
+            min-width: 50%;
+        }
+        .col {
+            flex: 0;
+        }
+        .col-grow {
+            flex: 1;
+        }
+        .mx-2 {
+            margin-right: .5rem !important;
+            margin-left: .5rem !important;
+        }
+    </style>
 </head>
 
 <body>
-    {% block body %}{% endblock %}
+    <div>
+        <a href="/">Home</a>
+        <a href="/tasks">Tasks</a>
+    </div>
+    {% block body %}
+    {% endblock %}
 </body>
 
 </html>
