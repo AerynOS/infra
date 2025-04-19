@@ -158,7 +158,7 @@ pub async fn query(conn: &mut SqliteConnection, params: Params) -> Result<Query>
           ended
         FROM task
         {where_clause}
-        ORDER BY started, task_id DESC
+        ORDER BY started DESC, task_id DESC
         {limit_offset_clause}
         ",
     );
