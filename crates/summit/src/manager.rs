@@ -274,8 +274,8 @@ impl Manager {
             .next()
             .ok_or_eyre("task is missing")?;
 
-        if !matches!(task.status, task::Status::Failed) {
-            warn!(status = %task.status, "Task is in non-failed status and won't be retried");
+        if matches!(task.status, task::Status::New) {
+            warn!(status = %task.status, "Task is already in new status and won't be retried");
             return Ok(());
         }
 
