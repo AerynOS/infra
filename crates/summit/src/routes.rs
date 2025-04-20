@@ -39,7 +39,9 @@ pub async fn tasks(
 
     let mut params = task::query::Params::default().offset(offset).limit(limit);
 
-    if let Some(status) = query.status {
+    let selected_status = query.status;
+
+    if let Some(status) = selected_status {
         params = params.statuses(iter::once(status));
     }
 
@@ -47,15 +49,23 @@ pub async fn tasks(
     let task_query = task::query(&mut conn, params).await.context("query tasks")?;
 
     let statuses = task::Status::iter().collect::<Vec<_>>();
-    let total_pages = task_query.total / limit as usize + 1;
+    let total_pages = (task_query.total / limit as usize + 1) as u32;
+
+    let side_window = 3;
+    let start = page.saturating_sub(side_window).max(1);
+    let end = (page + side_window).min(total_pages);
+    let pages_to_show = (start..=end).collect::<Vec<u32>>();
 
     Ok(render_html(
         "tasks.html.jinja",
         minijinja::context! {
             projects,
             statuses,
+            selected_status,
             page,
             total_pages,
+            limit,
+            pages_to_show,
             tasks => task_query.tasks,
             total => task_query.total,
         },
