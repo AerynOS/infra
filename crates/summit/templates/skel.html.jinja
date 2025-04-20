@@ -8,33 +8,29 @@
 
     <title>Summit</title>
     <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
-
-    <style>
-        .row {
-            display: flex;
-            max-width: fit-content;
-            min-width: 50%;
-        }
-        .col {
-            flex: 0;
-        }
-        .col-grow {
-            flex: 1;
-        }
-        .mx-2 {
-            margin-right: .5rem !important;
-            margin-left: .5rem !important;
-        }
-    </style>
+    <link rel="stylesheet" href="/static/style.css" />
 </head>
 
 <body>
-    <div>
-        <a href="/">Home</a>
-        <a href="/tasks">Tasks</a>
+    <header>
+        <div class="title-bar">
+            <div class="container">
+                <h1>Summit Dashboard</h1>
+                <div></div>
+            </div>
+        </div>
+        <div class="menu-bar">
+            <div class="container">
+                <ul class="menu-bar__items">
+                    <li><a href="/">Home</a></li>
+                    <li><a href="/tasks">Tasks</a></li>
+                </ul>
+            </div>
+        </div>
+    </header>
+    <div class="container">
+        {% block body %}{% endblock %}
     </div>
-    {% block body %}
-    {% endblock %}
 </body>
 
 </html>
