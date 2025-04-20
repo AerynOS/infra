@@ -1,9 +1,9 @@
 {% extends "skel.html.jinja" %}
 {% block body %}
-    <div class="tasks_total_filter">
+    <div class="tasks-total-filter">
         <span>{{ total }} tasks</span>
         <span>|</span>
-        <span class="tasks_total_filter__items">
+        <span class="tasks-total-filter__items">
             <a href="/tasks">All</a>
             {% for status in statuses %}
                 <a href="/tasks?status={{ status }}">{{ status }}</a>
