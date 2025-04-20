@@ -12,9 +12,10 @@ body {
 
 :root {
     --light-background-color: #211029;
+    --lighter-background-color: #281431;
     --light-border-color: #32183e;
     --light-border: 1px solid var(--light-border-color);
-    --muted-color: #622f79;
+    --muted-color: #72388c;
     --link-color: #a04ec6;
 }
 
@@ -153,6 +154,7 @@ h2 {
     border-top: var(--light-border);
     margin: 0;
     gap: 12px;
+    background-color: var(--light-background-color);
 }
 
 .tasks__list__item--not-found span {
@@ -173,7 +175,7 @@ h2 {
     border-radius: 3px;
     border: var(--light-border);
     padding: 6px;
-    background-color: var(--light-background-color);
+    background-color: var(--lighter-background-color);
     color: var(--muted-color);
     width: 80px;
     text-align: center;
@@ -201,6 +203,7 @@ h2 {
     font-size: 0.8em;
     justify-content: center;
     text-align: center;
+    color: var(--muted-color);
 }
 
 .tasks__list__item__arch {
@@ -214,7 +217,7 @@ h2 {
     border-radius: 3px;
     border: var(--light-border);
     padding: 6px;
-    background-color: var(--light-background-color);
+    background-color: var(--lighter-background-color);
     color: var(--muted-color);
 }
 
