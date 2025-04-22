@@ -1,53 +1,108 @@
 {% extends "skel.html.jinja" %}
 {% block body %}
-
-<p>{{ total }} tasks</p>
-
-<div>
-{% for status in statuses %}
-  <a href="/tasks?status={{ status }}">{{ status }}</a>
-{% endfor %}
-</div>
-
-<br />
-
-<div>
-{% for task in tasks %}
-  {% set profile = projects | profile(task.profile_id) %}
-
-  <div class="row">
-    <div class="col mx-2">
-      <p>{{ task.id }}</p>
+    <div class="tasks-total-filter">
+        <span>{{ total }} tasks</span>
+        <span>|</span>
+        <span class="tasks-total-filter__items">
+            <a href="/tasks">All</a>
+            {% for status in statuses %}
+                <a href="/tasks?status={{ status }}">{{ status }}</a>
+            {% endfor %}
+        </span>
     </div>
-    <div class="col-grow mx-2">
-      <a href="/logs/{{ task.id }}/build.log">{{ task.build_id }}</a>
-      <p>{{ task.description }}</p>
-    </div>
-    <div class="col mx-2">
-      <p>{{ profile.arch }}</p>
-    </div>
-    <div class="col mx-2">
-      <p>{{ task.status }}</p>
-    </div>
-  </div>
-{% endfor %}
-</div>
 
-<div>
-  <p>Page {{ page }} of {{ total_pages }}</p>
-  
-  <div>
-    {% if page > 1 %}
-      <a href="/tasks?page={{ page - 1 }}">Prev</a>
-    {% else %}
-      <a>Prev</a>
+    <div class="tasks">
+        <ul class="tasks__list">
+            {% if tasks | length == 0 %}
+                <li class="tasks__list__item tasks__list__item--not-found">
+                    {% if selected_status %}
+                        No tasks found for status: <span> {{ selected_status }}</span>
+                    {% else %}
+                        No tasks found
+                    {% endif %}
+                </li>
+            {% endif %}
+
+            {% for task in tasks %}
+                {% set profile = projects | profile(task.profile_id) %}
+
+                <li class="tasks__list__item">
+                    <code style="display:none">{{task}}</code>
+
+                    <div class="tasks__list__item__id"><span>#{{task.id}}</span></div>
+                    <div class="tasks__list__item__detail">
+                        <a href="/logs/{{task.id}}/build.log">{{task.build_id}}</a>
+                        <div>{{task.description}}</div>
+                    </div>
+                    <div class="tasks__list__item__timing">
+                        {% if task.ended %}
+                            <span>Ended @ {{task.ended}}</span>
+                            <span>92h 43m 49s on {{task.allocated_builder}}</span>
+                        {% else %}
+                            <span>Started @ {{task.started}}</span>
+                            <span>92h 43m 49s on {{task.allocated_builder}}</span>
+                        {% endif %}
+                    </div>
+                    <div class="tasks__list__item__arch">
+                        <span>{{profile.arch}}</span>
+                    </div>
+                    <div class="tasks__list__item__status"><span class="badge badge--{{task.status}}">{{task.status}}</span></div>
+                </li>
+            {% endfor %}
+        </ul>
+    </div>
+
+    {% if total > 0 %}
+        <nav class="pagination-wrap" aria-label="Pagination">
+            <ul class="pagination">
+
+                {# Previous Button #}
+                <li class="page-item {% if page <= 1 %}disabled{% endif %}">
+                    <a class="page-link" href="?page={{ page - 1 }}" aria-label="Previous">
+                        <span aria-hidden="true">&laquo;</span>
+                    </a>
+                </li>
+
+                {# First page + ellipsis if not in pages_to_show #}
+                {% if pages_to_show[0] > 1 %}
+                    <li class="page-item">
+                        <a class="page-link" href="?page=1">1</a>
+                    </li>
+                    {% if pages_to_show[0] > 2 %}
+                        <li class="page-item disabled">
+                            <span class="page-link">...</span>
+                        </li>
+                    {% endif %}
+                {% endif %}
+
+                {# Page Numbers #}
+                {% for p in pages_to_show %}
+                    <li class="page-item {% if p == page %}active{% endif %}">
+                        <a class="page-link" href="?page={{ p }}">{{ p }}</a>
+                    </li>
+                {% endfor %}
+
+                {# Ellipsis + last page if not in pages_to_show #}
+                {% if pages_to_show[pages_to_show | length - 1] < total_pages %}
+                    {% if pages_to_show[pages_to_show | length - 1] < total_pages - 1 %}
+                        <li class="page-item disabled">
+                            <span class="page-link">...</span>
+                        </li>
+                    {% endif %}
+                    <li class="page-item">
+                        <a class="page-link" href="?page={{ total_pages }}">{{ total_pages }}</a>
+                    </li>
+                {% endif %}
+
+                {# Next Button #}
+                <li class="page-item {% if page >= total_pages %}disabled{% endif %}">
+                    <a class="page-link" href="?page={{ page + 1 }}" aria-label="Next">
+                        <span aria-hidden="true">&raquo;</span>
+                    </a>
+                </li>
+
+            </ul>
+        </nav>
     {% endif %}
-    {% if page < total_pages %}
-      <a href="/tasks?page={{ page + 1 }}">Next</a>
-    {% else %}
-      <a>Next</a>
-    {% endif %}
-  </div>
-</div>
 
 {% endblock %}
