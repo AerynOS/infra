@@ -37,7 +37,7 @@ async fn main() -> Result<()> {
 
     Server::new(Role::RepositoryManager, &config, &state)
         .with_grpc((host, grpc_port))
-        .merge_grpc(grpc::service(state.service_db.clone(), worker_sender))
+        .merge_grpc(grpc::service(state.service_db.clone(), state.clone(), worker_sender))
         .with_task("worker", worker_task)
         .start()
         .await?;

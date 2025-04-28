@@ -8,7 +8,7 @@ use futures_util::{
 };
 use rand::Rng;
 use service_core::{
-    Token,
+    Token, auth,
     crypto::{self, EncodedPublicKey, EncodedSignature, KeyPair, PublicKey},
     token::{self, VerifiedToken},
 };
@@ -57,7 +57,7 @@ impl AccountService for Service {
     ) -> std::result::Result<tonic::Response<Self::AuthenticateStream>, tonic::Status> {
         let state = self.state.clone();
 
-        grpc::handle_streaming(request, |request| authenticate(state, request))
+        grpc::handle_server_streaming(request, |request| authenticate(state, request))
     }
 
     async fn refresh_token(
@@ -283,9 +283,20 @@ fn create_token(
     let expires_on = now + purpose.duration();
 
     let (aud, sub) = if let Some(endpoint) = endpoint {
-        (endpoint.kind.role().to_string(), endpoint.id.to_string())
+        (endpoint.role.to_string(), endpoint.id.to_string())
     } else {
         (account.id.to_string(), account.id.to_string())
+    };
+    let auth_role = if let Some(endpoint) = endpoint {
+        match endpoint.role {
+            Role::Builder => Some(auth::Role::Builder),
+            Role::RepositoryManager => Some(auth::Role::RepositoryManager),
+            Role::Hub => Some(auth::Role::Hub),
+        }
+    } else if matches!(account.kind, account::Kind::Admin) {
+        Some(auth::Role::Admin)
+    } else {
+        None
     };
 
     let token = Token::new(token::Payload {
@@ -294,9 +305,11 @@ fn create_token(
         iat: now.timestamp(),
         iss: role.service_name().to_string(),
         sub,
+        jti: None,
         purpose,
         account_id: account.id.into(),
         account_type: account.kind,
+        permissions: auth_role.iter().flat_map(auth::Role::permissions).collect(),
     })
     .sign(key_pair)
     .map_err(Error::SignToken)?;

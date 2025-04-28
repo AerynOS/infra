@@ -1,6 +1,7 @@
 description = "Avalanche (test)"
-http_address = "http://avalanche:5000"
-grpc_address = "http://avalanche:5001"
+# TODO: Avalanche doesn't expose a grpc server so
+# it doesn't need to send a URI to summit
+grpc_address = "http://client.only"
 
 [upstream]
 host_address = "http://summit:5001"

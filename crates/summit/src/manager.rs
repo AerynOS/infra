@@ -2,16 +2,17 @@ use std::collections::{HashMap, VecDeque};
 
 use color_eyre::eyre::{self, Context, OptionExt, Result};
 use moss::db::meta;
-use service::{Endpoint, State, database::Transaction, endpoint, grpc::collectable::Collectable};
+use service::{State, database::Transaction, endpoint};
 use sqlx::{Sqlite, pool::PoolConnection};
 use tokio::task::spawn_blocking;
 use tracing::{Span, debug, error, info, warn};
 
-use crate::{Project, Queue, profile, project, repository, task};
+use crate::{Builder, Project, Queue, builder, profile, project, repository, task};
 
 pub struct Manager {
     pub state: State,
     queue: Queue,
+    builders: HashMap<endpoint::Id, Builder>,
     profile_dbs: HashMap<profile::Id, meta::Database>,
     repository_dbs: HashMap<repository::Id, meta::Database>,
 }
@@ -57,6 +58,7 @@ impl Manager {
         let manager = Self {
             state,
             queue: Queue::default(),
+            builders: HashMap::default(),
             profile_dbs,
             repository_dbs,
         };
@@ -124,11 +126,10 @@ impl Manager {
             return Ok(());
         }
 
-        let builders = Endpoint::list(&mut *conn)
-            .await
-            .context("list endpoints")?
-            .into_iter()
-            .filter(Endpoint::is_idle_builder)
+        let builders = self
+            .builders
+            .values_mut()
+            .filter(|builder| builder.is_idle())
             .collect::<Vec<_>>();
 
         if builders.is_empty() {
@@ -141,14 +142,14 @@ impl Manager {
         // this connection anymore
         drop(conn);
 
-        for mut builder in builders {
+        for builder in builders {
             if let Some(task) = next_task {
-                match task::build(&self.state, &mut builder, task).await {
+                match builder.build(&self.state, task).await {
                     Ok(_) => {
                         next_task = available.pop_front();
                     }
                     Err(_) => {
-                        warn!(builder = %builder.id, "Failed to send build, trying next builder");
+                        warn!(builder = %builder.endpoint, "Failed to send build, trying next builder");
                     }
                 }
             } else {
@@ -156,52 +157,6 @@ impl Manager {
                 break;
             }
         }
-
-        Ok(())
-    }
-
-    pub async fn build_succeeded(
-        &mut self,
-        task_id: task::Id,
-        builder: endpoint::Id,
-        collectables: Vec<Collectable>,
-    ) -> Result<bool> {
-        let publishing_failed = task::build::succeeded(&self.state, task_id, builder, collectables)
-            .await
-            .context("set task as build succeeded")?;
-
-        if publishing_failed {
-            let mut tx = self.begin().await.context("begin db tx")?;
-
-            self.queue
-                .task_failed(&mut tx, task_id)
-                .await
-                .context("add queue blockers")?;
-
-            tx.commit().await.context("commit db tx")?;
-        }
-
-        Ok(publishing_failed)
-    }
-
-    pub async fn build_failed(
-        &mut self,
-        task_id: task::Id,
-        builder: endpoint::Id,
-        collectables: Vec<Collectable>,
-    ) -> Result<()> {
-        task::build::failed(&self.state, task_id, builder, collectables)
-            .await
-            .context("set task as build failed")?;
-
-        let mut tx = self.begin().await.context("begin db tx")?;
-
-        self.queue
-            .task_failed(&mut tx, task_id)
-            .await
-            .context("add queue blockers")?;
-
-        tx.commit().await.context("commit db tx")?;
 
         Ok(())
     }
@@ -288,6 +243,32 @@ impl Manager {
         info!("Task marked for retry");
 
         Ok(())
+    }
+
+    pub async fn update_builder(&mut self, endpoint: endpoint::Id, message: builder::Message) -> Result<bool> {
+        let builder = self.builders.entry(endpoint).or_insert_with(|| Builder::new(endpoint));
+
+        if let Some(event) = builder.update(&self.state, message).await? {
+            match event {
+                builder::Event::Connected => {
+                    return Ok(true);
+                }
+                builder::Event::BuildFailed { task_id } => {
+                    let mut tx = self.begin().await.context("begin db tx")?;
+
+                    self.queue
+                        .task_failed(&mut tx, task_id)
+                        .await
+                        .context("add queue blockers")?;
+
+                    tx.commit().await.context("commit db tx")?;
+
+                    return Ok(true);
+                }
+            }
+        }
+
+        Ok(false)
     }
 }
 

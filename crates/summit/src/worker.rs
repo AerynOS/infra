@@ -1,14 +1,14 @@
 use std::{convert::Infallible, future::Future, time::Duration};
 
 use color_eyre::{Result, eyre::Context};
-use service::{endpoint, grpc::collectable::Collectable};
+use service::endpoint;
 use tokio::{
     sync::mpsc,
     time::{self, Instant},
 };
 use tracing::{Span, debug, error, info};
 
-use crate::{Manager, repository, task};
+use crate::{Manager, builder, repository, task};
 
 const TIMER_INTERVAL: Duration = Duration::from_secs(30);
 
@@ -18,26 +18,11 @@ pub type Sender = mpsc::UnboundedSender<Message>;
 #[strum(serialize_all = "kebab-case")]
 pub enum Message {
     AllocateBuilds,
-    BuildSucceeded {
-        task_id: task::Id,
-        builder: endpoint::Id,
-        collectables: Vec<Collectable>,
-    },
-    BuildFailed {
-        task_id: task::Id,
-        builder: endpoint::Id,
-        collectables: Vec<Collectable>,
-    },
-    ImportSucceeded {
-        task_id: task::Id,
-    },
-    ImportFailed {
-        task_id: task::Id,
-    },
-    Retry {
-        task_id: task::Id,
-    },
+    ImportSucceeded { task_id: task::Id },
+    ImportFailed { task_id: task::Id },
+    Retry { task_id: task::Id },
     Timer(Instant),
+    Builder(endpoint::Id, builder::Message),
 }
 
 pub async fn run(mut manager: Manager) -> Result<(Sender, impl Future<Output = Result<(), Infallible>> + use<>)> {
@@ -81,20 +66,22 @@ async fn timer_task(sender: Sender) -> Result<(), Infallible> {
 async fn handle_message(sender: &Sender, manager: &mut Manager, message: Message) -> Result<()> {
     match message {
         Message::AllocateBuilds => allocate_builds(manager).await,
-        Message::BuildSucceeded {
-            task_id,
-            builder,
-            collectables,
-        } => build_succeeded(sender, manager, task_id, builder, collectables).await,
-        Message::BuildFailed {
-            task_id,
-            builder,
-            collectables,
-        } => build_failed(sender, manager, task_id, builder, collectables).await,
         Message::ImportSucceeded { task_id } => import_succeeded(sender, manager, task_id).await,
         Message::ImportFailed { task_id } => import_failed(sender, manager, task_id).await,
         Message::Retry { task_id } => retry(sender, manager, task_id).await,
         Message::Timer(_) => timer(sender, manager).await,
+        Message::Builder(endpoint, message) => {
+            let allocate_builds = manager
+                .update_builder(endpoint, message)
+                .await
+                .context("update builder")?;
+
+            if allocate_builds {
+                let _ = sender.send(Message::AllocateBuilds);
+            }
+
+            Ok(())
+        }
     }
 }
 
@@ -102,50 +89,6 @@ async fn handle_message(sender: &Sender, manager: &mut Manager, message: Message
 async fn allocate_builds(manager: &mut Manager) -> Result<()> {
     debug!("Allocating builds");
     manager.allocate_builds().await.context("allocate builds")
-}
-
-#[tracing::instrument(skip_all)]
-async fn build_succeeded(
-    sender: &Sender,
-    manager: &mut Manager,
-    task_id: task::Id,
-    builder: endpoint::Id,
-    collectables: Vec<Collectable>,
-) -> Result<()> {
-    debug!("Build succeeded");
-
-    let publishing_failed = manager
-        .build_succeeded(task_id, builder, collectables)
-        .await
-        .context("manager build succeeded")?;
-
-    // Lifecycle will not continue since task is now failed
-    // so drive forward new tasks
-    if publishing_failed {
-        let _ = sender.send(Message::AllocateBuilds);
-    }
-
-    Ok(())
-}
-
-#[tracing::instrument(skip_all)]
-async fn build_failed(
-    sender: &Sender,
-    manager: &mut Manager,
-    task_id: task::Id,
-    builder: endpoint::Id,
-    collectables: Vec<Collectable>,
-) -> Result<()> {
-    debug!("Build failed");
-
-    manager
-        .build_failed(task_id, builder, collectables)
-        .await
-        .context("manager build failed")?;
-
-    let _ = sender.send(Message::AllocateBuilds);
-
-    Ok(())
 }
 
 #[tracing::instrument(skip_all)]

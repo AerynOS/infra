@@ -9,8 +9,6 @@ use crate::{
     Database,
     crypto::{self, KeyPair},
     database,
-    endpoint::{self, enrollment},
-    sync::SharedMap,
 };
 
 /// Service state
@@ -28,10 +26,6 @@ pub struct State {
     pub service_db: Database,
     /// Key pair used by the service
     pub key_pair: KeyPair,
-    /// Pending enrollment requests that are awaiting confirmation
-    ///
-    /// Only applicable for hub service
-    pub(crate) pending_sent: SharedMap<endpoint::Id, enrollment::Sent>,
 }
 
 impl State {
@@ -78,7 +72,6 @@ impl State {
             db_dir,
             service_db,
             key_pair,
-            pending_sent: Default::default(),
         })
     }
 

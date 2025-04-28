@@ -4,14 +4,14 @@ package collectable;
 
 message Collectable {
   Kind kind = 1;
-  string uri = 2;
-  string sha256sum = 3;
+  string name = 2;
+  uint64 size = 3;
+  string sha256sum = 4;
 }
 
 enum Kind {
   KIND_UNKNOWN = 0;
-  KIND_LOG = 1;
-  KIND_JSON_MANIFEST = 2;
-  KIND_BINARY_MANIFEST = 3;
-  KIND_PACKAGE = 4;
+  KIND_JSON_MANIFEST = 1;
+  KIND_BINARY_MANIFEST = 2;
+  KIND_PACKAGE = 3;
 }

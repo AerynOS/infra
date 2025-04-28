@@ -1,5 +1,4 @@
 description = "Summit (test)"
-http_address = "http://summit:5000"
 grpc_address = "http://summit:5001"
 
 downstreams = [

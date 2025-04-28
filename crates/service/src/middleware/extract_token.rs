@@ -1,6 +1,8 @@
 //! Parse the authorization token from incoming requests, validate it and provide
 //! the verified token & flags as extensions to downstream middleware / handlers
 
+use std::collections::HashSet;
+
 use tracing::{debug, warn};
 
 use crate::{
@@ -63,6 +65,7 @@ where
         let token_maybe = extract_token(&req, &self.pub_key, &self.validation);
 
         let mut flags = Flags::default();
+        let mut permissions = HashSet::new();
 
         if let Some(token) = token_maybe {
             req.extensions_mut().insert(token.clone());
@@ -85,15 +88,25 @@ where
                 flags |= Flags::NOT_EXPIRED
             }
 
+            permissions = token.decoded.payload.permissions;
+
             let token_flags = flag_names(flags);
             let token_purpose = Some(token.decoded.payload.purpose.to_string());
             let account = Some(token.decoded.payload.account_id.to_string());
             let account_type = Some(token.decoded.payload.account_type.to_string());
 
-            debug!(?token_flags, token_purpose, account, account_type, "Auth parsed");
+            debug!(
+                ?token_flags,
+                token_purpose,
+                account,
+                account_type,
+                ?permissions,
+                "Auth parsed"
+            );
         }
 
         req.extensions_mut().insert(flags);
+        req.extensions_mut().insert(permissions);
 
         inner.call(req)
     }

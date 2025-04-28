@@ -6,8 +6,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use color_eyre::eyre::{self, Context, Result, eyre};
-use futures_util::{StreamExt, TryStreamExt, stream};
+use color_eyre::eyre::{self, Context, OptionExt, Result, eyre};
 use moss::db::meta;
 use service::{
     Endpoint,
@@ -15,12 +14,10 @@ use service::{
     crypto::KeyPair,
     database,
     grpc::summit::ImportRequest,
-    request,
 };
 use sha2::{Digest, Sha256};
-use tokio::{fs, sync::mpsc, time::Instant};
+use tokio::{sync::mpsc, time::Instant};
 use tracing::{Instrument, error, info, info_span};
-use url::Url;
 
 use crate::collection;
 
@@ -29,7 +26,7 @@ pub type Sender = mpsc::UnboundedSender<Message>;
 #[derive(Debug, strum::Display)]
 #[strum(serialize_all = "kebab-case")]
 pub enum Message {
-    ImportPackages {
+    PackagesUploaded {
         task_id: u64,
         endpoint: Endpoint,
         packages: Vec<Package>,
@@ -39,7 +36,8 @@ pub enum Message {
 
 #[derive(Debug)]
 pub struct Package {
-    pub url: Url,
+    pub name: String,
+    pub path: PathBuf,
     pub sha256sum: String,
 }
 
@@ -92,7 +90,7 @@ impl State {
 
 async fn handle_message(state: &State, message: Message) -> Result<()> {
     match message {
-        Message::ImportPackages {
+        Message::PackagesUploaded {
             task_id,
             endpoint,
             packages,
@@ -112,7 +110,7 @@ async fn handle_message(state: &State, message: Message) -> Result<()> {
                 .await
                 .context("connect summit client")?;
 
-                match import_packages(state, packages).await {
+                match import_packages(state, packages, true).await {
                     Ok(()) => {
                         info!("All packages imported");
 
@@ -151,7 +149,7 @@ async fn handle_message(state: &State, message: Message) -> Result<()> {
                 let num_stones = stones.len();
 
                 if num_stones > 0 {
-                    import_packages(state, stones).await.context("import packages")?;
+                    import_packages(state, stones, false).await.context("import packages")?;
 
                     info!(num_stones, "All stones imported");
                 } else {
@@ -166,14 +164,7 @@ async fn handle_message(state: &State, message: Message) -> Result<()> {
     }
 }
 
-async fn import_packages(state: &State, packages: Vec<Package>) -> Result<()> {
-    let downloads = stream::iter(packages.into_iter())
-        .map(|package| download_package(&state.state_dir, package))
-        .buffer_unordered(moss::environment::MAX_NETWORK_CONCURRENCY)
-        .try_collect::<Vec<(Package, PathBuf)>>()
-        .await
-        .context("download package")?;
-
+async fn import_packages(state: &State, packages: Vec<Package>, destructive_move: bool) -> Result<()> {
     // Stone is read in blocking manner
     let tx = tokio::task::spawn_blocking({
         let span = tracing::Span::current();
@@ -184,8 +175,8 @@ async fn import_packages(state: &State, packages: Vec<Package>) -> Result<()> {
 
         move || {
             span.in_scope(|| {
-                for (package, path) in downloads {
-                    import_package(&state, &mut tx, &package, &path, true)?;
+                for package in packages {
+                    import_package(&state, &mut tx, &package, destructive_move)?;
                 }
 
                 Result::<_, eyre::Report>::Ok(tx)
@@ -208,12 +199,11 @@ fn import_package(
     state: &State,
     tx: &mut database::Transaction,
     package: &Package,
-    download_path: &Path,
     destructive_move: bool,
 ) -> Result<()> {
     use std::fs::{self, File};
 
-    let mut file = File::open(download_path).context("open staged stone")?;
+    let mut file = File::open(&package.path).context("open staged stone")?;
     let file_size = file.metadata().context("read file metadata")?.size();
 
     let mut reader = stone::read(&mut file).context("create stone reader")?;
@@ -247,9 +237,7 @@ fn import_package(
     let id = moss::package::Id::from(package.sha256sum.clone());
 
     let pool_dir = relative_pool_dir(&source_id)?;
-    let file_name = Path::new(package.url.path())
-        .file_name()
-        .ok_or(eyre!("Invalid archive, no file name in URI"))?;
+    let file_name = &package.name;
     let target_path = pool_dir.join(file_name);
     let full_path = state.state_dir.join("public").join(&target_path);
 
@@ -277,9 +265,9 @@ fn import_package(
     }
 
     if destructive_move {
-        fs::rename(download_path, &full_path).context("rename download to pool")?;
+        fs::rename(&package.path, &full_path).context("rename download to pool")?;
     } else {
-        hardlink_or_copy(download_path, &full_path).context("link or copy download to pool")?;
+        hardlink_or_copy(&package.path, &full_path).context("link or copy download to pool")?;
     }
 
     // Adding meta records is idempotent as we delete / insert so
@@ -296,33 +284,9 @@ fn import_package(
         .block_on(collection::record(tx, collection::Entry::new(id, meta)))
         .context("record collection entry")?;
 
-    info!(file_name = file_name.to_str(), source_id, "Package imported");
+    info!(file_name, source_id, "Package imported");
 
     Ok(())
-}
-
-async fn download_package(state_dir: &Path, package: Package) -> Result<(Package, PathBuf)> {
-    let path = download_path(state_dir, &package.sha256sum).await?;
-
-    request::download_and_verify(package.url.clone(), &path, &package.sha256sum).await?;
-
-    Ok((package, path))
-}
-
-async fn download_path(state_dir: &Path, hash: &str) -> Result<PathBuf> {
-    if hash.len() < 5 {
-        return Err(eyre!("Invalid SHA256 hash length"));
-    }
-
-    let dir = state_dir.join("staging").join(&hash[..5]).join(&hash[hash.len() - 5..]);
-
-    if !dir.exists() {
-        fs::create_dir_all(&dir)
-            .await
-            .context("create download parent directory")?;
-    }
-
-    Ok(dir.join(hash))
 }
 
 fn relative_pool_dir(source_id: &str) -> Result<PathBuf> {
@@ -442,9 +406,11 @@ fn enumerate_stones(dir: &Path) -> Result<Vec<Package>> {
         let meta = entry.metadata().context("read directory entry metadata")?;
 
         if meta.is_file() && path.extension() == Some(OsStr::new("stone")) {
-            let url = format!("file://{}", path.to_string_lossy())
-                .parse()
-                .context("invalid file uri")?;
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .ok_or_eyre("missing file name")?
+                .to_owned();
 
             let mut hasher = Sha256::default();
 
@@ -452,7 +418,7 @@ fn enumerate_stones(dir: &Path) -> Result<Vec<Package>> {
 
             let sha256sum = hex::encode(hasher.finalize());
 
-            files.push(Package { url, sha256sum });
+            files.push(Package { name, path, sha256sum });
         } else if meta.is_dir() {
             files.extend(enumerate_stones(&path)?);
         }

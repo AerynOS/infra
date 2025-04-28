@@ -1,7 +1,7 @@
 //! Execute commands
-use std::io;
+use std::{io, process::Stdio};
 
-use tokio::process::Command;
+use tokio::process::{ChildStderr, ChildStdout, Command};
 
 /// Execute the command and return it's stdout output
 pub async fn output(command: impl AsRef<str>, f: impl FnOnce(&mut Command) -> &mut Command) -> Result<String, Error> {
@@ -37,6 +37,45 @@ pub async fn execute(command: impl AsRef<str>, f: impl FnOnce(&mut Command) -> &
         .status()
         .await
         .map_err(|err| Error::Io(command.to_string(), err))?;
+
+    if !status.success() {
+        if let Some(code) = status.code() {
+            Err(Error::FailedWithStatus(command.to_string(), code))
+        } else {
+            Err(Error::Failed(command.to_string()))
+        }
+    } else {
+        Ok(())
+    }
+}
+
+/// Wait for the command to finish and pipe its stdout / stderr to the provided async closure
+pub async fn piped<F>(
+    command: impl AsRef<str>,
+    f: impl FnOnce(&mut Command) -> &mut Command,
+    piped: impl FnOnce(ChildStdout, ChildStderr) -> F,
+) -> Result<(), Error>
+where
+    F: Future<Output = ()> + Send + Sync + 'static,
+{
+    let command = command.as_ref();
+
+    let mut process = Command::new(command);
+
+    let mut child = f(&mut process)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|err| Error::Io(command.to_string(), err))?;
+
+    let stdout = child.stdout.take().expect("stdout set explicitly");
+    let stderr = child.stderr.take().expect("stderr set explicitly");
+
+    let task = tokio::spawn(piped(stdout, stderr));
+
+    let status = child.wait().await.map_err(|err| Error::Io(command.to_string(), err))?;
+
+    let _ = task.await;
 
     if !status.success() {
         if let Some(code) = status.code() {

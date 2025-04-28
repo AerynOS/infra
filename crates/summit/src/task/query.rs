@@ -3,6 +3,7 @@ use color_eyre::eyre::{Context, Result};
 use itertools::Itertools;
 use serde::Serialize;
 use sqlx::{Sqlite, SqliteConnection, prelude::FromRow, query::QueryAs, sqlite::SqliteArguments};
+use uuid::Uuid;
 
 use crate::{profile, project, repository};
 
@@ -126,7 +127,7 @@ pub async fn query(conn: &mut SqliteConnection, params: Params) -> Result<Query>
         source_path: String,
         #[sqlx(try_from = "&'a str")]
         status: Status,
-        allocated_builder: Option<String>,
+        allocated_builder: Option<Uuid>,
         log_path: Option<String>,
         started: DateTime<Utc>,
         updated: DateTime<Utc>,
@@ -197,7 +198,7 @@ pub async fn query(conn: &mut SqliteConnection, params: Params) -> Result<Query>
             commit_ref: row.commit_ref,
             source_path: row.source_path,
             status: row.status,
-            allocated_builder: row.allocated_builder,
+            allocated_builder: row.allocated_builder.map(From::from),
             log_path: row.log_path,
             started: row.started,
             updated: row.updated,

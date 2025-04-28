@@ -7,6 +7,7 @@ use color_eyre::eyre::Context;
 use service::{Server, State, endpoint::Role};
 use tower_http::services::ServeDir;
 
+pub use self::builder::Builder;
 pub use self::manager::Manager;
 pub use self::profile::Profile;
 pub use self::project::Project;
@@ -18,6 +19,7 @@ pub use self::task::Task;
 pub type Result<T, E = color_eyre::eyre::Error> = std::result::Result<T, E>;
 pub type Config = service::Config;
 
+mod builder;
 mod grpc;
 mod manager;
 mod profile;
@@ -60,6 +62,7 @@ async fn main() -> Result<()> {
     let (worker_sender, worker_task) = worker::run(manager).await?;
 
     let serve_static = ServeDir::new(static_dir.as_deref().unwrap_or(Path::new("static")));
+    let serve_logs = ServeDir::new(state.state_dir.join("logs")).precompressed_gzip();
 
     Server::new(Role::Hub, &config, &state)
         .with_http((host, http_port))
@@ -68,11 +71,12 @@ async fn main() -> Result<()> {
                 .route("/", get(routes::index))
                 .route("/tasks", get(routes::tasks))
                 .nest_service("/static", serve_static)
+                .nest_service("/logs", serve_logs)
                 .fallback(get(routes::fallback))
                 .with_state(state.clone()),
         )
         .with_grpc((host, grpc_port))
-        .merge_grpc(grpc::service(worker_sender.clone()))
+        .merge_grpc(grpc::service(state.clone(), worker_sender.clone()))
         .with_task("worker", worker_task)
         .start()
         .await?;

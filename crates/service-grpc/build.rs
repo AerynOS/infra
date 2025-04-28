@@ -6,7 +6,6 @@ use prost_types::FileDescriptorSet;
 
 const PROTO_FILES: &[&str] = &[
     "proto/account.proto",
-    "proto/avalanche.proto",
     "proto/collectable.proto",
     "proto/endpoint.proto",
     "proto/remote.proto",
@@ -71,13 +70,18 @@ impl ServiceGenerator for Generator {
                         service.package, service.proto_name, method.proto_name
                     )
                 });
+            let perm = od
+                .extensions()
+                .find_map(|(a, b)| (a.name() == "perm").then_some(b))
+                .and_then(|v| v.as_str())
+                .map(ToOwned::to_owned);
 
-            methods.push((method.clone(), flags.to_owned()));
+            methods.push((method.clone(), flags.to_owned(), perm));
         }
 
         buf.push_str("#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]");
         buf.push_str("pub enum Method {");
-        for (method, _) in &methods {
+        for (method, _, _) in &methods {
             buf.push_str(&format!("\n{},", &method.proto_name));
         }
         buf.push_str("\n}");
@@ -85,7 +89,7 @@ impl ServiceGenerator for Generator {
         buf.push_str("impl Method {");
         buf.push_str("pub fn from_path(path: &str) -> Option<Self> {");
         buf.push_str("\nmatch path {");
-        for (method, _) in &methods {
+        for (method, _, _) in &methods {
             buf.push_str(&format!(
                 "\n\"/{}.{}/{}\" => Some(Self::{}),",
                 service.package, service.proto_name, &method.proto_name, &method.proto_name
@@ -96,7 +100,7 @@ impl ServiceGenerator for Generator {
         buf.push_str("\n}");
         buf.push_str("pub fn flags(self) -> Flags {");
         buf.push_str("\nmatch self {");
-        for (method, flags) in &methods {
+        for (method, flags, _) in &methods {
             let flags = flags
                 .split(" | ")
                 .map(|f| format!("Flags::{f}"))
@@ -107,13 +111,25 @@ impl ServiceGenerator for Generator {
         }
         buf.push('}');
         buf.push_str("\n}");
+        buf.push_str("pub fn permission(self) -> Option<Permission> {");
+        buf.push_str("\nmatch self {");
+        for (method, _, perm) in &methods {
+            let perm = perm
+                .as_ref()
+                .map(|perm| format!("Some(Permission::{perm})"))
+                .unwrap_or_else(|| "None".to_owned());
+
+            buf.push_str(&format!("\nSelf::{} => {perm},", &method.proto_name,));
+        }
+        buf.push('}');
+        buf.push_str("\n}");
         buf.push_str("\n}");
 
         self.tonic.generate(service, buf);
     }
 
     fn finalize_package(&mut self, package: &str, buf: &mut String) {
-        buf.push_str("use service_core::auth::Flags;");
+        buf.push_str("use service_core::auth::{Flags, Permission};");
 
         self.tonic.finalize_package(package, buf);
     }

@@ -2,7 +2,8 @@
 
 use http::Uri;
 use serde::{Deserialize, Serialize};
-use service_client::{AuthClient, EndpointServiceClient, TokensAuth, VerifiedTokens};
+use service_client::EndpointServiceClient;
+use service_core::Token;
 use service_grpc::endpoint::{EnrollmentRequest, Issuer as ProtoIssuer, Role as ProtoRole};
 use thiserror::Error;
 use tracing::{debug, error, info, info_span};
@@ -79,19 +80,6 @@ pub struct Received {
     pub remote: Remote,
 }
 
-/// A sent enrollment request
-#[derive(Debug, Clone)]
-pub struct Sent {
-    /// UUID to assign the endpoint of this request
-    pub endpoint: endpoint::Id,
-    /// UUID to assign the service account of this request
-    pub account: account::Id,
-    /// Target of the enrollment request
-    pub target: Target,
-    /// Bearer token we've issued and sent along w/ the request
-    pub bearer_token: VerifiedToken,
-}
-
 /// The target of a [`Sent`] enrollment
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Target {
@@ -133,18 +121,11 @@ pub(crate) async fn auto_enroll(target: &Target, ourself: Issuer, state: &State)
     }
 
     if !enrolled {
-        debug!("Sending enrollment request");
+        debug!("Enrolling with target service");
 
-        let Ok(enrollment) = send(target.clone(), ourself.clone())
-            .await
-            .inspect_err(|e| error!(error=%error::chain(e), "Enrollment request failed"))
-        else {
-            return Ok(());
-        };
-
-        state.pending_sent.insert(enrollment.endpoint, enrollment).await;
-
-        info!("Enrollment sent");
+        if let Err(e) = enroll(state, target.clone(), ourself.clone()).await {
+            error!(error=%error::chain(e), "Enrollment request failed")
+        }
     }
 
     Ok(())
@@ -159,14 +140,15 @@ pub(crate) async fn auto_enroll(target: &Target, ourself: Issuer, state: &State)
         role = %target.role,
     )
 )]
-/// Create and send an enrollment request to [`Target`]
-pub async fn send(target: Target, ourself: Issuer) -> Result<Sent, Error> {
+/// Enroll with the [`Target`]
+async fn enroll(state: &State, target: Target, ourself: Issuer) -> Result<(), Error> {
     let endpoint = endpoint::Id::generate();
     let account = account::Id::generate();
 
     debug!(%endpoint, %account, "Generated endpoint & account IDs for enrollment request");
 
-    let bearer_token = endpoint::create_token(token::Purpose::Authorization, endpoint, account, target.role, &ourself)?;
+    let bearer_token = endpoint::create_token(token::Purpose::Authorization, endpoint, account, target.role, &ourself)
+        .map_err(Error::SignToken)?;
 
     let mut client = EndpointServiceClient::connect(target.host_address.clone()).await?;
 
@@ -176,28 +158,97 @@ pub async fn send(target: Target, ourself: Issuer) -> Result<Sent, Error> {
             issue_token: bearer_token.encoded.clone(),
             role: ProtoRole::from(target.role) as i32,
         })
-        .await;
+        .await?
+        .into_inner();
 
-    match resp {
-        Ok(_) => {
-            info!(
-                %endpoint,
-                %account,
-                public_key = %target.public_key,
-                url = %target.host_address,
-                role = %target.role,
-                "Enrollment request sent"
-            );
+    info!(
+        %endpoint,
+        %account,
+        public_key = %target.public_key,
+        url = %target.host_address,
+        role = %target.role,
+        "Enrollment request sent"
+    );
 
-            Ok(Sent {
-                endpoint,
-                account,
-                target,
-                bearer_token,
-            })
-        }
-        Err(error) => Err(Error::GrpcRequest(error)),
+    let issuer = resp.issuer.as_ref().ok_or(Error::MalformedRequest)?;
+    let issuer_role = Role::from_proto(issuer.role()).ok_or(Error::UnknownRole(issuer.role))?;
+
+    let public_key = EncodedPublicKey::decode(&issuer.public_key).map_err(|_| Error::InvalidPublicKey)?;
+    let verified_token =
+        Token::verify(&resp.issue_token, &public_key, &token::Validation::new()).map_err(Error::VerifyToken)?;
+
+    if !matches!(verified_token.decoded.payload.purpose, token::Purpose::Authorization) {
+        return Err(Error::RequireBearerToken);
     }
+    if issuer_role != target.role {
+        return Err(Error::RoleMismatch {
+            expected: target.role,
+            provided: issuer_role,
+        });
+    }
+
+    if public_key != target.public_key {
+        return Err(Error::PublicKeyMismatch {
+            expected: target.public_key.encode(),
+            actual: public_key.encode(),
+        });
+    }
+
+    let username = format!("@{account}");
+
+    let mut tx = state.service_db.begin().await?;
+
+    Account {
+        id: account,
+        kind: account::Kind::Service,
+        username: username.clone(),
+        email: None,
+        name: None,
+        public_key: target.public_key.encode(),
+    }
+    .save(&mut tx)
+    .await
+    .map_err(Error::CreateServiceAccount)?;
+
+    info!(username, "Created a new service account");
+
+    Endpoint {
+        id: endpoint,
+        host_address: target.host_address.clone(),
+        status: endpoint::Status::Operational,
+        error: None,
+        account,
+        remote_account: verified_token.decoded.payload.account_id.into(),
+        role: issuer_role,
+    }
+    .save(&mut tx)
+    .await
+    .map_err(Error::CreateEndpoint)?;
+
+    endpoint::Tokens {
+        bearer_token: Some(verified_token.encoded),
+        access_token: None,
+    }
+    .save(&mut tx, endpoint)
+    .await
+    .map_err(Error::SetEndpointAccountToken)?;
+
+    info!("Created a new endpoint for the service account");
+
+    account::Token::set(&mut tx, account, &bearer_token.encoded, bearer_token.expires())
+        .await
+        .map_err(Error::SetAccountToken)?;
+
+    info!(
+        expiration = %bearer_token.expires(),
+        "Bearer token saved",
+    );
+
+    tx.commit().await?;
+
+    info!("Endpoint is enrolled and operational");
+
+    Ok(())
 }
 
 impl Received {
@@ -213,7 +264,7 @@ impl Received {
             role = %self.remote.role,
         )
     )]
-    pub async fn accept(self, db: &Database, ourself: Issuer) -> Result<(), Error> {
+    pub async fn accept(self, db: &Database, ourself: Issuer) -> Result<EnrollmentRequest, Error> {
         let account_id = self.account;
         let username = format!("@{account_id}");
 
@@ -227,13 +278,6 @@ impl Received {
         info!(username, "Created a new service account");
 
         let endpoint_id = self.endpoint;
-        let kind = match self.remote.role {
-            Role::Builder => endpoint::Kind::Builder(endpoint::builder::Extension {
-                work_status: endpoint::builder::WorkStatus::Idle,
-            }),
-            Role::RepositoryManager => endpoint::Kind::RepositoryManager,
-            Role::Hub => endpoint::Kind::Hub,
-        };
 
         let mut endpoint = Endpoint {
             id: endpoint_id,
@@ -242,7 +286,7 @@ impl Received {
             error: None,
             account: account_id,
             remote_account: self.remote.bearer_token.decoded.payload.account_id.into(),
-            kind,
+            role: self.remote.role,
         };
         endpoint.save(&mut tx).await.map_err(Error::CreateEndpoint)?;
 
@@ -262,7 +306,8 @@ impl Received {
             account_id,
             self.remote.role,
             &ourself,
-        )?;
+        )
+        .map_err(Error::SignToken)?;
 
         account::Token::set(&mut tx, account_id, &bearer_token.encoded, bearer_token.expires())
             .await
@@ -273,160 +318,24 @@ impl Received {
             "Bearer token created",
         );
 
-        let mut client = EndpointServiceClient::connect_with_auth(
-            self.remote.host_address,
-            TokensAuth::new(VerifiedTokens {
-                bearer_token: Some(self.remote.bearer_token.clone()),
-                access_token: None,
-            }),
-        )
-        .await?;
-
-        let resp = client
-            .accept(EnrollmentRequest {
-                issuer: Some(ourself.into()),
-                issue_token: bearer_token.encoded,
-                role: ProtoRole::from(self.remote.role) as i32,
-            })
-            .await;
-
-        match resp {
-            Ok(_) => {
-                endpoint.status = endpoint::Status::Operational;
-                endpoint.save(&mut tx).await.map_err(Error::UpdateEndpointStatus)?;
-
-                tx.commit().await?;
-
-                info!("Accepted endpoint now operational");
-
-                Ok(())
-            }
-            Err(error) => {
-                endpoint.status = endpoint::Status::Failed;
-                endpoint.error = Some(error.to_string());
-                endpoint.save(&mut tx).await.map_err(Error::UpdateEndpointStatus)?;
-
-                tx.commit().await?;
-
-                Err(Error::GrpcRequest(error))
-            }
-        }
-    }
-
-    /// Decline the received enrollment
-    pub async fn decline(self) -> Result<(), Error> {
-        let mut client = EndpointServiceClient::connect_with_auth(
-            self.remote.host_address,
-            TokensAuth::new(VerifiedTokens {
-                bearer_token: Some(self.remote.bearer_token.clone()),
-                access_token: None,
-            }),
-        )
-        .await?;
-
-        client.decline(()).await?;
-
-        Ok(())
-    }
-}
-
-impl Sent {
-    /// Mark the sent enrollment as accepted
-    #[tracing::instrument(
-        name = "accepted_enrollment",
-        skip_all,
-        fields(
-            endpoint = %self.endpoint,
-            account = %self.account,
-            public_key = %self.target.public_key,
-            url = %self.target.host_address,
-            role = %self.target.role,
-        )
-    )]
-    pub async fn accepted(&self, db: &Database, remote: Remote) -> Result<(), Error> {
-        if remote.public_key != self.target.public_key {
-            return Err(Error::PublicKeyMismatch {
-                expected: self.target.public_key.encode(),
-                actual: remote.public_key.encode(),
-            });
-        }
-
-        let account = self.account;
-        let username = format!("@{account}");
-
-        let mut tx = db.begin().await?;
-
-        Account {
-            id: account,
-            kind: account::Kind::Service,
-            username: username.clone(),
-            email: None,
-            name: None,
-            public_key: self.target.public_key.encode(),
-        }
-        .save(&mut tx)
-        .await
-        .map_err(Error::CreateServiceAccount)?;
-
-        info!(username, "Created a new service account");
-
-        let endpoint = self.endpoint;
-        let kind = match remote.role {
-            Role::Builder => endpoint::Kind::Builder(endpoint::builder::Extension {
-                work_status: endpoint::builder::WorkStatus::Idle,
-            }),
-            Role::RepositoryManager => endpoint::Kind::RepositoryManager,
-            Role::Hub => endpoint::Kind::Hub,
-        };
-
-        Endpoint {
-            id: endpoint,
-            host_address: self.target.host_address.clone(),
-            status: endpoint::Status::Operational,
-            error: None,
-            account,
-            remote_account: remote.bearer_token.decoded.payload.account_id.into(),
-            kind,
-        }
-        .save(&mut tx)
-        .await
-        .map_err(Error::CreateEndpoint)?;
-
-        endpoint::Tokens {
-            bearer_token: Some(remote.bearer_token.encoded),
-            access_token: None,
-        }
-        .save(&mut tx, endpoint)
-        .await
-        .map_err(Error::SetEndpointAccountToken)?;
-
-        info!("Created a new endpoint for the service account");
-
-        account::Token::set(
-            &mut tx,
-            self.account,
-            &self.bearer_token.encoded,
-            self.bearer_token.expires(),
-        )
-        .await
-        .map_err(Error::SetAccountToken)?;
-
-        info!(
-            expiration = %self.bearer_token.expires(),
-            "Bearer token saved",
-        );
+        endpoint.status = endpoint::Status::Operational;
+        endpoint.save(&mut tx).await.map_err(Error::UpdateEndpointStatus)?;
 
         tx.commit().await?;
 
         info!("Accepted endpoint now operational");
 
-        Ok(())
+        Ok(EnrollmentRequest {
+            issuer: Some(ourself.into()),
+            issue_token: bearer_token.encoded,
+            role: ProtoRole::from(self.remote.role) as i32,
+        })
     }
 }
 
 /// An enrollment error
 #[derive(Debug, Error)]
-pub enum Error {
+pub(crate) enum Error {
     /// Reading an [`Account`] failed
     #[error("read account")]
     ReadAccount(#[source] account::Error),
@@ -448,6 +357,9 @@ pub enum Error {
     /// Updating the endpoint status failed
     #[error("update endpoint status")]
     UpdateEndpointStatus(#[source] database::Error),
+    /// Invalid public key
+    #[error("Invalid public key")]
+    InvalidPublicKey,
     /// Public key doesn't match expected value
     #[error("public key mismatch, expected {expected} got {actual}")]
     PublicKeyMismatch {
@@ -458,7 +370,16 @@ pub enum Error {
     },
     /// Token signing failed
     #[error("sign token")]
-    SignToken(#[from] token::Error),
+    SignToken(#[source] token::Error),
+    /// Token verification failed
+    #[error("verify token")]
+    VerifyToken(#[source] token::Error),
+    /// Role of target service doesn't match expected role
+    #[error("Role mismatch, expected {expected:?} provided {provided:?}")]
+    RoleMismatch { expected: Role, provided: Role },
+    /// Enrollment requires a bearer token
+    #[error("Requires a bearer token")]
+    RequireBearerToken,
     /// Client error
     #[error("client")]
     Client(#[from] client::Error),
@@ -471,4 +392,10 @@ pub enum Error {
     /// Grpc request
     #[error("grpc request")]
     GrpcRequest(#[from] tonic::Status),
+    /// Malformed request
+    #[error("Malformed request")]
+    MalformedRequest,
+    /// Unknown role
+    #[error("Unknown role: {0}")]
+    UnknownRole(i32),
 }

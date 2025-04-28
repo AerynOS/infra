@@ -4,17 +4,7 @@ use std::sync::{
 };
 
 use async_trait::async_trait;
-use service::{
-    Endpoint, database, endpoint,
-    grpc::{
-        self,
-        avalanche::{
-            BuildRequest,
-            avalanche_service_server::{AvalancheService, AvalancheServiceServer},
-        },
-    },
-    token::VerifiedToken,
-};
+use service::{Endpoint, database, endpoint, token::VerifiedToken};
 use snafu::{ResultExt, Snafu, ensure};
 use tracing::info;
 

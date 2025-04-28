@@ -8,7 +8,6 @@ pub enum Method {
     Endpoint(endpoint::Method),
     Summit(summit::Method),
     Vessel(vessel::Method),
-    Avalanche(avalanche::Method),
 }
 
 impl Method {
@@ -18,7 +17,6 @@ impl Method {
             .or_else(|| endpoint::Method::from_path(path).map(Self::Endpoint))
             .or_else(|| summit::Method::from_path(path).map(Self::Summit))
             .or_else(|| vessel::Method::from_path(path).map(Self::Vessel))
-            .or_else(|| avalanche::Method::from_path(path).map(Self::Avalanche))
     }
 
     pub fn flags(self) -> auth::Flags {
@@ -27,7 +25,15 @@ impl Method {
             Method::Endpoint(method) => method.flags(),
             Method::Summit(method) => method.flags(),
             Method::Vessel(method) => method.flags(),
-            Method::Avalanche(method) => method.flags(),
+        }
+    }
+
+    pub fn permission(self) -> Option<auth::Permission> {
+        match self {
+            Method::Account(method) => method.permission(),
+            Method::Endpoint(method) => method.permission(),
+            Method::Summit(method) => method.permission(),
+            Method::Vessel(method) => method.permission(),
         }
     }
 }

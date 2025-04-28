@@ -6,13 +6,26 @@ import "collectable.proto";
 import "options.proto";
 import "google/protobuf/empty.proto";
 
-message ImportRequest {
+message UploadTokenRequest {
   uint64 task_id = 1;
   repeated collectable.Collectable collectables = 2;
 }
 
+message UploadRequest {
+  bytes chunk = 1;
+}
+
+message UploadTokenResponse {
+  string token = 1;
+}
+
 service VesselService {
-  rpc Import(ImportRequest) returns (google.protobuf.Empty) {
+  rpc UploadToken(UploadTokenRequest) returns (UploadTokenResponse) {
     option (options.flags) = "ACCESS_TOKEN | SERVICE_ACCOUNT | NOT_EXPIRED";
+    option (options.perm) = "RequestUploadToken";
+  }
+  rpc Upload(stream UploadRequest) returns (google.protobuf.Empty) {
+    option (options.flags) = "ACCESS_TOKEN | SERVICE_ACCOUNT | NOT_EXPIRED";
+    option (options.perm) = "UploadPackage";
   }
 }

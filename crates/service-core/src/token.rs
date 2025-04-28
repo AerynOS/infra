@@ -1,5 +1,5 @@
 //! Json Web Token (JWT)
-use std::time::SystemTime;
+use std::{collections::HashSet, time::SystemTime};
 
 use chrono::{DateTime, Duration, Utc};
 use jsonwebtoken::{DecodingKey, EncodingKey, Header};
@@ -8,7 +8,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::{
-    account,
+    account, auth,
     crypto::{self, KeyPair, PublicKey},
 };
 
@@ -185,7 +185,10 @@ pub struct Payload {
     pub iss: String,
     /// Subject - Subject of the JWT (the user)
     pub sub: String,
+    /// Unique identifier
+    pub jti: Option<String>,
     /// Token purpose
+    #[serde(rename = "pur")]
     pub purpose: Purpose,
     /// Account id of the holder
     #[serde(rename = "uid")]
@@ -193,6 +196,9 @@ pub struct Payload {
     /// Account type of the holder
     #[serde(rename = "act")]
     pub account_type: account::Kind,
+    /// Permissions granted to the holder
+    #[serde(default, rename = "per")]
+    pub permissions: HashSet<auth::Permission>,
 }
 
 /// Purpose of the token
@@ -265,9 +271,11 @@ mod test {
                 iat: now.timestamp(),
                 iss: "test".into(),
                 sub: "test".into(),
+                jti: None,
                 purpose: Purpose::Authorization,
                 account_id: Uuid::new_v4(),
                 account_type: account::Kind::Admin,
+                permissions: Default::default(),
             },
         };
 

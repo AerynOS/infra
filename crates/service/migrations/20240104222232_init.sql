@@ -25,12 +25,7 @@ CREATE TABLE IF NOT EXISTS endpoint (
     access_token TEXT,
     account_id TEXT NOT NULL UNIQUE,
     remote_account_id TEXT NOT NULL UNIQUE,
-
-    -- Role must precede role specific fields
     role TEXT NOT NULL,
-
-    -- Builder fields
-    work_status TEXT,
 
     FOREIGN KEY(account_id) REFERENCES account(account_id) ON DELETE CASCADE
 );
