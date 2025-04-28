@@ -259,7 +259,8 @@ pub async fn block(tx: &mut Transaction, task: Id, blocker: &str) -> Result<()> 
     let _ = sqlx::query(
         "
         INSERT INTO task_blockers (task_id, blocker)
-        VALUES (?,?);
+        VALUES (?,?)
+        ON CONFLICT DO NOTHING;
         ",
     )
     .bind(i64::from(task))
