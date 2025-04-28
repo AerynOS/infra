@@ -12,15 +12,15 @@ AerynOS service infrastructure
 ```sh
 # on AerynOS
 sudo moss sync -u
-sudo moss it docker-compose just -y
+sudo moss it docker-compose just 'binary(protoc)' -y
 sudo usermod -a -G docker "${USER}"
-sudo systemctl enable --now docker.socket
+sudo systemctl enable --now docker.socket docker.service
 sudo systemctl reboot 
 ```
 
 ```sh
 # on solus:
-eopkg it docker docker-compose just
+eopkg it docker docker-compose just protobuf-devel -y
 sudo usermod -a -G docker "${USER}"
 sudo systemctl reboot
 ```
@@ -43,4 +43,4 @@ wanting to use those configs.
 
 For testing only the summit frontend, use this command:
 
-    cargo run -p summit -- -c ./test/summit/config.toml --root $(mktemp -d) --static ./crates/summit/static
+    just summit-dev
