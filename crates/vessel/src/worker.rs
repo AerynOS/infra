@@ -31,7 +31,6 @@ pub enum Message {
         endpoint: Endpoint,
         packages: Vec<Package>,
     },
-    ImportDirectory(PathBuf),
 }
 
 #[derive(Debug)]
@@ -135,33 +134,33 @@ async fn handle_message(state: &State, message: Message) -> Result<()> {
             .instrument(span)
             .await
         }
-        Message::ImportDirectory(directory) => {
-            let span = info_span!("import_directory", directory = directory.to_string_lossy().to_string());
-
-            async move {
-                info!("Import started");
-
-                let stones = tokio::task::spawn_blocking(move || enumerate_stones(&directory))
-                    .await
-                    .context("spawn blocking")?
-                    .context("enumerate stones")?;
-
-                let num_stones = stones.len();
-
-                if num_stones > 0 {
-                    import_packages(state, stones, false).await.context("import packages")?;
-
-                    info!(num_stones, "All stones imported");
-                } else {
-                    info!("No stones to import");
-                }
-
-                Ok(())
-            }
-            .instrument(span)
-            .await
-        }
     }
+}
+
+#[tracing::instrument(skip_all, fields(?directory))]
+pub async fn import_directory(service_state: &service::State, directory: PathBuf) -> Result<()> {
+    let state = State::new(service_state).await.context("construct state")?;
+
+    info!("Import started");
+
+    let stones = tokio::task::spawn_blocking(move || enumerate_stones(&directory))
+        .await
+        .context("spawn blocking")?
+        .context("enumerate stones")?;
+
+    let num_stones = stones.len();
+
+    if num_stones > 0 {
+        import_packages(&state, stones, false)
+            .await
+            .context("import packages")?;
+
+        info!(num_stones, "All stones imported");
+    } else {
+        info!("No stones to import");
+    }
+
+    Ok(())
 }
 
 async fn import_packages(state: &State, packages: Vec<Package>, destructive_move: bool) -> Result<()> {

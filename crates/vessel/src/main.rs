@@ -1,6 +1,7 @@
 use std::{net::IpAddr, path::PathBuf};
 
 use clap::Parser;
+use color_eyre::eyre::Context;
 use service::{Server, State, endpoint::Role};
 
 pub type Result<T, E = color_eyre::eyre::Error> = std::result::Result<T, E>;
@@ -32,7 +33,7 @@ async fn main() -> Result<()> {
     let (worker_sender, worker_task) = worker::run(&state).await?;
 
     if let Some(directory) = import {
-        let _ = worker_sender.send(worker::Message::ImportDirectory(directory));
+        worker::import_directory(&state, directory).await.context("import")?;
     }
 
     Server::new(Role::RepositoryManager, &config, &state)
