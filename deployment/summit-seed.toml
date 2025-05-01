@@ -1,0 +1,26 @@
+# This template, when filled out, should be saved to
+#
+#   /srv/summit-rs/summit/seed.toml
+#
+[[project]]
+name = "AerynOS"
+slug = "aerynos"
+summary = "The AerynOS project"
+
+# This is your repository where any .stones built by your infra will be available
+[[project.profile]]
+name = "aerynos-x86_64-v2"
+arch = "x86_64"
+index_uri = "http(s)://<your vessel http hostname>/vessel/volatile/x86_64/stone.index"
+
+# This is where your builders will fetch build dependencies by default
+[[project.profile.remote]]
+name = "volatile"
+uri = "https://packages.aerynos.dev/volatile/x86_64/stone.index"
+priority = 10
+
+# This is the upstream recipe repository you want to build from
+[[project.repository]]
+name = "recipes"
+summary = "AerynOS package recipes"
+uri = "https://github.com/AerynOS/recipes.git"

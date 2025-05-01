@@ -1,0 +1,15 @@
+# only allow access from known local IPs on http
+http://aosinfra.dante.lan:80 {
+	# restrict to only local addresses
+	@denied not remote_ip 192.168.1.0/24 127.0.0.1/8 fd00::/8 ::1
+	abort @denied
+
+        # vessel instance
+        handle_path /vessel* {
+                root * /srv/vessel-rs/vessel/state/public
+                file_server browse
+        }
+	# summit http server
+        reverse_proxy localhost:5000 {
+        }
+}

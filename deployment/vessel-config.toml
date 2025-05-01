@@ -1,0 +1,31 @@
+# This template, when filled out, should be saved to
+# 
+#   /srv/vessel-rs/vessel/config.toml
+# 
+description = "Vessel (<your hostname here>)"
+grpc_address = "http://<your hostname here>:5002"
+
+# Which summit instance do you want to connect to (via grpc)?
+[upstream]
+host_address = "http://<your summit hostname here>:5001"
+public_key = "<your summit public key here>"
+role = "hub"
+
+[tracing]
+level_filter = "info,vessel=debug,service=debug"
+# compact or json
+format = "compact"
+
+[admin]
+username = "vessel-rs"
+name = "vessel-rs admin"
+email = "<your@email>"
+public_key = "<your vessel public key here>"
+# 
+# To generate a vessel public key, run:
+#   
+#   ../target/release/cli key generate -f bytes /srv/vessel-rs/vessel/state/.privkey
+# 
+# To list the public key for use in the public_key field above, run:
+# 
+#   ../target/release/cli key encode -f bytes /srv/vessel-rs/vessel/state/.privkey

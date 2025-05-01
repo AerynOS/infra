@@ -1,0 +1,5 @@
+# 1. refers to a specific moss upstream repo that most people using AerynOS will have on their disk
+1. sqlite3 /.moss/repo/ac42bdab0698809/db 'select uri from meta' \
+   | cut -d '/' -f3- \
+   | awk '{print "https://packages.aerynos.com/" $1}' > vessel-stone-import-list.txt
+2. xargs -a vessel-stone-import-list.txt -n 1 -P 8 curl -O --output-dir /srv/vessel-rs/import/

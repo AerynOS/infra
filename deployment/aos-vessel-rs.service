@@ -1,0 +1,20 @@
+[Unit]
+Description=AerynOS Vessel repository manager
+After=network-online.target aos-summit-rs.service
+
+[Install]
+WantedBy=multi-user.target
+
+[Service]
+Type=simple
+WorkingDirectory=/srv/vessel-rs/vessel
+# ensure group-writeable files are created
+UMask=0002
+# Define ports explicitly
+#ExecStart=/srv/vessel-rs/vessel/vessel.app --import /srv/vessel-rs/import --grpc 5002 0.0.0.0
+ExecStart=/srv/vessel-rs/vessel/vessel.app --grpc 5002 0.0.0.0
+StandardOutput=journal
+User=vessel-rs
+Group=vessel-rs
+# ensure that if a service goes down, it is automatically restarted
+#Restart=always
