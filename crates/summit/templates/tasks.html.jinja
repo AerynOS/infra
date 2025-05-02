@@ -27,38 +27,41 @@
                 {% set profile = projects | profile(task.profile_id) %}
 
                 <li class="tasks__list__item">
-                    <code style="display:none">{{task}}</code>
+                    <code style="display:none">{{ task }}</code>
 
-                    <div class="tasks__list__item__id"><span>#{{task.id}}</span></div>
+                    <div class="tasks__list__item__id"><span>#{{ task.id }}</span></div>
                     <div class="tasks__list__item__detail">
-                        <a href="/logs/{{task.id}}/build.log">{{task.build_id}}</a>
-                        <div>{{task.description}}</div>
+                        <a href="/logs/{{ task.id }}/build.log">{{ task.build_id }}</a>
+                        <div>{{ task.description }}</div>
                     </div>
                     <div class="tasks__list__item__timing">
                         {% if task.ended %}
-                            <span>Ended @ {{task.ended}}</span>
-                            <span>92h 43m 49s on {{task.allocated_builder}}</span>
+                            <span>Ended @ {{ task.ended }}</span>
+                            <span>92h 43m 49s on {{ task.allocated_builder }}</span>
                         {% else %}
-                            <span>Started @ {{task.started}}</span>
-                            <span>92h 43m 49s on {{task.allocated_builder}}</span>
+                            <span>Started @ {{ task.started}}</span>
+                            <span>92h 43m 49s on {{ task.allocated_builder }}</span>
                         {% endif %}
                     </div>
                     <div class="tasks__list__item__arch">
-                        <span>{{profile.arch}}</span>
+                        <span>{{ profile.arch }}</span>
                     </div>
-                    <div class="tasks__list__item__status"><span class="badge badge--{{task.status}}">{{task.status}}</span></div>
+                    <div class="tasks__list__item__status"><span class="badge badge--{{ task.status }}">{{ task.status }}</span></div>
                 </li>
             {% endfor %}
         </ul>
     </div>
 
     {% if total > 0 %}
+        {% if selected_status is not none -%}
+            {% set and_status_filter = '&status=' ~ selected_status -%}
+        {% endif -%}
         <nav class="pagination-wrap" aria-label="Pagination">
             <ul class="pagination">
 
                 {# Previous Button #}
                 <li class="page-item {% if page <= 1 %}disabled{% endif %}">
-                    <a class="page-link" href="?page={{ page - 1 }}" aria-label="Previous">
+                    <a class="page-link" href="?page={{ page - 1 }}{{ and_status_filter }}" aria-label="Previous">
                         <span aria-hidden="true">&laquo;</span>
                     </a>
                 </li>
@@ -66,7 +69,7 @@
                 {# First page + ellipsis if not in pages_to_show #}
                 {% if pages_to_show[0] > 1 %}
                     <li class="page-item">
-                        <a class="page-link" href="?page=1">1</a>
+                        <a class="page-link" href="?page=1{{ and_status_filter }}">1</a>
                     </li>
                     {% if pages_to_show[0] > 2 %}
                         <li class="page-item disabled">
@@ -78,7 +81,7 @@
                 {# Page Numbers #}
                 {% for p in pages_to_show %}
                     <li class="page-item {% if p == page %}active{% endif %}">
-                        <a class="page-link" href="?page={{ p }}">{{ p }}</a>
+                        <a class="page-link" href="?page={{ p }}{{ and_status_filter }}">{{ p }}</a>
                     </li>
                 {% endfor %}
 
@@ -90,13 +93,13 @@
                         </li>
                     {% endif %}
                     <li class="page-item">
-                        <a class="page-link" href="?page={{ total_pages }}">{{ total_pages }}</a>
+                        <a class="page-link" href="?page={{ total_pages }}{{ and_status_filter }}">{{ total_pages }}</a>
                     </li>
                 {% endif %}
 
                 {# Next Button #}
                 <li class="page-item {% if page >= total_pages %}disabled{% endif %}">
-                    <a class="page-link" href="?page={{ page + 1 }}" aria-label="Next">
+                    <a class="page-link" href="?page={{ page + 1 }}{{ and_status_filter }}" aria-label="Next">
                         <span aria-hidden="true">&raquo;</span>
                     </a>
                 </li>
