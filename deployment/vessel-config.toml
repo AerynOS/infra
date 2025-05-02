@@ -1,14 +1,16 @@
-# This template, when filled out, should be saved to
+# This template should be saved to
 # 
 #   /srv/vessel-rs/vessel/config.toml
 # 
-description = "Vessel (<your hostname here>)"
-grpc_address = "http://<your hostname here>:5002"
+# and then be filled out with relevant hostnames, public keys etc.
 
-# Which summit instance do you want to connect to (via grpc)?
+description = "Vessel (<hostname>)"
+grpc_address = "http://<hostname>:5002"
+
+# Which Summit instance do you want to connect to (via grpc)?
 [upstream]
-host_address = "http://<your summit hostname here>:5001"
-public_key = "<your summit public key here>"
+host_address = "http://<summit instance hostname>:5001"
+public_key = "<summit instance public key>"
 role = "hub"
 
 [tracing]
@@ -20,7 +22,7 @@ format = "compact"
 username = "vessel-rs"
 name = "vessel-rs admin"
 email = "<your@email>"
-public_key = "<your vessel public key here>"
+public_key = "<public key for this vessel instance>"
 # 
 # To generate a vessel public key, run:
 #   

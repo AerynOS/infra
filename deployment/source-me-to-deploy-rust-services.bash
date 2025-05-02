@@ -17,13 +17,12 @@ deploy-service () {
   # necessary for setgid on dirs being inherited by newly created files
   umask 0002  
   # set correct permissions for service home dir
-  sudo chmod -c g+rwsX /srv/${_svc}-rs
   sudo chmod -Rc g+rwX /srv/${_svc}-rs
   # set up state dir to be ready for the .privkey private key in bytes format
   mkdir -pv /srv/${_svc}-rs/${_svc}/state
   # copy binaries to service home dirs
   cp -v target/release/${_svc} /srv/${_svc}-rs/${_svc}/${_svc}.app
-  chmod -c a+x,g+w /srv/${_svc}-rs/${_svc}/${_svc}.app
+  chmod -c a+x /srv/${_svc}-rs/${_svc}/${_svc}.app
   # reset permissions
   sudo chown -Rc ${_svc}-rs:${_svc}-rs /srv/${_svc}-rs
   sudo chmod -Rc g+rwX /srv/${_svc}-rs/${_svc}
@@ -35,8 +34,15 @@ deploy-service () {
 
 deploy-avalanche-service ()
 {
-    echo -e "\nAllow avalanche-rs user to call /usr/bin/boulder w/no password:"
-    echo -e "avalanche-rs ALL = NOPASSWD: /usr/bin/nice, /usr/bin/boulder\n" | sudo tee /etc/sudoers.d/avalanche-rs-boulder
+  echo -e "\nAllow avalanche-rs user to call /usr/bin/boulder w/no password:"
+  echo -e "avalanche-rs ALL = NOPASSWD: /usr/bin/nice, /usr/bin/boulder\n" | sudo tee /etc/sudoers.d/avalanche-rs-boulder
+}
+
+reset-service-state () {
+  local _svc="$1"
+  local _statedir="/srv/${_svc}-rs/${_svc}/state/"
+  [[ -d ${_statedir} ]] && pushd ${_statedir} && rm -rf * && ls -la && popd
+  echo "${_svc} state dir reset. NB: The service private key was not deleted."
 }
 
 help() {
