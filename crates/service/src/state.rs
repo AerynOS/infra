@@ -1,5 +1,8 @@
 //! Shared service state
-use std::{io, path::PathBuf};
+use std::{
+    io,
+    path::{Path, PathBuf},
+};
 
 use thiserror::Error;
 use tokio::fs;
@@ -31,8 +34,8 @@ pub struct State {
 impl State {
     /// Load state from the provided path. If no keypair and/or database exist, they will be created.
     #[tracing::instrument(name = "load_state", skip_all)]
-    pub async fn load(root: impl Into<PathBuf>) -> Result<Self, Error> {
-        let root = root.into();
+    pub async fn load(root: impl AsRef<Path>) -> Result<Self, Error> {
+        let root = fs::canonicalize(root).await.map_err(Error::CanonicalizeRoot)?;
 
         let state_dir = root.join("state");
         let cache_dir = state_dir.join("cache");
@@ -85,6 +88,9 @@ impl State {
 /// A state error
 #[derive(Debug, Error)]
 pub enum Error {
+    /// Canonicalize root directory
+    #[error("canonicalize root directory")]
+    CanonicalizeRoot(#[source] io::Error),
     /// Error creating db directory
     #[error("create db directory")]
     CreateDbDir(#[source] io::Error),
