@@ -20,11 +20,12 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::body::Body;
 use tonic::metadata::MetadataValue;
+use tonic::service::Interceptor;
 use tonic::transport::{self, Channel};
 use tower::Service;
+use tracing::error;
 
 pub use service_grpc::account::account_service_client::AccountServiceClient;
-pub use service_grpc::avalanche::avalanche_service_client::AvalancheServiceClient;
 pub use service_grpc::endpoint::endpoint_service_client::EndpointServiceClient;
 pub use service_grpc::summit::summit_service_client::SummitServiceClient;
 pub use service_grpc::vessel::vessel_service_client::VesselServiceClient;
@@ -40,6 +41,12 @@ pub trait AuthClient<A>: Sized {
         A: AuthProvider + 'static;
 }
 
+/// Extension trait for connecting a client with a token
+#[async_trait]
+pub trait TokenClient: Sized {
+    async fn connect_with_token(uri: Uri, token: &str) -> Result<Self, tonic::transport::Error>;
+}
+
 macro_rules! service_client {
     ($name:ident) => {
         #[async_trait::async_trait]
@@ -48,8 +55,37 @@ macro_rules! service_client {
             where
                 A: AuthProvider + 'static,
             {
-                let channel = ::tonic::transport::Endpoint::new(uri)?.connect().await?;
+                let channel = ::tonic::transport::Endpoint::new(uri)?
+                    .http2_keep_alive_interval(Duration::from_secs(60))
+                    .keep_alive_timeout(Duration::from_secs(20))
+                    .connect()
+                    .await?;
                 Ok(Self::new(AuthService { channel, provider }))
+            }
+        }
+
+        #[async_trait::async_trait]
+        impl TokenClient
+            for $name<::tonic::service::interceptor::InterceptedService<::tonic::transport::Channel, TokenInterceptor>>
+        {
+            async fn connect_with_token(
+                uri: Uri,
+                token: &str,
+            ) -> Result<
+                $name<::tonic::service::interceptor::InterceptedService<::tonic::transport::Channel, TokenInterceptor>>,
+                tonic::transport::Error,
+            > {
+                let channel = ::tonic::transport::Endpoint::new(uri)?
+                    .http2_keep_alive_interval(Duration::from_secs(60))
+                    .keep_alive_timeout(Duration::from_secs(20))
+                    .connect()
+                    .await?;
+                Ok($name::with_interceptor(
+                    channel,
+                    TokenInterceptor {
+                        token: token.to_owned(),
+                    },
+                ))
             }
         }
     };
@@ -161,7 +197,6 @@ where
 }
 
 service_client!(AccountServiceClient);
-service_client!(AvalancheServiceClient);
 service_client!(EndpointServiceClient);
 service_client!(SummitServiceClient);
 service_client!(VesselServiceClient);
@@ -223,25 +258,6 @@ pub trait AuthProvider: Clone + Send + Sync + 'static {
     /// Called when client fails to refresh a token
     async fn token_refresh_failed(&self, _error: &Error<Self::Error>) -> Result<(), Self::Error> {
         Ok(())
-    }
-}
-
-/// Auth with static tokens and no refresh persistence
-#[derive(Debug, Clone)]
-pub struct TokensAuth(VerifiedTokens);
-
-impl TokensAuth {
-    pub fn new(tokens: VerifiedTokens) -> Self {
-        Self(tokens)
-    }
-}
-
-#[async_trait]
-impl AuthProvider for TokensAuth {
-    type Error = Infallible;
-
-    async fn tokens(&self) -> Result<VerifiedTokens, Self::Error> {
-        Ok(self.0.clone())
     }
 }
 
@@ -400,4 +416,20 @@ where
         bearer_token: tokens.bearer_token,
         access_token: tokens.access_token,
     })
+}
+
+pub struct TokenInterceptor {
+    token: String,
+}
+
+impl Interceptor for TokenInterceptor {
+    fn call(&mut self, mut req: tonic::Request<()>) -> Result<tonic::Request<()>, tonic::Status> {
+        if let Ok(value) = MetadataValue::from_str(&format!("Bearer {}", self.token))
+            .inspect_err(|err| error!(error = %err, "failed to convert token to header value"))
+        {
+            req.metadata_mut().insert("authorization", value);
+        }
+
+        Ok(req)
+    }
 }

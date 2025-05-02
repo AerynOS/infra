@@ -7,18 +7,18 @@ use http::Uri;
 use moss::{db::meta, dependency, package::Meta};
 use serde::{Deserialize, Serialize};
 use service::database::Transaction;
+use service::endpoint;
 use sqlx::{SqliteConnection, prelude::FromRow};
 use strum::IntoEnumIterator;
 use tokio::task::spawn_blocking;
 use tracing::{debug, warn};
+use uuid::Uuid;
 
 use crate::{Manager, Project, Repository, profile, project, repository, task};
 
-pub use self::build::build;
 pub use self::create::create;
 pub use self::query::query;
 
-pub mod build;
 pub mod create;
 pub mod query;
 
@@ -39,7 +39,7 @@ pub struct Task {
     pub commit_ref: String,
     pub source_path: String,
     pub status: Status,
-    pub allocated_builder: Option<String>,
+    pub allocated_builder: Option<endpoint::Id>,
     pub log_path: Option<String>,
     pub blocked_by: Vec<String>,
     pub started: DateTime<Utc>,
@@ -234,7 +234,7 @@ pub async fn set_log_path(tx: &mut Transaction, task_id: task::Id, log_path: &Pa
     Ok(())
 }
 
-pub async fn set_allocated_builder(tx: &mut Transaction, task_id: task::Id, allocated_builder: &str) -> Result<()> {
+pub async fn set_allocated_builder(tx: &mut Transaction, task_id: task::Id, builder: &endpoint::Id) -> Result<()> {
     sqlx::query(
         "
         UPDATE task
@@ -244,7 +244,7 @@ pub async fn set_allocated_builder(tx: &mut Transaction, task_id: task::Id, allo
         WHERE task_id = ?;
         ",
     )
-    .bind(allocated_builder)
+    .bind(Uuid::from(*builder))
     .bind(i64::from(task_id))
     .execute(tx.as_mut())
     .await
@@ -259,7 +259,8 @@ pub async fn block(tx: &mut Transaction, task: Id, blocker: &str) -> Result<()> 
     let _ = sqlx::query(
         "
         INSERT INTO task_blockers (task_id, blocker)
-        VALUES (?,?);
+        VALUES (?,?)
+        ON CONFLICT DO NOTHING;
         ",
     )
     .bind(i64::from(task))

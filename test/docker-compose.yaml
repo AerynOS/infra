@@ -5,7 +5,6 @@ services:
       - "5000:80"
     volumes:
       - vessel-state:/vessel
-      - summit-state:/summit
       - ./Caddyfile:/etc/caddy/Caddyfile
     networks:
       infra-test:
@@ -18,15 +17,11 @@ services:
       - ./summit/seed.toml:/app/seed.toml
     ports:
       - "5001:5001"
-    depends_on:
-      vessel:
-        condition: service_started
-      avalanche:
-        condition: service_started
-      caddy:
-        condition: service_started
     networks:
       infra-test:
+    healthcheck:
+          test: curl --fail http://127.0.0.1:5000 || exit 1
+          start_period: 30s
   vessel:
     image: serpentos/vessel:${RUST_PROFILE:-dev}
     volumes:
@@ -35,6 +30,8 @@ services:
       - ./vessel/config.toml:/app/config.toml
       - ./import:/import
     depends_on:
+      summit:
+        condition: service_healthy
       caddy:
         condition: service_started
     networks:
@@ -46,6 +43,9 @@ services:
       - avalanche-state:/app/state
       - ./avalanche/.privkey:/app/state/.privkey
       - ./avalanche/config.toml:/app/config.toml
+    depends_on:
+      summit:
+        condition: service_healthy
     networks:
       infra-test:
 

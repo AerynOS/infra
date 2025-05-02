@@ -10,10 +10,10 @@ index_uri = "http://caddy/dev/volatile/x86_64/stone.index"
 
 [[project.profile.remote]]
 name = "volatile"
-uri = "https://dev.serpentos.com/volatile/x86_64/stone.index"
+uri = "https://dev.aerynos.dev/volatile/x86_64/stone.index"
 priority = 10
 
 [[project.repository]]
 name = "recipes"
 summary = "Test recipes"
-uri = "https://github.com/serpent-os/recipes.git"
+uri = "https://github.com/AerynOS/recipes.git"

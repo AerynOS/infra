@@ -1,5 +1,8 @@
 //! Authentication
+use std::collections::HashSet;
+
 use bitflags::bitflags;
+use serde::{Deserialize, Serialize};
 
 bitflags! {
     /// Authorization flags that describe the account making the request
@@ -26,17 +29,47 @@ bitflags! {
     }
 }
 
-/// Combine [`Flags`]
-#[macro_export]
-macro_rules! auth {
-    ($first:ident $(| $other:ident)*) => {
-        $crate::auth::Flags::from_bits_truncate(
-            $crate::auth::Flags::$first.bits() $(| $crate::auth::Flags::$other.bits())*
-        )
-    };
-}
-
 /// Convert [`Flags`] to an array of flag names
 pub fn flag_names(flags: Flags) -> Vec<String> {
     flags.iter_names().map(|(name, _)| name.to_string()).collect()
+}
+
+/// RBAC role
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Role {
+    Admin,
+    Hub,
+    RepositoryManager,
+    Builder,
+}
+
+impl Role {
+    /// Permissions granted to the role
+    pub fn permissions(&self) -> HashSet<Permission> {
+        use Permission::*;
+
+        match self {
+            Role::Admin => [RetryTask].into_iter().collect(),
+            Role::Hub => [RequestUploadToken].into_iter().collect(),
+            Role::RepositoryManager => [ReportImportStatus].into_iter().collect(),
+            Role::Builder => [ConnectBuilderStream].into_iter().collect(),
+        }
+    }
+}
+
+/// RBAC permission
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, strum::Display)]
+#[serde(rename_all = "kebab-case")]
+#[strum(serialize_all = "kebab-case")]
+pub enum Permission {
+    /// Request a one time vessel upload token
+    RequestUploadToken,
+    /// Upload a package to vessel
+    UploadPackage,
+    /// Report import status to summit
+    ReportImportStatus,
+    /// Connect to summit as a builder
+    ConnectBuilderStream,
+    /// Retry a task
+    RetryTask,
 }

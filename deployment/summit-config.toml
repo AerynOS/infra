@@ -1,0 +1,44 @@
+# This template should be saved to
+#
+#   /srv/summit-rs/summit/config.toml
+#
+# and then be filled out with relevant hostnames, public keys etc.
+
+# These fields are only used for advertising your summit service
+description = "Summit (<hostname>)"
+http_address = "http://<hostname>:5000"
+grpc_address = "http://<hostname>:5001"
+
+# Each public key instance here represents a service connected to your summit instance
+downstreams = [
+  # Vessel instance on your vessel host (typically localhost next to summit)
+  "<vessel instance public key>",
+  # Avalanche instance (can be localhost next to summit)
+  "<avalanche instance public key>",
+  # Additional Avalanche instance on somehost1
+  # "<avalanche somehost1 public key>",
+  # (...)
+]
+
+[tracing]
+#level_filter = "info,summit=debug,service=debug"
+# This shows e.g. git commands and their return status for easy troubleshooting
+level_filter = "info,summit=debug,service=trace,service_core=trace"
+# compact or json
+format = "compact"
+
+# For use when controlling this instance via the `cli` admin tool
+[admin]
+username = "summit-rs"
+name = "summit admin"
+email = "<your@e-mail>"
+public_key = "<public key for this summit instance>"
+#
+# To generate a new private key for a summit instance, run:
+# 
+#   ../target/release/cli key generate -f bytes /srv/summit-rs/summit/state/.privkey
+# 
+# To list the new summit public key for use in the public_key field above, run:
+# 
+#   ../target/release/cli key encode -f bytes /srv/summit-rs/summit/state/.privkey
+#

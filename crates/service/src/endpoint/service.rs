@@ -1,10 +1,10 @@
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use http::Uri;
 use service_core::{
     Token,
     crypto::{EncodedPublicKey, PublicKey},
-    token::{self, VerifiedToken},
+    token,
 };
 use service_grpc::endpoint::{
     EnrollmentRequest,
@@ -20,9 +20,7 @@ use crate::{
         self, Role,
         enrollment::{self, Issuer},
     },
-    error,
     grpc::handle,
-    sync::SharedMap,
 };
 
 pub type Server = EndpointServiceServer<Service>;
@@ -36,7 +34,6 @@ pub fn service(role: Role, config: &crate::Config, state: &crate::State) -> Serv
         state: Arc::new(State {
             issuer: config.issuer(role, state.key_pair.clone()),
             db: state.service_db.clone(),
-            pending_sent: state.pending_sent.clone(),
             downstreams: config.downstreams.clone(),
         }),
     })
@@ -49,13 +46,7 @@ struct State {
     issuer: Issuer,
     /// Shared database of this service
     db: Database,
-    /// Pending enrollment requests that are awaiting confirmation
-    ///
-    /// Only applicable for hub service
-    pending_sent: SharedMap<endpoint::Id, enrollment::Sent>,
     /// Downstream services to auto-accept enrollment with
-    ///
-    /// Only applicable for hub services
     downstreams: Vec<PublicKey>,
 }
 
@@ -70,30 +61,15 @@ impl EndpointService for Service {
     async fn enroll(
         &self,
         request: tonic::Request<EnrollmentRequest>,
-    ) -> std::result::Result<tonic::Response<()>, tonic::Status> {
+    ) -> std::result::Result<tonic::Response<EnrollmentRequest>, tonic::Status> {
         let state = self.state.clone();
 
         handle(request, async move |req| enroll(state, req).await).await
     }
-
-    async fn accept(
-        &self,
-        request: tonic::Request<EnrollmentRequest>,
-    ) -> std::result::Result<tonic::Response<()>, tonic::Status> {
-        let state = self.state.clone();
-
-        handle(request, async move |req| accept(state, req).await).await
-    }
-
-    async fn decline(&self, request: tonic::Request<()>) -> std::result::Result<tonic::Response<()>, tonic::Status> {
-        let state = self.state.clone();
-
-        handle(request, async move |req| decline(state, req).await).await
-    }
 }
 
 #[tracing::instrument(skip_all)]
-async fn enroll(state: Arc<State>, request: tonic::Request<EnrollmentRequest>) -> Result<(), Error> {
+async fn enroll(state: Arc<State>, request: tonic::Request<EnrollmentRequest>) -> Result<EnrollmentRequest, Error> {
     let request = request.into_inner();
     let issuer = request.issuer.as_ref().ok_or(Error::MalformedRequest)?;
     let issue_token = request.issue_token.clone();
@@ -142,108 +118,7 @@ async fn enroll(state: Arc<State>, request: tonic::Request<EnrollmentRequest>) -
         },
     };
 
-    // Return from handler and accept in background
-    //
-    // D infra expects this operation returns before we
-    // respond w/ acceptance
-    tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_secs(1)).await;
-
-        if let Err(e) = received.accept(&state.db, state.issuer.clone()).await {
-            error!(error=%error::chain(e), "Auto accept failed")
-        };
-    });
-
-    Ok(())
-}
-
-#[tracing::instrument(skip_all)]
-async fn accept(state: Arc<State>, request: tonic::Request<EnrollmentRequest>) -> Result<(), Error> {
-    let token = request
-        .extensions()
-        .get::<VerifiedToken>()
-        .cloned()
-        .ok_or(Error::MissingRequestToken)?;
-
-    let request = request.into_inner();
-    let issuer = request.issuer.as_ref().ok_or(Error::MalformedRequest)?;
-    let issuer_role = Role::from_proto(issuer.role()).ok_or(Error::UnknownRole(request.role))?;
-    let role = Role::from_proto(request.role()).ok_or(Error::UnknownRole(request.role))?;
-
-    let public_key = EncodedPublicKey::decode(&issuer.public_key).map_err(|_| Error::InvalidPublicKey)?;
-    let verified_token =
-        Token::verify(&request.issue_token, &public_key, &token::Validation::new()).map_err(Error::VerifyToken)?;
-
-    if !matches!(verified_token.decoded.payload.purpose, token::Purpose::Authorization) {
-        return Err(Error::RequireBearerToken);
-    }
-    if role != state.role() {
-        return Err(Error::RoleMismatch {
-            expected: state.role(),
-            provided: role,
-        });
-    }
-
-    let endpoint = token
-        .decoded
-        .payload
-        .sub
-        .parse::<endpoint::Id>()
-        .map_err(Error::InvalidEndpoint)?;
-
-    info!(
-        %endpoint,
-        public_key = issuer.public_key,
-        url = issuer.url,
-        role = %issuer.role,
-        "Enrollment accepted"
-    );
-
-    state
-        .pending_sent
-        .remove(&endpoint)
-        .await
-        .ok_or(Error::MissingPendingEnrollment(endpoint))?
-        .accepted(
-            &state.db,
-            enrollment::Remote {
-                host_address: issuer.url.parse::<Uri>()?,
-                public_key,
-                role: issuer_role,
-                bearer_token: verified_token,
-            },
-        )
-        .await?;
-
-    Ok(())
-}
-
-#[tracing::instrument(skip_all)]
-async fn decline(state: Arc<State>, request: tonic::Request<()>) -> Result<(), Error> {
-    let token = request
-        .extensions()
-        .get::<VerifiedToken>()
-        .cloned()
-        .ok_or(Error::MissingRequestToken)?;
-
-    let endpoint = token
-        .decoded
-        .payload
-        .sub
-        .parse::<endpoint::Id>()
-        .map_err(Error::InvalidEndpoint)?;
-
-    if let Some(enrollment) = state.pending_sent.remove(&endpoint).await {
-        info!(
-            %endpoint,
-            public_key = %enrollment.target.public_key,
-            url = %enrollment.target.host_address,
-            role = %enrollment.target.role,
-            "Enrollment declined"
-        );
-    }
-
-    Ok(())
+    Ok(received.accept(&state.db, state.issuer.clone()).await?)
 }
 
 #[derive(Debug, Error)]
@@ -251,8 +126,6 @@ async fn decline(state: Arc<State>, request: tonic::Request<()>) -> Result<(), E
 enum Error {
     #[error("Malformed request")]
     MalformedRequest,
-    #[error("Token missing from request")]
-    MissingRequestToken,
     #[error("Requires a bearer token")]
     RequireBearerToken,
     #[error("Invalid public key")]
@@ -263,12 +136,8 @@ enum Error {
     UnknownRole(i32),
     #[error("Role mismatch, expected {expected:?} provided {provided:?}")]
     RoleMismatch { expected: Role, provided: Role },
-    #[error("Pending enrollment missing for endpoint {0}")]
-    MissingPendingEnrollment(endpoint::Id),
     #[error("invalid uri")]
     InvalidUrl(#[from] http::uri::InvalidUri),
-    #[error("invalid endpoint")]
-    InvalidEndpoint(#[source] uuid::Error),
     #[error("verify token")]
     VerifyToken(#[source] token::Error),
     #[error("enrollment")]
@@ -278,15 +147,12 @@ enum Error {
 impl From<Error> for tonic::Status {
     fn from(error: Error) -> Self {
         match error {
-            Error::MissingRequestToken => tonic::Status::unauthenticated(""),
             Error::Enrollment(_) => tonic::Status::internal(""),
             Error::InvalidPublicKey
             | Error::InvalidUrl(_)
-            | Error::InvalidEndpoint(_)
             | Error::RequireBearerToken
             | Error::VerifyToken(_)
             | Error::RoleMismatch { .. }
-            | Error::MissingPendingEnrollment(_)
             | Error::DownstreamMismatch { .. }
             | Error::MalformedRequest
             | Error::UnknownRole(_) => tonic::Status::invalid_argument(""),

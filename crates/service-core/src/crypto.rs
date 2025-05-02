@@ -5,7 +5,7 @@ use base64::Engine;
 use derive_more::{Display, From};
 use ed25519_dalek::{
     SECRET_KEY_LENGTH, Signature, Signer,
-    pkcs8::{DecodePrivateKey, EncodePrivateKey},
+    pkcs8::{DecodePrivateKey, EncodePrivateKey, KeypairBytes, spki::der::zeroize::Zeroizing},
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -36,6 +36,22 @@ impl KeyPair {
         )?)))
     }
 
+    /// Reconstruct a [`KeyPair`] from DER bytes.
+    pub fn try_from_der(bytes: &[u8]) -> Result<Self, Error> {
+        let key_pair = KeypairBytes::from_pkcs8_der(bytes).map_err(Error::DecodeDerPrivateKey)?;
+        Ok(Self(
+            ed25519_dalek::SigningKey::try_from(key_pair).map_err(Error::DecodeDerPrivateKey)?,
+        ))
+    }
+
+    /// Reconstruct a [`KeyPair`] from PEM bytes.
+    pub fn try_from_pem(content: &str) -> Result<Self, Error> {
+        let key_pair = KeypairBytes::from_pkcs8_pem(content).map_err(Error::DecodePemPrivateKey)?;
+        Ok(Self(
+            ed25519_dalek::SigningKey::try_from(key_pair).map_err(Error::DecodePemPrivateKey)?,
+        ))
+    }
+
     /// The public key half of this key pair
     pub fn public_key(&self) -> PublicKey {
         PublicKey(self.0.verifying_key())
@@ -44,6 +60,13 @@ impl KeyPair {
     /// Encode the private key as PKCS8 DER format
     pub fn der(&self) -> Result<ed25519_dalek::pkcs8::SecretDocument, Error> {
         self.0.to_pkcs8_der().map_err(Error::EncodeDerPrivateKey)
+    }
+
+    /// Encode the private key as PKCS8 PEM format
+    pub fn pem(&self) -> Result<Zeroizing<String>, Error> {
+        self.0
+            .to_pkcs8_pem(Default::default())
+            .map_err(Error::EncodePemPrivateKey)
     }
 
     /// Sign the provided message with this key pair
@@ -150,12 +173,21 @@ pub enum Error {
     /// Public Key decoding failed
     #[error("decode public key")]
     DecodePublicKey(#[source] ed25519_dalek::SignatureError),
+    /// Decoding private key from DER failed
+    #[error("decode der private key")]
+    DecodeDerPrivateKey(#[source] ed25519_dalek::pkcs8::Error),
+    /// Decoding private key from PEM failed
+    #[error("decode pem private key")]
+    DecodePemPrivateKey(#[source] ed25519_dalek::pkcs8::Error),
     /// Encoding public key as DER failed
     #[error("encode der public key")]
     EncodeDerPublicKey(#[from] ed25519_dalek::pkcs8::spki::Error),
     /// Encoding private key as DER failed
     #[error("encode der private key")]
     EncodeDerPrivateKey(#[source] ed25519_dalek::pkcs8::Error),
+    /// Encoding private key as PEM failed
+    #[error("encode pem private key")]
+    EncodePemPrivateKey(#[source] ed25519_dalek::pkcs8::Error),
     /// Signature verification failed
     #[error("signature verification")]
     VerifySignature(#[source] ed25519_dalek::SignatureError),

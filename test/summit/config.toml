@@ -1,5 +1,4 @@
 description = "Summit (test)"
-http_address = "http://summit:5000"
 grpc_address = "http://summit:5001"
 
 downstreams = [
@@ -10,7 +9,7 @@ downstreams = [
 ]
 
 [tracing]
-level_filter = "info,summit=debug,service=debug"
+level_filter = "info,summit=debug,service=trace,service_core=trace"
 # compact or json
 format = "compact"
 

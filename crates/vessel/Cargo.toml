@@ -8,11 +8,13 @@ service = { path = "../service" }
 
 async-trait.workspace = true
 clap.workspace = true
+chrono.workspace = true
 color-eyre.workspace = true
 futures-util.workspace = true
 hex.workspace = true
 http.workspace = true
 moss.workspace = true
+prost.workspace = true
 sha2.workspace = true
 snafu.workspace = true
 sqlx.workspace = true

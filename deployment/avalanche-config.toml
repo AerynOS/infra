@@ -1,0 +1,37 @@
+# This template should be saved to
+# 
+#   /srv/avalanche-rs/avalanche/config.toml
+#
+# and then be filled out with relevant hostnames, public keys etc.
+
+description = "Avalanche (<hostname>)"
+# TODO: Avalanche doesn't expose a grpc server so
+# it doesn't need to send a URI to summit
+grpc_address = "http://client.only"
+
+# Which summit instance do you want to connect to?
+[upstream]
+host_address = "http://<summit hostname>:5001"
+public_key = "<summit instance public key>"
+role = "hub"
+
+[tracing]
+level_filter = "info,avalanche=debug,service=debug"
+# compact or json
+format = "compact"
+
+# This is used for controlling this instance via the admin 'cli' binary
+[admin]
+username = "avalanche-rs"
+name = "avalanche-rs admin"
+email = "<your@email>"
+public_key = "<public key for this avalanche instance>"
+#
+# To generate a private key for an avalanche instance, run:
+# 
+#   ../target/release/cli key generate -f bytes /srv/avalanche-rs/avalanche/state/.privkey
+# 
+# To list the public key for use in the public_key field above, run:
+# 
+#   ../target/release/cli key encode -f bytes /srv/avalanche-rs/avalanche/state/.privkey
+#

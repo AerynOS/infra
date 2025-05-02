@@ -333,16 +333,21 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "axum",
+ "bytes",
  "clap",
  "color-eyre",
  "flate2",
+ "futures-util",
  "hex",
  "http",
  "itertools",
+ "prost",
  "service",
  "sha2",
  "snafu",
  "tokio",
+ "tokio-stream",
+ "tokio-util",
  "tonic",
  "tower-http",
  "tracing",
@@ -705,7 +710,7 @@ dependencies = [
 [[package]]
 name = "config"
 version = "0.25.1"
-source = "git+https://github.com/serpent-os/tools.git#c0457e11d16e667f360e7f660e7657d942668da2"
+source = "git+https://github.com/AerynOS/os-tools.git#ef9d21eb569e282d62c5237047c1fddd9bcd78a7"
 dependencies = [
  "dirs",
  "fs-err",
@@ -742,7 +747,7 @@ checksum = "7c74b8349d32d297c9134b8c88677813a227df8f779daa29bfc29c183fe3dca6"
 [[package]]
 name = "container"
 version = "0.25.1"
-source = "git+https://github.com/serpent-os/tools.git#c0457e11d16e667f360e7f660e7657d942668da2"
+source = "git+https://github.com/AerynOS/os-tools.git#ef9d21eb569e282d62c5237047c1fddd9bcd78a7"
 dependencies = [
  "fs-err",
  "nix 0.27.1",
@@ -898,7 +903,7 @@ dependencies = [
 [[package]]
 name = "dag"
 version = "0.25.1"
-source = "git+https://github.com/serpent-os/tools.git#c0457e11d16e667f360e7f660e7657d942668da2"
+source = "git+https://github.com/AerynOS/os-tools.git#ef9d21eb569e282d62c5237047c1fddd9bcd78a7"
 dependencies = [
  "petgraph",
 ]
@@ -1289,7 +1294,7 @@ dependencies = [
 [[package]]
 name = "fnmatch"
 version = "0.25.1"
-source = "git+https://github.com/serpent-os/tools.git#c0457e11d16e667f360e7f660e7657d942668da2"
+source = "git+https://github.com/AerynOS/os-tools.git#ef9d21eb569e282d62c5237047c1fddd9bcd78a7"
 dependencies = [
  "regex",
  "serde",
@@ -2338,7 +2343,7 @@ dependencies = [
 [[package]]
 name = "moss"
 version = "0.25.1"
-source = "git+https://github.com/serpent-os/tools.git#c0457e11d16e667f360e7f660e7657d942668da2"
+source = "git+https://github.com/AerynOS/os-tools.git#ef9d21eb569e282d62c5237047c1fddd9bcd78a7"
 dependencies = [
  "blsforme",
  "bytes",
@@ -3455,6 +3460,7 @@ dependencies = [
  "strum",
  "thiserror 2.0.12",
  "tokio",
+ "tokio-stream",
  "tokio-util",
  "toml",
  "tonic",
@@ -3481,6 +3487,7 @@ dependencies = [
  "tokio-stream",
  "tonic",
  "tower",
+ "tracing",
 ]
 
 [[package]]
@@ -3893,7 +3900,7 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 [[package]]
 name = "stone"
 version = "0.25.1"
-source = "git+https://github.com/serpent-os/tools.git#c0457e11d16e667f360e7f660e7657d942668da2"
+source = "git+https://github.com/AerynOS/os-tools.git#ef9d21eb569e282d62c5237047c1fddd9bcd78a7"
 dependencies = [
  "strum",
  "thiserror 2.0.12",
@@ -3904,7 +3911,7 @@ dependencies = [
 [[package]]
 name = "stone_recipe"
 version = "0.25.1"
-source = "git+https://github.com/serpent-os/tools.git#c0457e11d16e667f360e7f660e7657d942668da2"
+source = "git+https://github.com/AerynOS/os-tools.git#ef9d21eb569e282d62c5237047c1fddd9bcd78a7"
 dependencies = [
  "nom",
  "serde",
@@ -3971,6 +3978,7 @@ dependencies = [
  "color-eyre",
  "dag",
  "derive_more",
+ "flate2",
  "futures-util",
  "hex",
  "http",
@@ -3989,6 +3997,7 @@ dependencies = [
  "stone_recipe",
  "strum",
  "tokio",
+ "tokio-stream",
  "toml",
  "tonic",
  "tower",
@@ -4334,7 +4343,7 @@ dependencies = [
 [[package]]
 name = "tools_buildinfo"
 version = "0.25.1"
-source = "git+https://github.com/serpent-os/tools.git#c0457e11d16e667f360e7f660e7657d942668da2"
+source = "git+https://github.com/AerynOS/os-tools.git#ef9d21eb569e282d62c5237047c1fddd9bcd78a7"
 dependencies = [
  "chrono",
  "thiserror 2.0.12",
@@ -4508,7 +4517,7 @@ dependencies = [
 [[package]]
 name = "triggers"
 version = "0.25.1"
-source = "git+https://github.com/serpent-os/tools.git#c0457e11d16e667f360e7f660e7657d942668da2"
+source = "git+https://github.com/AerynOS/os-tools.git#ef9d21eb569e282d62c5237047c1fddd9bcd78a7"
 dependencies = [
  "dag",
  "fnmatch",
@@ -4525,7 +4534,7 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 [[package]]
 name = "tui"
 version = "0.25.1"
-source = "git+https://github.com/serpent-os/tools.git#c0457e11d16e667f360e7f660e7657d942668da2"
+source = "git+https://github.com/AerynOS/os-tools.git#ef9d21eb569e282d62c5237047c1fddd9bcd78a7"
 dependencies = [
  "crossterm",
  "dialoguer",
@@ -4675,12 +4684,14 @@ name = "vessel"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "chrono",
  "clap",
  "color-eyre",
  "futures-util",
  "hex",
  "http",
  "moss",
+ "prost",
  "service",
  "sha2",
  "snafu",
@@ -4697,7 +4708,7 @@ dependencies = [
 [[package]]
 name = "vfs"
 version = "0.1.0"
-source = "git+https://github.com/serpent-os/tools.git#c0457e11d16e667f360e7f660e7657d942668da2"
+source = "git+https://github.com/AerynOS/os-tools.git#ef9d21eb569e282d62c5237047c1fddd9bcd78a7"
 dependencies = [
  "indextree",
  "thiserror 2.0.12",

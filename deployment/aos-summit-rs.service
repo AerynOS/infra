@@ -1,0 +1,23 @@
+[Unit]
+Description=AerynOS Summit dashboard and build controller
+After=network-online.target
+
+[Install]
+WantedBy=multi-user.target
+
+[Service]
+Type=simple
+# Where the config files and the state/ dir lives
+WorkingDirectory=/srv/summit-rs/summit
+# ensure group-writeable files are created
+UMask=0002
+# Define ports explicitly
+ExecStart=/srv/summit-rs/summit/summit.app --seed ./seed.toml --http 5000 --grpc 5001 0.0.0.0
+# Ensure that partially completed clones get fixed
+#ExecStartPost=/srv/summit-rs/fix-hung-repo-clones.bash
+StandardOutput=journal
+User=summit-rs
+Group=summit-rs
+# ensure that if a service goes down, it is automatically restarted
+#Restart=always
+

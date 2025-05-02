@@ -4,9 +4,10 @@ use std::fmt;
 use std::str::FromStr;
 
 use chrono::Utc;
-use derive_more::From;
+use derive_more::{From, Into};
 use http::Uri;
 use serde::{Deserialize, Serialize};
+use service_core::auth;
 use service_grpc::endpoint::Role as ProtoRole;
 use sqlx::FromRow;
 use uuid::Uuid;
@@ -23,7 +24,7 @@ pub mod enrollment;
 pub(crate) mod service;
 
 /// Unique identifier of an [`Endpoint`]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, From)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, From, Into)]
 #[serde(try_from = "&str", into = "String")]
 pub struct Id(Uuid);
 
@@ -84,10 +85,9 @@ pub struct Endpoint {
     /// Account identifier for us on the remote service
     #[sqlx(rename = "remote_account_id", try_from = "Uuid")]
     pub remote_account: account::Id,
-    /// Role specific data
-    #[sqlx(flatten)]
-    #[serde(flatten)]
-    pub kind: Kind,
+    /// Endpoint role
+    #[sqlx(try_from = "&'a str")]
+    pub role: Role,
 }
 
 impl Endpoint {
@@ -105,8 +105,7 @@ impl Endpoint {
               error,
               account_id,
               remote_account_id,
-              role,
-              work_status
+              role
             FROM endpoint
             WHERE endpoint_id = ?;
             ",
@@ -132,8 +131,7 @@ impl Endpoint {
               error,
               account_id,
               remote_account_id,
-              role,
-              work_status
+              role
             FROM endpoint
             WHERE account_id = ?;
             ",
@@ -157,18 +155,16 @@ impl Endpoint {
               error,
               account_id,
               remote_account_id,
-              role,
-              work_status
+              role
             )
-            VALUES (?,?,?,?,?,?,?,?)
+            VALUES (?,?,?,?,?,?,?)
             ON CONFLICT(account_id) DO UPDATE SET 
               host_address=excluded.host_address,
               status=excluded.status,
               error=excluded.error,
               account_id=excluded.account_id,
               remote_account_id=excluded.remote_account_id,
-              role=excluded.role,
-              work_status=excluded.work_status;
+              role=excluded.role;
             ",
         )
         .bind(self.id.0)
@@ -177,8 +173,7 @@ impl Endpoint {
         .bind(&self.error)
         .bind(Uuid::from(self.account))
         .bind(Uuid::from(self.remote_account))
-        .bind(self.kind.role().to_string())
-        .bind(self.kind.work_status().map(ToString::to_string))
+        .bind(self.role.to_string())
         .execute(tx.as_mut())
         .await?;
 
@@ -199,8 +194,7 @@ impl Endpoint {
               error,
               account_id,
               remote_account_id,
-              role,
-              work_status
+              role
             FROM endpoint;
             ",
         )
@@ -223,28 +217,6 @@ impl Endpoint {
         .await?;
 
         Ok(())
-    }
-
-    /// Return [`builder`] related information if this endpoint is a [`Role::Builder`]
-    pub fn builder(&self) -> Option<&builder::Extension> {
-        if let Kind::Builder(ext) = &self.kind {
-            Some(ext)
-        } else {
-            None
-        }
-    }
-
-    /// Returns true if this endpoint is an idle, operational builder
-    pub fn is_idle_builder(&self) -> bool {
-        matches!(self.status, Status::Operational)
-            && matches!(self.builder().map(|e| e.work_status), Some(builder::WorkStatus::Idle))
-    }
-
-    /// Set the work status of the builder endpoint
-    pub fn set_work_status(&mut self, new_status: builder::WorkStatus) {
-        if let Kind::Builder(builder::Extension { work_status }) = &mut self.kind {
-            *work_status = new_status;
-        }
     }
 }
 
@@ -317,88 +289,6 @@ pub enum Status {
     Unreachable,
 }
 
-/// Extension details related to the [`Role`] of the endpoint
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "role", content = "extension", rename_all = "kebab-case")]
-pub enum Kind {
-    /// Hub
-    Hub,
-    /// Repository Manager
-    RepositoryManager,
-    /// Builder
-    Builder(builder::Extension),
-}
-
-impl Kind {
-    /// [`Role`] defined by this endpoint
-    pub fn role(&self) -> Role {
-        match self {
-            Self::Hub => Role::Hub,
-            Self::RepositoryManager => Role::RepositoryManager,
-            Self::Builder(_) => Role::Builder,
-        }
-    }
-
-    /// Work status of a [`Role::Builder`] endpoint
-    pub fn work_status(&self) -> Option<&builder::WorkStatus> {
-        if let Self::Builder(ext) = self {
-            Some(&ext.work_status)
-        } else {
-            None
-        }
-    }
-}
-
-impl<'a> FromRow<'a, sqlx::sqlite::SqliteRow> for Kind {
-    fn from_row(row: &'a sqlx::sqlite::SqliteRow) -> Result<Self, sqlx::Error> {
-        #[derive(Debug, FromRow)]
-        struct Row {
-            #[sqlx(try_from = "&'a str")]
-            role: Role,
-
-            // Builder fields
-            work_status: Option<String>,
-        }
-
-        let row = Row::from_row(row)?;
-
-        match (row.role, row.work_status) {
-            (Role::Builder, Some(value)) => {
-                let work_status = value.parse().map_err(|e| sqlx::Error::Decode(Box::from(e)))?;
-                Ok(Kind::Builder(builder::Extension { work_status }))
-            }
-            (Role::Builder, _) => Err(sqlx::Error::Decode(Box::from(
-                "extension can't be null for builder endpoint",
-            ))),
-            (Role::Hub, _) => Ok(Kind::Hub),
-            (Role::RepositoryManager, _) => Ok(Kind::RepositoryManager),
-        }
-    }
-}
-
-pub mod builder {
-    //! Builder specific endpoint details
-    use serde::{Deserialize, Serialize};
-
-    /// Builder extension details
-    #[derive(Debug, Clone, Serialize, Deserialize)]
-    pub struct Extension {
-        /// Work status of the endpoint
-        pub work_status: WorkStatus,
-    }
-
-    /// Work status of the builder
-    #[derive(Debug, Clone, Copy, strum::Display, strum::EnumString, Serialize, Deserialize)]
-    #[serde(rename_all = "kebab-case")]
-    #[strum(serialize_all = "kebab-case")]
-    pub enum WorkStatus {
-        /// Builder is idle
-        Idle,
-        /// Builder is running
-        Running,
-    }
-}
-
 /// Endpoint role
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, strum::Display, strum::EnumString)]
 #[serde(rename_all = "kebab-case")]
@@ -453,15 +343,24 @@ pub(crate) fn create_token(
     let now = Utc::now();
     let expires_on = now + purpose.duration();
 
+    let permissions = match role {
+        Role::Builder => auth::Role::Builder,
+        Role::RepositoryManager => auth::Role::RepositoryManager,
+        Role::Hub => auth::Role::Hub,
+    }
+    .permissions();
+
     let token = Token::new(token::Payload {
         aud: role.service_name().to_string(),
         exp: expires_on.timestamp(),
         iat: now.timestamp(),
         iss: ourself.role.service_name().to_string(),
         sub: endpoint.to_string(),
+        jti: None,
         purpose,
         account_id: account.into(),
         account_type: account::Kind::Service,
+        permissions,
     });
     let account_token = token.sign(&ourself.key_pair)?;
 

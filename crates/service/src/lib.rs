@@ -11,7 +11,6 @@ pub use self::server::Server;
 pub use self::state::State;
 
 mod middleware;
-mod sync;
 mod task;
 
 pub mod account;

@@ -4,12 +4,8 @@ package summit;
 
 import "collectable.proto";
 import "options.proto";
+import "remote.proto";
 import "google/protobuf/empty.proto";
-
-message BuildRequest {
-  uint64 task_id = 1;
-  repeated collectable.Collectable collectables = 2;
-}
 
 message ImportRequest {
   uint64 task_id = 1;
@@ -19,21 +15,70 @@ message RetryRequest {
   uint64 task_id = 1;
 }
 
+message BuilderStreamIncoming {
+  oneof event {
+    BuilderStatus status = 1;
+    uint64 build_started = 2;
+    BuilderLog build_log = 3;
+    BuilderFinished build_succeeded = 4;
+    uint64 build_failed = 5;
+  }
+}
+
+message BuilderStreamOutgoing {
+  oneof event {
+    BuilderBuild build = 1;
+    BuilderUpload upload = 2;
+  }
+}
+
+message BuilderStatus {
+  // Current task being built
+  optional uint64 building = 1;
+}
+
+message BuilderBuild {
+  uint64 task_id = 1;
+  string uri = 2;
+  string commit_ref = 3;
+  string relative_path = 4;
+  string build_architecture = 5;
+  repeated remote.Remote remotes = 6;
+}
+
+message BuilderLog {
+  bytes chunk = 1;
+}
+
+message BuilderFinished {
+  uint64 task_id = 1;
+  repeated collectable.Collectable collectables = 2;
+}
+
+message BuilderUpload {
+  BuilderFinished build = 1;
+  string token = 2;
+  string uri = 3;
+}
+
 service SummitService {
-  rpc BuildSucceeded(BuildRequest) returns (google.protobuf.Empty) {
-    option (options.flags) = "ACCESS_TOKEN | SERVICE_ACCOUNT | NOT_EXPIRED";
-  }
-  rpc BuildFailed(BuildRequest) returns (google.protobuf.Empty) {
-    option (options.flags) = "ACCESS_TOKEN | SERVICE_ACCOUNT | NOT_EXPIRED";
-  }
   rpc ImportSucceeded(ImportRequest) returns (google.protobuf.Empty) {
     option (options.flags) = "ACCESS_TOKEN | SERVICE_ACCOUNT | NOT_EXPIRED";
+    option (options.perm) = "ReportImportStatus";
   }
   rpc ImportFailed(ImportRequest) returns (google.protobuf.Empty) {
     option (options.flags) = "ACCESS_TOKEN | SERVICE_ACCOUNT | NOT_EXPIRED";
+    option (options.perm) = "ReportImportStatus";
+  }
+
+  // Bidirectional stream between summit & builder
+  rpc Builder(stream BuilderStreamIncoming) returns (stream BuilderStreamOutgoing) {
+    option (options.flags) = "ACCESS_TOKEN | SERVICE_ACCOUNT | NOT_EXPIRED";
+    option (options.perm) = "ConnectBuilderStream";
   }
 
   rpc Retry(RetryRequest) returns (google.protobuf.Empty) {
-    option (options.flags) = "ACCESS_TOKEN | ADMIN_ACCOUNT | NOT_EXPIRED";
+    option (options.flags) = "ACCESS_TOKEN | NOT_EXPIRED";
+    option (options.perm) = "RetryTask";
   }
 }

@@ -22,9 +22,6 @@ pub struct Config {
     /// [`Uri`] this service's grpc is reachable from
     #[serde(with = "http_serde::uri")]
     pub grpc_address: Uri,
-    /// [`Uri`] this service's http is reachable from
-    #[serde(default, with = "http_serde::option::uri")]
-    pub http_address: Option<Uri>,
     /// Description of this service
     pub description: String,
     /// Admin details of this service

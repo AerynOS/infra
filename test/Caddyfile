@@ -1,18 +1,8 @@
 :80 {
-	handle_path /logs/* {
-		root * /summit/logs
-		file_server
-		try_files {path}.gz
-		header {
-			Content-Type text/plain
-			Content-Encoding gzip
-		}
-	}
 	handle_path /dev* {
 		root * /vessel/public
 		file_server browse
 	}
 	reverse_proxy summit:5000 {
-		header_down Location "^http:\/\/([^\/]*)(\/.*)$" "http://$1:5000$2"
 	}
 }

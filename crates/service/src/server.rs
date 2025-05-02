@@ -40,9 +40,12 @@ impl<'a> Server<'a> {
     /// Create a new [`Server`]
     pub fn new(role: Role, config: &'a Config, state: &'a State) -> Self {
         let http_router = axum::Router::new();
-        let grpc_router = tonic::service::Routes::default()
-            .add_service(endpoint::service(role, config, state))
-            .add_service(account::service(role, state));
+
+        let mut grpc_router = tonic::service::Routes::default().add_service(account::service(role, state));
+
+        if matches!(role, Role::Hub) {
+            grpc_router = grpc_router.add_service(endpoint::service(role, config, state));
+        }
 
         Self {
             http_router,
@@ -180,6 +183,9 @@ impl Server<'_> {
 
         if let Some(addr) = self.grpc_addr {
             let server = tonic::transport::Server::builder()
+                // https://grpc.io/docs/guides/keepalive/#keepalive-configuration-specification
+                .http2_keepalive_interval(Some(Duration::from_secs(60 * 60 * 2)))
+                .http2_keepalive_timeout(Some(Duration::from_secs(20)))
                 .layer(middleware::Log)
                 .layer(middleware::GrpcMethod)
                 .layer(self.extract_token)

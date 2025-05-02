@@ -1,5 +1,8 @@
 //! Shared service state
-use std::{io, path::PathBuf};
+use std::{
+    io,
+    path::{Path, PathBuf},
+};
 
 use thiserror::Error;
 use tokio::fs;
@@ -9,8 +12,6 @@ use crate::{
     Database,
     crypto::{self, KeyPair},
     database,
-    endpoint::{self, enrollment},
-    sync::SharedMap,
 };
 
 /// Service state
@@ -28,17 +29,13 @@ pub struct State {
     pub service_db: Database,
     /// Key pair used by the service
     pub key_pair: KeyPair,
-    /// Pending enrollment requests that are awaiting confirmation
-    ///
-    /// Only applicable for hub service
-    pub(crate) pending_sent: SharedMap<endpoint::Id, enrollment::Sent>,
 }
 
 impl State {
     /// Load state from the provided path. If no keypair and/or database exist, they will be created.
     #[tracing::instrument(name = "load_state", skip_all)]
-    pub async fn load(root: impl Into<PathBuf>) -> Result<Self, Error> {
-        let root = root.into();
+    pub async fn load(root: impl AsRef<Path>) -> Result<Self, Error> {
+        let root = fs::canonicalize(root).await.map_err(Error::CanonicalizeRoot)?;
 
         let state_dir = root.join("state");
         let cache_dir = state_dir.join("cache");
@@ -78,7 +75,6 @@ impl State {
             db_dir,
             service_db,
             key_pair,
-            pending_sent: Default::default(),
         })
     }
 
@@ -92,6 +88,9 @@ impl State {
 /// A state error
 #[derive(Debug, Error)]
 pub enum Error {
+    /// Canonicalize root directory
+    #[error("canonicalize root directory")]
+    CanonicalizeRoot(#[source] io::Error),
     /// Error creating db directory
     #[error("create db directory")]
     CreateDbDir(#[source] io::Error),

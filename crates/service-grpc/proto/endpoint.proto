@@ -5,26 +5,6 @@ package endpoint;
 import "google/protobuf/empty.proto";
 import "options.proto";
 
-message Id {
-  string id = 1;
-}
-
-message Endpoint {
-  Id id = 1;
-  string host_address = 2;
-  string public_key = 3;
-  Status status = 4;
-}
-
-enum Status {
-  STATUS_UNKNOWN = 0;
-  STATUS_AWAITING_ACCEPTANCE = 1;
-  STATUS_FAILED = 2;
-  STATUS_OPERATIONAL = 3;
-  STATUS_FORBIDDEN = 4;
-  STATUS_UNREACHABLE = 5;
-}
-
 message Issuer {
   string public_key = 1;
   string url = 2;
@@ -47,19 +27,8 @@ message EnrollmentRequest {
   Role role = 3;
 }
 
-message PendingResponse {
-  repeated Endpoint endpoints = 1;
-}
-
 service EndpointService {
-  // Enrollment functions
-  rpc Enroll(EnrollmentRequest) returns (google.protobuf.Empty) {
+  rpc Enroll(EnrollmentRequest) returns (EnrollmentRequest) {
     option (options.flags) = "NO_AUTH";
-  }
-  rpc Accept(EnrollmentRequest) returns (google.protobuf.Empty) {
-    option (options.flags) = "BEARER_TOKEN | SERVICE_ACCOUNT | NOT_EXPIRED";
-  }
-  rpc Decline(google.protobuf.Empty) returns (google.protobuf.Empty) {
-    option (options.flags) = "BEARER_TOKEN | SERVICE_ACCOUNT | NOT_EXPIRED";
   }
 }

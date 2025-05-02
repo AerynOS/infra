@@ -8,10 +8,10 @@ members = [
 edition = "2024"
 
 [workspace.dependencies]
-dag = { git = "https://github.com/serpent-os/tools.git" }
-moss = { git = "https://github.com/serpent-os/tools.git" }
-stone = { git = "https://github.com/serpent-os/tools.git" }
-stone_recipe = { git = "https://github.com/serpent-os/tools.git" }
+dag = { git = "https://github.com/AerynOS/os-tools.git" }
+moss = { git = "https://github.com/AerynOS/os-tools.git" }
+stone = { git = "https://github.com/AerynOS/os-tools.git" }
+stone_recipe = { git = "https://github.com/AerynOS/os-tools.git" }
 
 async-trait = "0.1.88"
 axum = "0.8.0"
@@ -61,3 +61,12 @@ tower-http = { version = "0.6.2", features = ["fs"] }
 tracing-futures = { version = "0.2.5", features = ["futures-03"] }
 tracing-subscriber = { version = "0.3.18", features = ["env-filter", "json"] }
 uuid = { version = "1.6.1", features = ["v4", "serde"] }
+
+# This was recommended for static musl builds to work, but it doesn't on a f41 install...
+# openssl = { version = "*", features = ["vendored"] }
+
+# intended to (eventually) be used with fully static, drop-in deployment musl builds
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3
