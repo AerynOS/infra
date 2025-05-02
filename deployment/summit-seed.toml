@@ -24,3 +24,4 @@ priority = 10
 name = "recipes"
 summary = "AerynOS package recipes"
 uri = "https://github.com/AerynOS/recipes.git"
+#branch = "<branch-name>"
