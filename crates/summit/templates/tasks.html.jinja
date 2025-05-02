@@ -27,26 +27,26 @@
                 {% set profile = projects | profile(task.profile_id) %}
 
                 <li class="tasks__list__item">
-                    <code style="display:none">{{task}}</code>
+                    <code style="display:none">{{ task }}</code>
 
-                    <div class="tasks__list__item__id"><span>#{{task.id}}</span></div>
+                    <div class="tasks__list__item__id"><span>#{{ task.id }}</span></div>
                     <div class="tasks__list__item__detail">
-                        <a href="/logs/{{task.id}}/build.log">{{task.build_id}}</a>
-                        <div>{{task.description}}</div>
+                        <a href="/logs/{{ task.id }}/build.log">{{ task.build_id }}</a>
+                        <div>{{ task.description }}</div>
                     </div>
                     <div class="tasks__list__item__timing">
                         {% if task.ended %}
-                            <span>Ended @ {{task.ended}}</span>
-                            <span>92h 43m 49s on {{task.allocated_builder}}</span>
+                            <span>Ended @ {{ task.ended }}</span>
+                            <span>92h 43m 49s on {{ task.allocated_builder }}</span>
                         {% else %}
-                            <span>Started @ {{task.started}}</span>
-                            <span>92h 43m 49s on {{task.allocated_builder}}</span>
+                            <span>Started @ {{ task.started}}</span>
+                            <span>92h 43m 49s on {{ task.allocated_builder }}</span>
                         {% endif %}
                     </div>
                     <div class="tasks__list__item__arch">
-                        <span>{{profile.arch}}</span>
+                        <span>{{ profile.arch }}</span>
                     </div>
-                    <div class="tasks__list__item__status"><span class="badge badge--{{task.status}}">{{task.status}}</span></div>
+                    <div class="tasks__list__item__status"><span class="badge badge--{{ task.status }}">{{ task.status }}</span></div>
                 </li>
             {% endfor %}
         </ul>
