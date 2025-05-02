@@ -2,7 +2,7 @@
 
 # Crude AerynOS Rust service deployment script
 
-create_service_user () {
+create-service-user () {
   local _svc="$1"
 
   # create service users and home dirs
@@ -12,7 +12,7 @@ create_service_user () {
   echo "Now Relog to ensure that your user is part of the ${_svc}-rs group."
 }
 
-deploy_service () {
+deploy-service () {
   local _svc="$1"
   # necessary for setgid on dirs being inherited by newly created files
   umask 0002  
@@ -33,16 +33,24 @@ deploy_service () {
   echo "Now set up config.toml files and private/public keys."
 }
 
+deploy-avalanche-service ()
+{
+    echo -e "\nAllow avalanche-rs user to call /usr/bin/boulder w/no password:"
+    echo -e "avalanche-rs ALL = NOPASSWD: /usr/bin/nice, /usr/bin/boulder\n" | sudo tee /etc/sudoers.d/avalanche-rs-boulder
+}
+
 help() {
 echo -e "
   Deployment procedure:
   - source deploy-rust-services.bash
-  - create_service_user <the service> # (one of avalanche|summit|vessel)
+  - create-service-user <the service> # (one of avalanche|summit|vessel)
   - relog to update service group membership
   - source deploy-rust-services.bash
-  - deploy_service <the service>
+  - deploy-service <the service>
   - copy private key to /srv/<the service>-rs/state/.privkey
   - edit and copy service config.toml to /srv/<the service>-rs/
+  - If you are deploying avalanche, run deploy-avalanche-service to enable
+    sudo execution of 'nice -n20 boulder' with no passwd for avalanche-rs
 "
 }
 

@@ -11,8 +11,9 @@ WorkingDirectory=/srv/vessel-rs/vessel
 # ensure group-writeable files are created
 UMask=0002
 # Define ports explicitly
-#ExecStart=/srv/vessel-rs/vessel/vessel.app --import /srv/vessel-rs/import --grpc 5002 0.0.0.0
 ExecStart=/srv/vessel-rs/vessel/vessel.app --grpc 5002 0.0.0.0
+# Would be nice to have the import be a CLI action instead..
+#ExecStart=/srv/vessel-rs/vessel/vessel.app --import ../import-old-nano/ --grpc 5002 0.0.0.0
 StandardOutput=journal
 User=vessel-rs
 Group=vessel-rs

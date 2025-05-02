@@ -7,7 +7,7 @@ WantedBy=multi-user.target
 
 [Service]
 Type=simple
-WorkingDirectory=/srv/avalanche-rs/avalanche
+WorkingDirectory=/srv/avalanche-rs/avalanche/
 # ensure group-writeable files are created
 UMask=0002
 #ExecStart=/usr/bin/script -e -c '/srv/avalanche-rs/avalanche.bin' /dev/null
