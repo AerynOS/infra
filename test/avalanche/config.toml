@@ -9,7 +9,7 @@ public_key = "gjbJc9Tyuj6nttjQBWV0E813d3ZnH2hZ9EtBEl6Tdn4"
 role = "hub"
 
 [tracing]
-level_filter = "info,avalanche=debug,service=debug"
+level_filter = "info,avalanche=debug,service=trace,service_core=trace"
 # compact or json
 format = "compact"
 

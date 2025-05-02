@@ -9,7 +9,7 @@ downstreams = [
 ]
 
 [tracing]
-level_filter = "info,summit=debug,service=debug"
+level_filter = "info,summit=debug,service=trace,service_core=trace"
 # compact or json
 format = "compact"
 
