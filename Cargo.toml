@@ -57,7 +57,7 @@ sqlx = { version = "=0.8.2", features = ["sqlite", "chrono", "uuid", "runtime-to
 strum = { version = "0.26.3", features = ["derive"] }
 tokio = { version = "1.35.1", features = ["full"] }
 tower = { version = "0.5.1", features = ["util"] }
-tower-http = { version = "0.6.2", features = ["fs"] }
+tower-http = { version = "0.6.2", features = ["fs", "set-header"] }
 tracing-futures = { version = "0.2.5", features = ["futures-03"] }
 tracing-subscriber = { version = "0.3.18", features = ["env-filter", "json"] }
 uuid = { version = "1.6.1", features = ["v4", "serde"] }

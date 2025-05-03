@@ -5,7 +5,7 @@ use axum::routing::get;
 use clap::Parser;
 use color_eyre::eyre::Context;
 use service::{Server, State, endpoint::Role};
-use tower_http::services::ServeDir;
+use tower_http::{services::ServeDir, set_header::SetResponseHeader};
 
 pub use self::builder::Builder;
 pub use self::manager::Manager;
@@ -62,7 +62,11 @@ async fn main() -> Result<()> {
     let (worker_sender, worker_task) = worker::run(manager).await?;
 
     let serve_static = ServeDir::new(static_dir.as_deref().unwrap_or(Path::new("static")));
-    let serve_logs = ServeDir::new(state.state_dir.join("logs")).precompressed_gzip();
+    let serve_logs = SetResponseHeader::overriding(
+        ServeDir::new(state.state_dir.join("logs")).precompressed_gzip(),
+        http::header::CONTENT_TYPE,
+        const { http::HeaderValue::from_static("text/plain; charset=utf-8") },
+    );
 
     Server::new(Role::Hub, &config, &state)
         .with_http((host, http_port))
