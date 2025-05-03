@@ -1,4 +1,25 @@
 {% extends "skel.html.jinja" %}
 {% block body %}
-<p>Hello from Summit!</p>
+    <div class="overview">
+        <div class="overview-info">
+            <h3>Getting started</h3>
+            <div class="overview-info__content">
+                <p>This is the dashboard for the <a href="https://aerynos.com">AerynOS</a> build infrastructure. In order to contribute, visit the <a href="https://aerynos.dev">documentation</a> and open a PR to the <a href="https://github.com/AerynOS/recipes">recipes</a> repository on GitHub.</p>
+                <h4>Current status</h3>
+                <p>This infrastructure will be replaced with AerynOS-specific Rust-tooling and is effectively a stop-gap until the requirements for the new <code>stone format</code> are fully understood.</p>
+            </div>
+        </div>
+        <div class="overview-recent">
+            <h3>Recent Events</h3>
+            <ul class="overview-recent__list">
+                {% for task in tasks %}
+                    <li class="overview-recent__list__item overview-recent__list__item--{{ task.status }}">
+                        <h4>Building #{{ task.id}} {{task.source_path}} on {{ task.allocated_builder }}</h4>
+                        <p>{{ task.description }}</p>
+                        <div>{{ task.started }}</div>
+                    </li>
+                {% endfor %}
+            </ul>
+        </div>
+    </div>
 {% endblock %}
