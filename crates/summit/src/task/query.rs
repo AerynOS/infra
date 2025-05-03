@@ -203,6 +203,10 @@ pub async fn query(conn: &mut SqliteConnection, params: Params) -> Result<Query>
             started: row.started,
             updated: row.updated,
             ended: row.ended,
+            duration: match row.ended {
+                Some(end) => Some((end - row.started).num_seconds()),
+                None => None,
+            },
             // Fetched next
             blocked_by: vec![],
         })
