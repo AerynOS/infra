@@ -37,10 +37,10 @@
                     <div class="tasks__list__item__timing">
                         {% if task.ended %}
                             <span>Ended @ {{ task.ended }}</span>
-                            <span>92h 43m 49s on {{ task.allocated_builder }}</span>
+                            <span>{{ task.duration | format_duration }} on {{ task.allocated_builder }}</span>
                         {% else %}
-                            <span>Started @ {{ task.started}}</span>
-                            <span>92h 43m 49s on {{ task.allocated_builder }}</span>
+                            <span>Started @ {{ task.started }}</span>
+                            <span>on {{ task.allocated_builder }}</span>
                         {% endif %}
                     </div>
                     <div class="tasks__list__item__arch">

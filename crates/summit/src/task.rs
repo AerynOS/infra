@@ -45,6 +45,7 @@ pub struct Task {
     pub started: DateTime<Utc>,
     pub updated: DateTime<Utc>,
     pub ended: Option<DateTime<Utc>>,
+    pub duration: Option<i64>,
 }
 
 #[derive(
