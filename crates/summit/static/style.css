@@ -13,6 +13,18 @@ body {
     --light-border: 1px solid var(--light-border-color);
     --muted-color: #72388c;
     --link-color: #a04ec6;
+    --status-completed-color: #2fb344;
+    --status-completed-bg-color: rgba(47, 179, 68, 0.1);
+    --status-building-color: orange;
+    --status-building-bg-color: rgba(255, 165, 0, 0.1);
+    --status-publishing-color: #ef01e0;
+    --status-publishing-bg-color: rgba(239, 1, 224, 0.1);
+    --status-failed-color: #d63939;
+    --status-failed-bg-color: rgba(214, 57, 57, 0.1);
+    --status-blocked-color: #ca8686;
+    --status-blocked-bg-color: rgba(202, 134, 134, 0.1);
+    --status-new-color: #009fff;
+    --status-new-bg-color: rgba(4, 146, 234, 0.1);
 }
 
 .container {
@@ -53,10 +65,106 @@ header h1 {
     text-decoration: none;
 }
 
-h2 {
+.overview {
+    margin: 24px;
+}
+
+.overview-info {
+    flex: 1;
+}
+
+.overview-info h3 {
+    margin-top: 0;
+}
+
+.overview-info__content {
+    border: 1px solid var(--light-border-color);
+    border-radius: 3px;
+    padding: 24px;
+    background-color: var(--light-background-color);
+    line-height: 1.5em;
+}
+
+.overview-info__content h4 {
+    margin-top: 0;
+}
+
+.overview-info__content p:first-child {
+    margin-top: 0;
+}
+
+.overview-info__content p:last-child {
+    margin-bottom: 0;
+}
+
+.overview-info__content a {
+    color: var(--link-color);
+}
+
+.overview-recent {
+    flex: 1;
+}
+
+.overview-recent__list {
     margin: 0;
-    padding: 24px 0;
+    padding: 0;
+    list-style: none;
+}
+
+.overview-recent__list__item {
+    margin: 0;
+    border: 1px solid var(--light-border-color);
+    border-radius: 3px;
+    padding: 24px;
+    background-color: var(--light-background-color);
     font-size: 1em;
+    color: var(--muted-color);
+    position: relative;
+    margin-bottom: 24px;
+}
+
+.overview-recent__list__item::before {
+    width: 12px;
+    height: 12px;
+    background-color: gray;
+    content: " ";
+    position: absolute;
+    bottom: 24px;
+    right: 24px;
+    border-radius: 12px;
+}
+
+.overview-recent__list__item.overview-recent__list__item--completed::before {
+    background-color: var(--status-completed-color);
+}
+
+.overview-recent__list__item.overview-recent__list__item--building ::before {
+    background-color: var(--status-building-color);
+}
+
+.overview-recent__list__item.overview-recent__list__item--publishing::before {
+    background-color: var(--status-publishing-color);
+}
+
+.overview-recent__list__item.overview-recent__list__item--failed::before {
+    background-color: var(--status-failed-color);
+}
+
+.overview-recent__list__item.overview-recent__list__item--blocked::before {
+    background-color: var(--status-blocked-color);
+}
+
+.overview-recent__list__item.overview-recent__list__item--new::before {
+    background-color: var(--status-new-color);
+}
+
+.overview-recent__list__item:last-child {
+    margin-bottom: 0;
+}
+
+.overview-recent__list__item h4 {
+    margin: 0;
+    color: white;
 }
 
 .tasks-total-filter {
@@ -235,33 +343,33 @@ h2 {
 }
 
 .badge--completed {
-    color: #2fb344;
-    background-color: rgba(47, 179, 68, 0.1);
+    color: var(--status-completed-color);
+    background-color: var(--status-completed-bg-color);
 }
 
 .badge--building {
-    color: orange;
-    background-color: rgba(255, 165, 0, 0.1);
+    color: var(--status-building-color);
+    background-color: var(--status-building-bg-color);
 }
 
 .badge--publishing {
-    color: #ef01e0;
-    background-color: rgba(239, 1, 224, 0.1);
+    color: var(--status-publishing-color);
+    background-color: var(--status-publishing-bg-color);
 }
 
 .badge--failed {
-    color: #d63939;
-    background-color: rgba(214, 57, 57, 0.1);
+    color: var(--status-failed-color);
+    background-color: var(--status-failed-bg-color);
 }
 
 .badge--blocked {
-    color: #ca8686;
-    background-color: rgba(202, 134, 134, 0.1);
+    color: var(--status-blocked-color);
+    background-color: var(--status-blocked-bg-color);
 }
 
 .badge--new {
-    color: #009fff;
-    background-color: rgba(4, 146, 234, 0.1);
+    color: var(--status-new-color);
+    background-color: var(--status-new-bg-color);
 }
 
 .pagination-wrap {
@@ -326,6 +434,16 @@ h2 {
 }
 
 @media (min-width: 800px) {
+    .overview {
+        display: flex;
+        gap: 24px;
+        margin: 24px 0 0 0;
+    }
+
+    .overview-recent h3 {
+        margin-top: 0;
+    }
+
     .tasks-total-filter {
         flex-direction: row;
     }

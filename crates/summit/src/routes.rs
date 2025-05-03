@@ -12,8 +12,17 @@ use strum::IntoEnumIterator;
 
 use crate::{project, task, templates::render_html};
 
-pub async fn index() -> impl IntoResponse {
-    render_html("index.html.jinja", ())
+pub async fn index(State(state): State<service::State>) -> Result<impl IntoResponse, Error> {
+    let mut conn = state.service_db.acquire().await.context("acquire db conn")?;
+    let params = task::query::Params::default().offset(0).limit(10);
+    let task_query = task::query(&mut conn, params).await.context("query tasks")?;
+
+    Ok(render_html(
+        "index.html.jinja",
+        minijinja::context! {
+            tasks => task_query.tasks,
+        },
+    ))
 }
 
 #[derive(Debug, Deserialize)]
