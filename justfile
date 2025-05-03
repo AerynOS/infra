@@ -33,5 +33,5 @@ down *ARGS:
 	docker compose down -v {{ARGS}}
 
 # Quickly view summit front-end changes (DX feature)
-summit-dev:
-	cargo run -p summit --no-default-features --features templates-autoreload -- -c ./test/summit/config.toml --root $(mktemp -d) --static ./crates/summit/static
+summit-dev *ARGS:
+	cargo run -p summit --no-default-features --features templates-autoreload -- -c ./test/summit/config.toml --root $(mktemp -d) --static ./crates/summit/static {{ARGS}}
