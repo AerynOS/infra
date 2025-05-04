@@ -4,6 +4,7 @@
 
 create-service-user () {
   local _svc="$1"
+  [[ ! -n "${_svc}" || "${_svc}" = "" ]] && return 1
 
   # create service users and home dirs
   sudo useradd --create-home --home-dir /srv/${_svc}-rs --user-group --system ${_svc}-rs
@@ -14,6 +15,7 @@ create-service-user () {
 
 deploy-service () {
   local _svc="$1"
+  [[ ! -n "${_svc}" || "${_svc}" = "" ]] && return 1
   # necessary for setgid on dirs being inherited by newly created files
   umask 0002  
   # set correct permissions for service home dir
@@ -21,7 +23,7 @@ deploy-service () {
   # set up state dir to be ready for the .privkey private key in bytes format
   mkdir -pv /srv/${_svc}-rs/${_svc}/state
   # copy binaries to service home dirs
-  cp -v target/release/${_svc} /srv/${_svc}-rs/${_svc}/${_svc}.app
+  cp -v ../target/release/${_svc} /srv/${_svc}-rs/${_svc}/${_svc}.app
   chmod -c a+x /srv/${_svc}-rs/${_svc}/${_svc}.app
   # reset permissions
   sudo chown -Rc ${_svc}-rs:${_svc}-rs /srv/${_svc}-rs
@@ -40,6 +42,7 @@ deploy-avalanche-service ()
 
 reset-service-state () {
   local _svc="$1"
+  [[ ! -n "${_svc}" || "${_svc}" = "" ]] && return 1
   local _statedir="/srv/${_svc}-rs/${_svc}/state/"
   [[ -d ${_statedir} ]] && pushd ${_statedir} && rm -rf * && ls -la && popd
   echo "${_svc} state dir reset. NB: The service private key was not deleted."
@@ -48,15 +51,17 @@ reset-service-state () {
 help() {
 echo -e "
   Deployment procedure:
-  - source deploy-rust-services.bash
+  - source source-me-todeploy-rust-services.bash
   - create-service-user <the service> # (one of avalanche|summit|vessel)
   - relog to update service group membership
-  - source deploy-rust-services.bash
+  - source source-me-to-deploy-rust-services.bash
   - deploy-service <the service>
   - copy private key to /srv/<the service>-rs/state/.privkey
   - edit and copy service config.toml to /srv/<the service>-rs/
   - If you are deploying avalanche, run deploy-avalanche-service to enable
     sudo execution of 'nice -n20 boulder' with no passwd for avalanche-rs
+  - To reset the state of a deployed service, run 'reset-service-state <the service>'
+    (one of avalanche|summit|vessel)
 "
 }
 
