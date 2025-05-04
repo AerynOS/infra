@@ -18,8 +18,8 @@ deploy-service () {
   [[ ! -n "${_svc}" || "${_svc}" = "" ]] && return 1
   # necessary for setgid on dirs being inherited by newly created files
   umask 0002  
-  # set correct permissions for service home dir
-  sudo chmod -Rc g+rwX /srv/${_svc}-rs
+  # set correct permissions for service home dir (u+x for caddy to be able to serve files)
+  sudo chmod -Rc u+x,g+rwX /srv/${_svc}-rs
   # set up state dir to be ready for the .privkey private key in bytes format
   mkdir -pv /srv/${_svc}-rs/${_svc}/state
   # copy binaries to service home dirs
@@ -50,8 +50,8 @@ reset-service-state () {
 
 help() {
 echo -e "
-  Deployment procedure:
-  - source source-me-todeploy-rust-services.bash
+  Crude deployment procedure:
+  - source source-me-to-deploy-rust-services.bash
   - create-service-user <the service> # (one of avalanche|summit|vessel)
   - relog to update service group membership
   - source source-me-to-deploy-rust-services.bash
