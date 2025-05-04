@@ -56,12 +56,15 @@ echo -e "
   - relog to update service group membership
   - source source-me-to-deploy-rust-services.bash
   - deploy-service <the service>
-  - copy private key to /srv/<the service>-rs/state/.privkey
-  - edit and copy service config.toml to /srv/<the service>-rs/
+  - copy private key to /srv/<the service>-rs/<the service>/state/.privkey
+  - edit and copy service config.toml to /srv/<the service>-rs/<the service/
+    - also copy seed.toml to this dir for summit
   - If you are deploying avalanche, run deploy-avalanche-service to enable
     sudo execution of 'nice -n20 boulder' with no passwd for avalanche-rs
   - To reset the state of a deployed service, run 'reset-service-state <the service>'
     (one of avalanche|summit|vessel)
+  - Remember to create an admin.pem private key, and use its public key for the
+    public_key field in the [admin] section for summit-rs.
 "
 }
 
