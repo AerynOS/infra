@@ -25,7 +25,7 @@ impl Manager {
         let span = Span::current();
 
         // Moss DB implementations are blocking
-        let (state, projects, profile_dbs, repository_dbs) = spawn_blocking(move || {
+        let (state, mut projects, profile_dbs, repository_dbs) = spawn_blocking(move || {
             let _enter = span.enter();
 
             let profile_dbs = projects
@@ -65,9 +65,9 @@ impl Manager {
 
         let mut conn = manager.acquire().await.context("acquire db conn")?;
 
-        for project in &projects {
+        for project in &mut projects {
             // Refresh all profiles
-            for profile in &project.profiles {
+            for profile in &mut project.profiles {
                 let db = manager.profile_db(&profile.id).cloned()?;
 
                 let _ = profile::refresh(&manager.state, profile, db)
@@ -168,7 +168,7 @@ impl Manager {
             .await
             .context("set task as import failed")?;
 
-        let projects = project::list(tx.as_mut()).await.context("list projects")?;
+        let mut projects = project::list(tx.as_mut()).await.context("list projects")?;
 
         let task = task::query(tx.as_mut(), task::query::Params::default().id(task_id))
             .await
@@ -186,8 +186,8 @@ impl Manager {
         tx.commit().await.context("commit db tx")?;
 
         let profile = projects
-            .iter()
-            .find_map(|p| p.profiles.iter().find(|p| p.id == task.profile_id))
+            .iter_mut()
+            .find_map(|p| p.profiles.iter_mut().find(|p| p.id == task.profile_id))
             .ok_or_eyre("missing profile")?;
         let profile_db = self
             .profile_dbs

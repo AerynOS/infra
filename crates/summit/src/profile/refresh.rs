@@ -16,12 +16,20 @@ use tokio::{
 };
 use tracing::{Span, info};
 
-use super::Profile;
+use super::{Profile, Status, set_status};
 
 #[tracing::instrument(name = "refresh_profile", skip_all, fields(profile = profile.name))]
-pub async fn refresh(state: &State, profile: &Profile, db: meta::Database) -> Result<()> {
+pub async fn refresh(state: &State, profile: &mut Profile, db: meta::Database) -> Result<()> {
     let profile_dir = state.cache_dir.join("profile").join(profile.id.to_string());
     let index_path = profile_dir.join("index");
+
+    set_status(
+        &mut *state.service_db.acquire().await.context("aquire db conn")?,
+        profile,
+        Status::Refreshing,
+    )
+    .await
+    .context("set profile status")?;
 
     if !fs::try_exists(&profile_dir).await.unwrap_or_default() {
         fs::create_dir_all(&profile_dir)
@@ -37,6 +45,14 @@ pub async fn refresh(state: &State, profile: &Profile, db: meta::Database) -> Re
         .await
         .context("join handle")?
         .context("update index db")?;
+
+    set_status(
+        &mut *state.service_db.acquire().await.context("aquire db conn")?,
+        profile,
+        Status::Indexed,
+    )
+    .await
+    .context("set profile status")?;
 
     info!("Profile refreshed");
 

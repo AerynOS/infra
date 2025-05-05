@@ -198,7 +198,7 @@ impl Builder {
 
                 // Reject tasks that somehow already failed
                 if matches!(task.status, task::Status::Failed) {
-                    error!("Blocking inclusion of previously failed build");
+                    error!(task = %task_id, "Blocking inclusion of previously failed build");
                     return Ok(None);
                 }
 
@@ -244,12 +244,16 @@ impl Builder {
                             .await
                             .context("send builder stream message")?;
 
-                        info!("Upload token sent to builder");
+                        info!(task = %task_id, "Upload token sent to builder");
 
                         (task::Status::Publishing, false)
                     }
                     Err(error) => {
-                        error!(error = error::chain(&*error), "Request failed to get upload token");
+                        error!(
+                            error = error::chain(&*error),
+                            task = %task_id,
+                            "Request failed to get upload token"
+                        );
 
                         (task::Status::Failed, true)
                     }
@@ -287,7 +291,7 @@ impl Builder {
 
                 tx.commit().await.context("commit tx")?;
 
-                info!("Build marked as failed");
+                info!(task = %task_id, "Build marked as failed");
 
                 return Ok(Some(Event::BuildFailed { task_id }));
             }

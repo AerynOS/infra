@@ -11,7 +11,7 @@ use service::endpoint;
 use sqlx::{SqliteConnection, prelude::FromRow};
 use strum::IntoEnumIterator;
 use tokio::task::spawn_blocking;
-use tracing::{debug, warn};
+use tracing::{Span, debug, warn};
 use uuid::Uuid;
 
 use crate::{Manager, Project, Repository, profile, project, repository, task};
@@ -91,7 +91,7 @@ pub struct Queued {
     pub dependencies: Vec<task::Id>,
 }
 
-#[tracing::instrument(name = "create_missing_tasks", skip_all)]
+#[tracing::instrument(name = "create_missing_tasks", skip_all, fields(repository = %repo.name, profile))]
 pub async fn create_missing(
     conn: &mut SqliteConnection,
     manager: &Manager,
@@ -99,7 +99,19 @@ pub async fn create_missing(
     repo: &Repository,
     repo_db: &meta::Database,
 ) -> Result<()> {
+    let span = Span::current();
+
     for profile in &project.profiles {
+        span.record("profile", &profile.name);
+
+        if !matches!(profile.status, profile::Status::Indexed) {
+            warn!(
+                status = %profile.status,
+                "Profile not fully indexed, skipping task creation"
+            );
+            continue;
+        }
+
         let profile_db = manager.profile_db(&profile.id).context("missing profile db")?;
 
         let packages = spawn_blocking({

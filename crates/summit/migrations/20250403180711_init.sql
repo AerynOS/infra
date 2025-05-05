@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS profile (
     name TEXT NOT NULL,
     arch TEXT NOT NULL,
     index_uri TEXT NOT NULL,
+    status TEXT NOT NULL,
     project_id INT NOT NULL,
     UNIQUE(project_id, name),
     UNIQUE(project_id, index_uri),

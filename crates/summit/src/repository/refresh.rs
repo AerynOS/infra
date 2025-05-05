@@ -8,7 +8,7 @@ use tracing::{debug, info, warn};
 
 use super::{Repository, Status, set_commit_ref, set_status};
 
-#[tracing::instrument(name = "refresh_repository", skip_all)]
+#[tracing::instrument(name = "refresh_repository", skip_all, fields(repository = %repo.name))]
 pub async fn refresh(conn: &mut SqliteConnection, state: &State, mut repo: Repository) -> Result<(Repository, bool)> {
     debug!("Refreshing repository");
 
@@ -23,11 +23,13 @@ pub async fn refresh(conn: &mut SqliteConnection, state: &State, mut repo: Repos
     };
 
     if Some(&current_ref) != repo.commit_ref.as_ref() {
+        let old_ref = repo.commit_ref.clone();
+
         set_commit_ref(&mut *conn, &mut repo, &current_ref)
             .await
             .context("set commit ref")?;
 
-        info!(old_ref = repo.commit_ref, new_ref = current_ref, "Repository updated");
+        info!(old_ref, new_ref = current_ref, "Repository updated");
 
         Ok((repo, true))
     } else {

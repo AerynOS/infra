@@ -10,7 +10,7 @@ index_uri = "http://caddy/dev/volatile/x86_64/stone.index"
 
 [[project.profile.remote]]
 name = "volatile"
-uri = "https://dev.aerynos.dev/volatile/x86_64/stone.index"
+uri = "https://packages.aerynos.com/volatile/x86_64/stone.index"
 priority = 10
 
 [[project.repository]]

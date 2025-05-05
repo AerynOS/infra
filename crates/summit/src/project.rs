@@ -70,6 +70,8 @@ pub async fn list(conn: &mut SqliteConnection) -> Result<Vec<Project>, sqlx::Err
         arch: String,
         #[sqlx(try_from = "String")]
         index_uri: Uri,
+        #[sqlx(try_from = "&'a str")]
+        status: profile::Status,
         #[sqlx(try_from = "i64")]
         project_id: Id,
     }
@@ -134,6 +136,7 @@ pub async fn list(conn: &mut SqliteConnection) -> Result<Vec<Project>, sqlx::Err
           name,
           arch,
           index_uri,
+          status,
           project_id
         FROM
           profile;
@@ -148,6 +151,7 @@ pub async fn list(conn: &mut SqliteConnection) -> Result<Vec<Project>, sqlx::Err
                 name: row.name,
                 arch: row.arch,
                 index_uri: row.index_uri,
+                status: row.status,
                 remotes: vec![],
             });
         }

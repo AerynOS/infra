@@ -9,7 +9,7 @@ use tracing::{info, trace};
 
 use super::{Repository, Status, set_description, set_status};
 
-#[tracing::instrument(name = "reindex_repository", skip_all, fields(commit_ref = repo.commit_ref))]
+#[tracing::instrument(name = "reindex_repository", skip_all, fields(repository = %repo.name, commit_ref = repo.commit_ref))]
 pub async fn reindex(
     conn: &mut SqliteConnection,
     state: &State,
