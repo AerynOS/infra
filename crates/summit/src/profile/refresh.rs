@@ -24,7 +24,7 @@ pub async fn refresh(state: &State, profile: &mut Profile, db: meta::Database) -
     let index_path = profile_dir.join("index");
 
     set_status(
-        &mut *state.service_db.acquire().await.context("aquire db conn")?,
+        &mut *state.service_db.acquire().await.context("acquire db conn")?,
         profile,
         Status::Refreshing,
     )
@@ -47,7 +47,7 @@ pub async fn refresh(state: &State, profile: &mut Profile, db: meta::Database) -
         .context("update index db")?;
 
     set_status(
-        &mut *state.service_db.acquire().await.context("aquire db conn")?,
+        &mut *state.service_db.acquire().await.context("acquire db conn")?,
         profile,
         Status::Indexed,
     )
