@@ -32,12 +32,12 @@ async fn main() -> Result<()> {
 
     let worker_state = worker::State::new(&state).await.context("build worker state")?;
 
-    worker::reindex(&worker_state).await.context("reindex")?;
-
     if let Some(directory) = import {
         worker::import_directory(&worker_state, directory)
             .await
             .context("import")?;
+    } else {
+        worker::reindex(&worker_state).await.context("reindex")?;
     }
 
     let (worker_sender, worker_task) = worker::run(worker_state).await?;
