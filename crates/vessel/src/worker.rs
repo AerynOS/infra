@@ -342,17 +342,24 @@ async fn reindex(state: &State) -> Result<()> {
             span.in_scope(|| {
                 use std::fs::{self, File};
 
+                let temp_dir = state.state_dir.join("work/volatile/x86_64");
+                let temp_path = temp_dir.join("stone.index");
+
                 // TODO: Replace w/ configurable index path
                 let dir = state.state_dir.join("public/volatile/x86_64");
                 let path = dir.join("stone.index");
+
+                if !temp_dir.exists() {
+                    fs::create_dir_all(&temp_dir).context("create volatile directory")?;
+                }
 
                 if !dir.exists() {
                     fs::create_dir_all(&dir).context("create volatile directory")?;
                 }
 
-                info!(?path, "Indexing");
+                info!(?temp_path, ?path, "Indexing");
 
-                let mut file = File::create(path).context("create index file")?;
+                let mut file = File::create(&temp_path).context("create index file")?;
                 let mut writer = stone::Writer::new(&mut file, stone::header::v1::FileType::Repository)
                     .context("create stone writer")?;
 
@@ -376,6 +383,8 @@ async fn reindex(state: &State) -> Result<()> {
                 }
 
                 writer.finalize().context("finalize stone index")?;
+
+                fs::rename(&temp_path, &path).context(format!("rename {temp_path:?} to {path:?}"))?;
 
                 Result::<_, eyre::Report>::Ok(())
             })
