@@ -17,9 +17,9 @@ deploy-service () {
   local _svc="$1"
   [[ ! -n "${_svc}" || "${_svc}" = "" ]] && return 1
   # necessary for setgid on dirs being inherited by newly created files
-  umask 0002  
-  # set correct permissions for service home dir (u+x for caddy to be able to serve files)
-  sudo chmod -Rc u+x,g+rwX /srv/${_svc}-rs
+  umask 0002
+  # set correct permissions for service home dir (o+X for caddy to be able to serve files)
+  sudo chmod -Rc u+rwX,g+rwX,o+X /srv/${_svc}-rs
   # set up state dir to be ready for the .privkey private key in bytes format
   mkdir -pv /srv/${_svc}-rs/${_svc}/state
   # copy binaries to service home dirs
@@ -27,7 +27,7 @@ deploy-service () {
   chmod -c a+x /srv/${_svc}-rs/${_svc}/${_svc}.app
   # reset permissions
   sudo chown -Rc ${_svc}-rs:${_svc}-rs /srv/${_svc}-rs
-  sudo chmod -Rc g+rwX /srv/${_svc}-rs/${_svc}
+  sudo chmod -Rc u+rwX,g+rwX,o+X /srv/${_svc}-rs/${_svc}
   # copy .service definitions to /etc/systemd/system/
   sudo cp -v aos-${_svc}-rs.service /etc/systemd/system/
   sudo systemctl daemon-reload
