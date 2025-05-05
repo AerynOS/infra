@@ -30,11 +30,17 @@ async fn main() -> Result<()> {
         .with_migrations(sqlx::migrate!("./migrations"))
         .await?;
 
-    let (worker_sender, worker_task) = worker::run(&state).await?;
+    let worker_state = worker::State::new(&state).await.context("build worker state")?;
+
+    worker::reindex(&worker_state).await.context("reindex")?;
 
     if let Some(directory) = import {
-        worker::import_directory(&state, directory).await.context("import")?;
+        worker::import_directory(&worker_state, directory)
+            .await
+            .context("import")?;
     }
+
+    let (worker_sender, worker_task) = worker::run(worker_state).await?;
 
     Server::new(Role::RepositoryManager, &config, &state)
         .with_grpc((host, grpc_port))

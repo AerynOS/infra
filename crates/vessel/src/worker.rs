@@ -40,11 +40,7 @@ pub struct Package {
     pub sha256sum: String,
 }
 
-pub async fn run(
-    service_state: &service::State,
-) -> Result<(Sender, impl Future<Output = Result<(), Infallible>> + use<>)> {
-    let state = State::new(service_state).await.context("construct state")?;
-
+pub async fn run(state: State) -> Result<(Sender, impl Future<Output = Result<(), Infallible>> + use<>)> {
     let (sender, mut receiver) = mpsc::unbounded_channel::<Message>();
 
     let task = async move {
@@ -66,7 +62,7 @@ pub async fn run(
 }
 
 #[derive(Debug, Clone)]
-struct State {
+pub struct State {
     state_dir: PathBuf,
     service_db: service::Database,
     meta_db: meta::Database,
@@ -74,7 +70,7 @@ struct State {
 }
 
 impl State {
-    async fn new(service_state: &service::State) -> Result<Self> {
+    pub async fn new(service_state: &service::State) -> Result<Self> {
         let meta_db = meta::Database::new(service_state.db_dir.join("meta").to_string_lossy().as_ref())
             .context("failed to open meta database")?;
 
@@ -138,9 +134,7 @@ async fn handle_message(state: &State, message: Message) -> Result<()> {
 }
 
 #[tracing::instrument(skip_all, fields(?directory))]
-pub async fn import_directory(service_state: &service::State, directory: PathBuf) -> Result<()> {
-    let state = State::new(service_state).await.context("construct state")?;
-
+pub async fn import_directory(state: &State, directory: PathBuf) -> Result<()> {
     info!("Import started");
 
     let stones = tokio::task::spawn_blocking(move || enumerate_stones(&directory))
@@ -151,9 +145,7 @@ pub async fn import_directory(service_state: &service::State, directory: PathBuf
     let num_stones = stones.len();
 
     if num_stones > 0 {
-        import_packages(&state, stones, false)
-            .await
-            .context("import packages")?;
+        import_packages(state, stones, false).await.context("import packages")?;
 
         info!(num_stones, "All stones imported");
     } else {
@@ -318,7 +310,8 @@ fn hardlink_or_copy(from: &Path, to: &Path) -> Result<()> {
     Ok(())
 }
 
-async fn reindex(state: &State) -> Result<()> {
+#[tracing::instrument(skip_all)]
+pub async fn reindex(state: &State) -> Result<()> {
     let mut entries = collection::list(
         state
             .service_db
