@@ -13,6 +13,7 @@ use super::{Id, Status, Task};
 pub struct Params {
     id: Option<Id>,
     statuses: Option<Vec<Status>>,
+    source_path: Option<String>,
     offset: Option<i64>,
     limit: Option<u32>,
 }
@@ -25,6 +26,13 @@ impl Params {
     pub fn statuses(self, statuses: impl IntoIterator<Item = Status>) -> Self {
         Self {
             statuses: Some(statuses.into_iter().collect()),
+            ..self
+        }
+    }
+
+    pub fn source_path(self, source_path: impl ToString) -> Self {
+        Self {
+            source_path: Some(source_path.to_string()),
             ..self
         }
     }
@@ -47,13 +55,14 @@ impl Params {
         if self.id.is_some() || self.statuses.is_some() {
             let conditions = self
                 .id
-                .map(|_| "task_id = ?".to_string())
+                .map(|_| "task_id = ?".to_owned())
                 .into_iter()
                 .chain(self.statuses.as_ref().map(|statuses| {
                     let binds = ",?".repeat(statuses.len()).chars().skip(1).collect::<String>();
 
                     format!("status IN ({binds})")
                 }))
+                .chain(self.source_path.is_some().then(|| "source_path = ?".to_owned()))
                 .join(" AND ");
 
             format!("WHERE {conditions}")
@@ -82,6 +91,9 @@ impl Params {
             for status in statuses {
                 query = query.bind(status.to_string());
             }
+        }
+        if let Some(source_path) = self.source_path.clone() {
+            query = query.bind(source_path);
         }
         query
     }

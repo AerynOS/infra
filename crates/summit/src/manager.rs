@@ -71,8 +71,6 @@ impl Manager {
     pub async fn refresh(&self, force: bool) -> Result<bool> {
         let mut have_changes = false;
 
-        let mut conn = self.acquire().await.context("acquire db conn")?;
-
         for mut project in self.projects().await.context("list projects")? {
             let mut profile_refreshed = false;
 
@@ -119,23 +117,36 @@ impl Manager {
 
             // Refresh each repo & if newer, reindex. If reindexed, try adding missing tasks
             for repo in &project.repositories {
-                let mut refresh = async |profile_refreshed: bool| {
-                    let (mut repo, repo_changed) = repository::refresh(&mut conn, &self.state, repo.clone())
-                        .await
-                        .context("refresh repository")?;
+                let refresh = async |profile_refreshed: bool| {
+                    let (mut repo, repo_changed) = repository::refresh(
+                        &mut *self.acquire().await.context("acquire db conn")?,
+                        &self.state,
+                        repo.clone(),
+                    )
+                    .await
+                    .context("refresh repository")?;
 
                     let repo_db = self.repository_db(&repo.id)?.clone();
 
                     if repo_changed {
-                        repo = repository::reindex(&mut conn, &self.state, repo, repo_db.clone())
-                            .await
-                            .context("reindex repository")?;
+                        repo = repository::reindex(
+                            &mut *self.acquire().await.context("acquire db conn")?,
+                            &self.state,
+                            repo,
+                            repo_db.clone(),
+                        )
+                        .await
+                        .context("reindex repository")?;
                     }
 
                     if force || repo_changed || profile_refreshed {
-                        task::create_missing(&mut conn, self, &project, &repo, &repo_db)
+                        let mut tx = self.begin().await.context("begin db tx")?;
+
+                        task::create_missing(&mut tx, self, &project, &repo, &repo_db)
                             .await
                             .context("create missing tasks")?;
+
+                        tx.commit().await.context("commit tx")?;
 
                         Result::<_, Report>::Ok(true)
                     } else {

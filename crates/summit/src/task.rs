@@ -8,7 +8,7 @@ use moss::{db::meta, dependency, package::Meta};
 use serde::{Deserialize, Serialize};
 use service::database::Transaction;
 use service::endpoint;
-use sqlx::{SqliteConnection, prelude::FromRow};
+use sqlx::prelude::FromRow;
 use strum::IntoEnumIterator;
 use tokio::task::spawn_blocking;
 use tracing::{Span, debug, warn};
@@ -62,6 +62,8 @@ pub enum Status {
     Building,
     /// Now publishing to Vessel
     Publishing,
+    /// Build was superseded by a newer build
+    Superseded,
     /// Job successfully completed!
     Completed,
     /// This build must remain blocked until its block
@@ -72,7 +74,7 @@ pub enum Status {
 
 impl Status {
     pub fn is_open(&self) -> bool {
-        !matches!(self, Status::Completed | Status::Failed)
+        !matches!(self, Status::Completed | Status::Failed | Status::Superseded)
     }
 
     pub fn open() -> impl Iterator<Item = Status> {
@@ -93,7 +95,7 @@ pub struct Queued {
 
 #[tracing::instrument(name = "create_missing_tasks", skip_all, fields(repository = %repo.name, profile))]
 pub async fn create_missing(
-    conn: &mut SqliteConnection,
+    tx: &mut Transaction,
     manager: &Manager,
     project: &Project,
     repo: &Repository,
@@ -163,7 +165,7 @@ pub async fn create_missing(
                         );
 
                         create(
-                            conn,
+                            tx,
                             project,
                             profile,
                             repo,
@@ -177,6 +179,8 @@ pub async fn create_missing(
                         )
                         .await
                         .context("create task")?;
+
+                        break 'providers;
                     }
                 } else {
                     debug!(
@@ -186,7 +190,7 @@ pub async fn create_missing(
                     );
 
                     create(
-                        conn,
+                        tx,
                         project,
                         profile,
                         repo,
