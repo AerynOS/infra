@@ -6,6 +6,7 @@ use service_client::{AuthClient, CredentialsAuth, SummitServiceClient};
 use service_core::crypto::KeyPair;
 use service_grpc::summit::RetryRequest;
 use tokio::{fs, io};
+use tonic::transport::Uri;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -13,6 +14,7 @@ async fn main() -> Result<()> {
 
     match command {
         Command::Summit {
+            uri,
             username,
             private_key,
             command,
@@ -21,11 +23,8 @@ async fn main() -> Result<()> {
 
             println!("Using key_pair {}", key_pair.public_key().encode());
 
-            let mut client = SummitServiceClient::connect_with_auth(
-                "http://127.0.0.1:5001".parse()?,
-                CredentialsAuth::new(username, key_pair),
-            )
-            .await?;
+            let mut client =
+                SummitServiceClient::connect_with_auth(uri, CredentialsAuth::new(username, key_pair)).await?;
 
             match command {
                 Summit::Retry { task } => {
@@ -87,6 +86,9 @@ struct Args {
 enum Command {
     /// Summit commands
     Summit {
+        /// Uri to connect to
+        #[arg(long = "uri", default_value = "http://127.0.0.1:5001")]
+        uri: Uri,
         /// Admin username
         #[arg(long = "user")]
         username: String,
