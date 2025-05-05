@@ -5,7 +5,7 @@ use dag::Dag;
 use futures_util::{StreamExt, TryStreamExt, stream};
 use itertools::Itertools;
 use moss::db::meta;
-use service::database::Transaction;
+use service::{database::Transaction, error};
 use sqlx::SqliteConnection;
 use tokio::task::spawn_blocking;
 use tracing::{debug, info, warn};
@@ -48,10 +48,25 @@ impl Queue {
 
                 let package_id = task.package_id.clone().into();
 
-                let meta = spawn_blocking(move || db.get(&package_id))
+                let meta = match spawn_blocking(move || db.get(&package_id))
                     .await
                     .context("join handle")?
-                    .context("find meta in repo db for task")?;
+                    .context("find meta in repo db for task")
+                {
+                    Ok(meta) => meta,
+                    Err(err) => {
+                        // TODO: Mark these tasks as failed / some other terminal status?
+                        warn!(
+                            error = error::chain(&*err),
+                            task = %task.id,
+                            build_id = %task.build_id,
+                            profile = %profile.name,
+                            repository = %repo.name,
+                            "Task metadata missing, omitting from queue"
+                        );
+                        return Ok(None);
+                    }
+                };
 
                 let remotes = profile
                     .remotes
@@ -62,7 +77,7 @@ impl Queue {
                     .cloned()
                     .collect();
 
-                Result::<_, eyre::Report>::Ok((
+                Result::<_, eyre::Report>::Ok(Some((
                     task.id,
                     task::Queued {
                         task,
@@ -73,10 +88,13 @@ impl Queue {
                         remotes,
                         dependencies: vec![],
                     },
-                ))
+                )))
             })
-            .try_collect::<HashMap<_, _>>()
-            .await?;
+            .try_collect::<Vec<_>>()
+            .await?
+            .into_iter()
+            .flatten()
+            .collect::<HashMap<_, _>>();
 
         let mut dag = Dag::<task::Id>::new();
 
