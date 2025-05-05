@@ -12,10 +12,10 @@ async fn main() -> Result<()> {
     let Args { command } = Args::parse();
 
     match command {
-        Command::Retry {
-            task,
+        Command::Summit {
             username,
             private_key,
+            command,
         } => {
             let key_pair = KeyPair::load(private_key)?;
 
@@ -27,9 +27,15 @@ async fn main() -> Result<()> {
             )
             .await?;
 
-            client.retry(RetryRequest { task_id: task }).await?;
+            match command {
+                Summit::Retry { task } => {
+                    client.retry(RetryRequest { task_id: task }).await?;
+                }
+                Summit::Refresh {} => {
+                    client.refresh(()).await?;
+                }
+            }
         }
-
         Command::Key { command } => match command {
             Key::Generate { format, output } => {
                 let key = KeyPair::generate();
@@ -79,22 +85,33 @@ struct Args {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Retry a failed task
-    Retry {
+    /// Summit commands
+    Summit {
         /// Admin username
         #[arg(long = "user")]
         username: String,
         /// Path to admin private key
         #[arg(long = "key")]
         private_key: PathBuf,
-        /// Task id
-        task: u64,
+        #[command(subcommand)]
+        command: Summit,
     },
     /// Work with ed25519 keys
     Key {
         #[command(subcommand)]
         command: Key,
     },
+}
+
+#[derive(Debug, Subcommand)]
+enum Summit {
+    /// Retry a failed task
+    Retry {
+        /// Task id
+        task: u64,
+    },
+    /// Refresh all projects
+    Refresh {},
 }
 
 #[derive(Debug, Subcommand)]

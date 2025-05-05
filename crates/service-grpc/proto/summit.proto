@@ -81,4 +81,8 @@ service SummitService {
     option (options.flags) = "ACCESS_TOKEN | NOT_EXPIRED";
     option (options.perm) = "RetryTask";
   }
+  rpc Refresh(google.protobuf.Empty) returns (google.protobuf.Empty) {
+    option (options.flags) = "ACCESS_TOKEN | NOT_EXPIRED";
+    option (options.perm) = "Refresh";
+  }
 }

@@ -1,8 +1,8 @@
 use std::collections::{HashMap, VecDeque};
 
-use color_eyre::eyre::{self, Context, OptionExt, Result};
+use color_eyre::eyre::{self, Context, OptionExt, Report, Result};
 use moss::db::meta;
-use service::{State, database::Transaction, endpoint};
+use service::{State, database::Transaction, endpoint, error};
 use sqlx::{Sqlite, pool::PoolConnection};
 use tokio::task::spawn_blocking;
 use tracing::{Span, debug, error, info, warn};
@@ -25,7 +25,7 @@ impl Manager {
         let span = Span::current();
 
         // Moss DB implementations are blocking
-        let (state, mut projects, profile_dbs, repository_dbs) = spawn_blocking(move || {
+        let (state, profile_dbs, repository_dbs) = spawn_blocking(move || {
             let _enter = span.enter();
 
             let profile_dbs = projects
@@ -50,7 +50,7 @@ impl Manager {
 
             info!(num_projects = projects.len(), "Projects loaded");
 
-            Result::<_, eyre::Error>::Ok((state, projects, profile_dbs, repository_dbs))
+            Result::<_, eyre::Error>::Ok((state, profile_dbs, repository_dbs))
         })
         .await
         .context("join handle")??;
@@ -63,29 +63,100 @@ impl Manager {
             repository_dbs,
         };
 
-        let mut conn = manager.acquire().await.context("acquire db conn")?;
+        manager.refresh(true).await.context("refresh")?;
 
-        for project in &mut projects {
-            // Refresh all profiles
+        Ok(manager)
+    }
+
+    pub async fn refresh(&self, force: bool) -> Result<bool> {
+        let mut have_changes = false;
+
+        let mut conn = self.acquire().await.context("acquire db conn")?;
+
+        for mut project in self.projects().await.context("list projects")? {
+            let mut profile_refreshed = false;
+
+            // Ensure un-indexed profiles get refreshed, such as if they failed
+            // to refresh previously from spurious errors
             for profile in &mut project.profiles {
-                let db = manager.profile_db(&profile.id).cloned()?;
+                let mut refresh = async || {
+                    if force || !matches!(profile.status, profile::Status::Indexed) {
+                        if !matches!(profile.status, profile::Status::Indexed) {
+                            debug!(
+                                profile = %profile.name,
+                                status = %profile.status,
+                                "Profile not fully indexed, refreshing..."
+                            );
+                        }
 
-                let _ = profile::refresh(&manager.state, profile, db)
-                    .await
-                    .inspect_err(|error| error!(profile = %profile.id, %error, "Failed to refresh profile"));
+                        let profile_db = self.profile_db(&profile.id).cloned()?;
+
+                        profile::refresh(&self.state, profile, profile_db)
+                            .await
+                            .context("refres profile")?;
+
+                        Result::<_, Report>::Ok(true)
+                    } else {
+                        Ok(false)
+                    }
+                };
+
+                match refresh().await {
+                    Ok(refreshed) => {
+                        if refreshed {
+                            profile_refreshed = true;
+                        }
+                    }
+                    Err(err) => {
+                        error!(
+                            profile = %profile.name,
+                            error = error::chain(&*err),
+                            "Failed to refresh profile"
+                        );
+                    }
+                }
             }
 
-            // Add all missing tasks
+            // Refresh each repo & if newer, reindex. If reindexed, try adding missing tasks
             for repo in &project.repositories {
-                let db = manager.repository_db(&repo.id)?;
+                let mut refresh = async |profile_refreshed: bool| {
+                    let (mut repo, repo_changed) = repository::refresh(&mut conn, &self.state, repo.clone())
+                        .await
+                        .context("refresh repository")?;
 
-                task::create_missing(&mut conn, &manager, project, repo, db)
-                    .await
-                    .context("create missing tasks")?;
+                    let repo_db = self.repository_db(&repo.id)?.clone();
+
+                    if repo_changed {
+                        repo = repository::reindex(&mut conn, &self.state, repo, repo_db.clone())
+                            .await
+                            .context("reindex repository")?;
+                    }
+
+                    if force || repo_changed || profile_refreshed {
+                        task::create_missing(&mut conn, self, &project, &repo, &repo_db)
+                            .await
+                            .context("create missing tasks")?;
+
+                        Result::<_, Report>::Ok(true)
+                    } else {
+                        Ok(false)
+                    }
+                };
+
+                match refresh(profile_refreshed).await {
+                    Ok(tasks_created) => {
+                        if tasks_created {
+                            have_changes = true;
+                        }
+                    }
+                    Err(err) => {
+                        error!(error = error::chain(&*err), "Failed to refresh repository");
+                    }
+                }
             }
         }
 
-        Ok(manager)
+        Ok(have_changes)
     }
 
     pub async fn begin(&self) -> Result<Transaction> {

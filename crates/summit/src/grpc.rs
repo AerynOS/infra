@@ -73,6 +73,12 @@ impl SummitService for Service {
         grpc::handle(request, async move |request| retry(state, request).await).await
     }
 
+    async fn refresh(&self, request: tonic::Request<()>) -> Result<tonic::Response<()>, tonic::Status> {
+        let state = self.state.clone();
+
+        grpc::handle(request, async move |request| refresh(state, request).await).await
+    }
+
     async fn builder(
         &self,
         request: tonic::Request<tonic::Streaming<BuilderStreamIncoming>>,
@@ -172,6 +178,26 @@ async fn retry(state: Arc<State>, request: tonic::Request<RetryRequest>) -> Resu
     let _ = state.worker.send(worker::Message::Retry {
         task_id: (request.into_inner().task_id as i64).into(),
     });
+
+    Ok(())
+}
+
+#[tracing::instrument(skip_all)]
+async fn refresh(state: Arc<State>, request: tonic::Request<()>) -> Result<(), Error> {
+    let token = request
+        .extensions()
+        .get::<VerifiedToken>()
+        .cloned()
+        .ok_or(Error::MissingRequestToken)?;
+
+    let account_id = token.decoded.payload.account_id;
+
+    info!(
+        account = %account_id,
+        "Refresh"
+    );
+
+    let _ = state.worker.send(worker::Message::ForceRefresh);
 
     Ok(())
 }

@@ -1,17 +1,14 @@
 use std::{convert::Infallible, future::Future, time::Duration};
 
-use color_eyre::{
-    Result,
-    eyre::{Context, Report},
-};
-use service::{endpoint, error};
+use color_eyre::{Result, eyre::Context};
+use service::endpoint;
 use tokio::{
     sync::mpsc,
     time::{self, Instant},
 };
 use tracing::{debug, error, info};
 
-use crate::{Manager, builder, profile, repository, task};
+use crate::{Manager, builder, task};
 
 const TIMER_INTERVAL: Duration = Duration::from_secs(30);
 
@@ -25,6 +22,7 @@ pub enum Message {
     ImportFailed { task_id: task::Id },
     Retry { task_id: task::Id },
     Timer(Instant),
+    ForceRefresh,
     Builder(endpoint::Id, builder::Message),
 }
 
@@ -73,6 +71,7 @@ async fn handle_message(sender: &Sender, manager: &mut Manager, message: Message
         Message::ImportFailed { task_id } => import_failed(sender, manager, task_id).await,
         Message::Retry { task_id } => retry(sender, manager, task_id).await,
         Message::Timer(_) => timer(sender, manager).await,
+        Message::ForceRefresh => force_refresh(sender, manager).await,
         Message::Builder(endpoint, message) => {
             let allocate_builds = manager
                 .update_builder(endpoint, message)
@@ -134,92 +133,21 @@ async fn retry(sender: &Sender, manager: &mut Manager, task_id: task::Id) -> Res
 async fn timer(sender: &Sender, manager: &Manager) -> Result<()> {
     debug!("Timer triggered");
 
-    let mut have_changes = false;
+    let have_changes = manager.refresh(false).await.context("refresh")?;
 
-    let mut conn = manager.acquire().await.context("acquire db conn")?;
-
-    for mut project in manager.projects().await.context("list projects")? {
-        let mut profile_refreshed = false;
-
-        // Ensure un-indexed profiles get refreshed, such as if they failed
-        // to refresh previously from spurious errors
-        for profile in &mut project.profiles {
-            let mut refresh = async || {
-                if !matches!(profile.status, profile::Status::Indexed) {
-                    debug!(
-                        profile = %profile.name,
-                        status = %profile.status,
-                        "Profile not fully indexed, refreshing..."
-                    );
-
-                    let profile_db = manager.profile_db(&profile.id).cloned()?;
-
-                    profile::refresh(&manager.state, profile, profile_db)
-                        .await
-                        .context("refres profile")?;
-
-                    Result::<_, Report>::Ok(true)
-                } else {
-                    Ok(false)
-                }
-            };
-
-            match refresh().await {
-                Ok(refreshed) => {
-                    if refreshed {
-                        profile_refreshed = true;
-                    }
-                }
-                Err(err) => {
-                    error!(
-                        profile = %profile.name,
-                        error = error::chain(&*err),
-                        "Failed to refresh profile"
-                    );
-                }
-            }
-        }
-
-        // Refresh each repo & if newer, reindex. If reindexed, try adding missing tasks
-        for repo in &project.repositories {
-            let mut refresh = async |profile_refreshed: bool| {
-                let (mut repo, repo_changed) = repository::refresh(&mut conn, &manager.state, repo.clone())
-                    .await
-                    .context("refresh repository")?;
-
-                let repo_db = manager.repository_db(&repo.id)?.clone();
-
-                if repo_changed {
-                    repo = repository::reindex(&mut conn, &manager.state, repo, repo_db.clone())
-                        .await
-                        .context("reindex repository")?;
-                }
-
-                if repo_changed || profile_refreshed {
-                    task::create_missing(&mut conn, manager, &project, &repo, &repo_db)
-                        .await
-                        .context("create missing tasks")?;
-
-                    Result::<_, Report>::Ok(true)
-                } else {
-                    Ok(false)
-                }
-            };
-
-            match refresh(profile_refreshed).await {
-                Ok(tasks_created) => {
-                    if tasks_created {
-                        have_changes = true;
-                    }
-                }
-                Err(err) => {
-                    error!(error = error::chain(&*err), "Failed to refresh repository");
-                }
-            }
-        }
+    if have_changes {
+        let _ = sender.send(Message::AllocateBuilds);
     }
 
-    // If tasks were added, allocate new builds
+    Ok(())
+}
+
+#[tracing::instrument(skip_all, fields(project))]
+async fn force_refresh(sender: &Sender, manager: &Manager) -> Result<()> {
+    info!("Force refresh");
+
+    let have_changes = manager.refresh(true).await.context("refresh")?;
+
     if have_changes {
         let _ = sender.send(Message::AllocateBuilds);
     }

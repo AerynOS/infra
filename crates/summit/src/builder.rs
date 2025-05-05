@@ -68,7 +68,7 @@ impl Builder {
                 ..
             }) => Status::Idle,
             Some(Connection {
-                status: Connected::Building { .. },
+                status: Connected::Building,
                 ..
             }) => Status::Building,
             None => Status::Disconnected,
@@ -117,9 +117,7 @@ impl Builder {
             .await
             .context("send builder stream message")?;
 
-        connection.status = Connected::Building {
-            task_id: queued.task.id,
-        };
+        connection.status = Connected::Building;
 
         let mut tx = state.service_db.begin().await.context("begin db tx")?;
 
@@ -163,7 +161,7 @@ impl Builder {
                     // TODO: Invalidate tasks which still show as building
                     // on this builder that aren't this one
                     connection.status = match building {
-                        Some(task_id) => Connected::Building { task_id },
+                        Some(_) => Connected::Building,
                         None => Connected::Idle,
                     };
                 }
@@ -322,7 +320,7 @@ struct Connection {
 #[derive(Debug)]
 enum Connected {
     Idle,
-    Building { task_id: task::Id },
+    Building,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
