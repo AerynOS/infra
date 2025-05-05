@@ -45,6 +45,8 @@ reset-service-state () {
   [[ ! -n "${_svc}" || "${_svc}" = "" ]] && return 1
   local _statedir="/srv/${_svc}-rs/${_svc}/state/"
   [[ -d ${_statedir} ]] && pushd ${_statedir} && rm -rf * && ls -la && popd
+  local _assetsdir="/srv/${_svc}-rs/${_svc}/assets/"
+  [[ -d ${_assetsdir} ]] && pushd ${_assetsdir} && rm -rf * && ls -la && popd
   echo "${_svc} state dir reset. NB: The service private key was not deleted."
 }
 
