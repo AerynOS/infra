@@ -40,7 +40,7 @@ pub async fn create(
         "
         SELECT task_id
         FROM task
-        WHERE build_id = ?   
+        WHERE build_id = ?
         ",
     )
     .bind(&build_id)
@@ -74,7 +74,7 @@ pub async fn create(
     .tasks;
 
     for task in superseded {
-        info!(old = task.build_id, new = build_id, "Task superceded by newer build");
+        info!(old = task.build_id, new = build_id, "Task superseded by newer build");
 
         set_status(tx, task.id, Status::Superseded)
             .await
