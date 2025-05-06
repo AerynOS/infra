@@ -10,7 +10,14 @@ create-service-user () {
   sudo useradd --create-home --home-dir /srv/${_svc}-rs --user-group --system ${_svc}-rs
   # add invoking user to service groups
   sudo usermod -a -G ${_svc}-rs ${USER}
-  echo "Now Relog to ensure that your user is part of the ${_svc}-rs group."
+  echo -e "\nNow Relog to ensure that your user is part of the ${_svc}-rs group.\n"
+}
+
+deploy-avalanche-service ()
+{
+  echo -e "\nAllow avalanche-rs user to call /usr/bin/boulder w/no password:"
+  echo "avalanche-rs ALL = NOPASSWD: /usr/bin/nice, /usr/bin/boulder" | sudo tee /etc/sudoers.d/avalanche-rs-boulder
+  sudo ls -laF /etc/sudoers.d/avalanche-rs-boulder
 }
 
 deploy-service () {
@@ -23,31 +30,31 @@ deploy-service () {
   # set up state dir to be ready for the .privkey private key in bytes format
   sudo mkdir -pv /srv/${_svc}-rs/${_svc}/state
   # copy binaries to service home dirs
-  sudo cp -v ../target/release/${_svc} /srv/${_svc}-rs/${_svc}/${_svc}.app
+  sudo cp -v ../target/infratest/${_svc} /srv/${_svc}-rs/${_svc}/${_svc}.app
   sudo chmod -c a+x /srv/${_svc}-rs/${_svc}/${_svc}.app
   # reset permissions
   sudo chown -Rc ${_svc}-rs:${_svc}-rs /srv/${_svc}-rs
   sudo chmod -Rc u+rwX,g+rwX,o+X /srv/${_svc}-rs/${_svc}
+  ls -laF /srv/${_svc}-rs/${_svc}
   # copy .service definitions to /etc/systemd/system/
   sudo cp -v aos-${_svc}-rs.service /etc/systemd/system/
+  ls -la /etc/systemd/system/aos-${_svc}-rs.service
   sudo systemctl daemon-reload
-  echo "Now set up config.toml files and private/public keys."
+  [[ "${_svc}" == "avalanche" ]] && deploy-avalanche-service
+  echo -e "\nDid you remember set up config.toml files and private/public keys?\n"
 }
 
-deploy-avalanche-service ()
-{
-  echo -e "\nAllow avalanche-rs user to call /usr/bin/boulder w/no password:"
-  echo -e "avalanche-rs ALL = NOPASSWD: /usr/bin/nice, /usr/bin/boulder\n" | sudo tee /etc/sudoers.d/avalanche-rs-boulder
-}
+
 
 reset-service-state () {
   local _svc="$1"
   [[ ! -n "${_svc}" || "${_svc}" = "" ]] && return 1
   local _statedir="/srv/${_svc}-rs/${_svc}/state/"
-  [[ -d ${_statedir} ]] && pushd ${_statedir} && rm -rf * && ls -la && popd
+  [[ -d ${_statedir} ]] && pushd ${_statedir} && rm -rf * && popd
   local _assetsdir="/srv/${_svc}-rs/${_svc}/assets/"
-  [[ -d ${_assetsdir} ]] && pushd ${_assetsdir}/.. && rm -rf assets && ls -la && popd
-  echo "${_svc} state dir reset. NB: The service private key was not deleted."
+  [[ -d ${_assetsdir} ]] && pushd ${_assetsdir}/.. && rm -rf assets && popd
+  tree -L3 -apugDF --dirsfirst /srv/${_svc}-rs/
+  echo -e "\n${_svc} state dir reset. NB: The service private key was not deleted.\n"
 }
 
 help() {

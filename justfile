@@ -35,3 +35,15 @@ down *ARGS:
 # Quickly view summit front-end changes (DX feature)
 summit-dev *ARGS:
 	cargo run -p summit --no-default-features --features templates-autoreload -- -c ./test/summit/config.toml --root $(mktemp -d) --static ./crates/summit/static {{ARGS}}
+
+# Do a fresh build of 'avalanche|summit|vessel', stop it, reset it, deploy it, and start it.
+reset-then-deploy *ARGS:
+	#!/usr/bin/bash
+	cargo build --profile infratest -p {{ARGS}} \
+	&& pushd deployment \
+	&& source source-me-to-deploy-rust-services.bash >/dev/null \
+	&& sudo systemctl stop aos-{{ARGS}}-rs \
+	&& reset-service-state {{ARGS}} \
+	&& deploy-service {{ARGS}} \
+	&& echo -e "Run 'sudo systemctl start aos-{{ARGS}}-rs' to start {{ARGS}}\n"  \
+	&& popd

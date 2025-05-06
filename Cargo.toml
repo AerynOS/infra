@@ -65,8 +65,28 @@ uuid = { version = "1.6.1", features = ["v4", "serde"] }
 # This was recommended for static musl builds to work, but it doesn't on a f41 install...
 # openssl = { version = "*", features = ["vendored"] }
 
-# intended to (eventually) be used with fully static, drop-in deployment musl builds
 [profile.release]
+lto = "thin"
+
+# intended to (eventually) be used with fully static, drop-in deployment musl builds
+[profile.packaging]
+inherits = "release"
 lto = true
 codegen-units = 1
 opt-level = 3
+# allow packaging system to do it
+strip = "none"
+debug = true
+
+# used for goldilocks zone build times vs. runtime perf
+[profile.infratest]
+inherits = "dev"
+opt-level = 1
+
+# Clean infratest dev-based profile build times on a 5950X system
+#
+# dev         : 0m34s = 100%
+# -O1         : 1m18s = 229%
+# -O2         : 1m29s = 261%
+# -O1 thinlto : 1m37s = 285%
+# -O2 thinlto : 1m48s = 317%
