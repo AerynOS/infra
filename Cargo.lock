@@ -484,12 +484,12 @@ dependencies = [
 [[package]]
 name = "blsforme"
 version = "0.1.0"
-source = "git+https://github.com/AerynOS/blsforme.git?rev=5d9aa879be140dc32d952f2d6b8ab602e56fc60e#5d9aa879be140dc32d952f2d6b8ab602e56fc60e"
+source = "git+https://github.com/AerynOS/blsforme.git?rev=6e7ffc5e228f072b50c87dc4eac81e4cd2164d03#6e7ffc5e228f072b50c87dc4eac81e4cd2164d03"
 dependencies = [
  "blake3",
  "gpt",
  "log",
- "nix 0.29.0",
+ "nix 0.30.1",
  "os-info",
  "serde",
  "serde_json",
@@ -698,7 +698,7 @@ dependencies = [
 [[package]]
 name = "config"
 version = "0.25.1"
-source = "git+https://github.com/AerynOS/os-tools.git#ef9d21eb569e282d62c5237047c1fddd9bcd78a7"
+source = "git+https://github.com/AerynOS/os-tools.git#70a8ecd6b10945049c374d5a4362c327bade643f"
 dependencies = [
  "dirs",
  "fs-err",
@@ -735,7 +735,7 @@ checksum = "7c74b8349d32d297c9134b8c88677813a227df8f779daa29bfc29c183fe3dca6"
 [[package]]
 name = "container"
 version = "0.25.1"
-source = "git+https://github.com/AerynOS/os-tools.git#ef9d21eb569e282d62c5237047c1fddd9bcd78a7"
+source = "git+https://github.com/AerynOS/os-tools.git#70a8ecd6b10945049c374d5a4362c327bade643f"
 dependencies = [
  "fs-err",
  "nix 0.27.1",
@@ -891,7 +891,7 @@ dependencies = [
 [[package]]
 name = "dag"
 version = "0.25.1"
-source = "git+https://github.com/AerynOS/os-tools.git#ef9d21eb569e282d62c5237047c1fddd9bcd78a7"
+source = "git+https://github.com/AerynOS/os-tools.git#70a8ecd6b10945049c374d5a4362c327bade643f"
 dependencies = [
  "petgraph",
 ]
@@ -949,23 +949,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b42b6fa04a440b495c8b04d0e71b707c585f83cb9cb28cf8cd0d976c315e31b4"
 dependencies = [
  "powerfmt",
- "serde",
 ]
 
 [[package]]
 name = "derive_more"
-version = "1.0.0"
+version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4a9b99b9cbbe49445b21764dc0625032a89b145a2642e67603e1c936f5458d05"
+checksum = "093242cf7570c207c83073cf82f79706fe7b8317e98620a47d5be7c3d8497678"
 dependencies = [
  "derive_more-impl",
 ]
 
 [[package]]
 name = "derive_more-impl"
-version = "1.0.0"
+version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb7330aeadfbe296029522e6c40f315320aba36fc43a5b3632f3795348f3bd22"
+checksum = "bda628edc44c4bb645fbe0f758797143e4e07926f7ebf4e9bdfbd3d2ce621df3"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1044,23 +1043,23 @@ dependencies = [
 
 [[package]]
 name = "dirs"
-version = "5.0.1"
+version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "44c45a9d03d6676652bcb5e724c7e988de1acad23a711b5217ab9cbecbec2225"
+checksum = "c3e8aa94d75141228480295a7d0e7feb620b1a5ad9f12bc40be62411e38cce4e"
 dependencies = [
  "dirs-sys",
 ]
 
 [[package]]
 name = "dirs-sys"
-version = "0.4.1"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "520f05a5cbd335fae5a99ff7a6ab8627577660ee5cfd6a94a6a929b52ff0321c"
+checksum = "e01a3366d27ee9890022452ee61b2b63a67e6f13f58900b651ff5665f0bb1fab"
 dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.48.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1254,9 +1253,9 @@ dependencies = [
 
 [[package]]
 name = "fixedbitset"
-version = "0.4.2"
+version = "0.5.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ce7134b9999ecaf8bcd65542e436736ef32ddca1b3e06094cb6ec5755203b80"
+checksum = "1d674e81391d1e1ab681a28d99df07927c6d4aa5b027d7da16ba32d1d21ecd99"
 
 [[package]]
 name = "flate2"
@@ -1282,7 +1281,7 @@ dependencies = [
 [[package]]
 name = "fnmatch"
 version = "0.25.1"
-source = "git+https://github.com/AerynOS/os-tools.git#ef9d21eb569e282d62c5237047c1fddd9bcd78a7"
+source = "git+https://github.com/AerynOS/os-tools.git#70a8ecd6b10945049c374d5a4362c327bade643f"
 dependencies = [
  "regex",
  "serde",
@@ -1522,18 +1521,12 @@ dependencies = [
  "futures-core",
  "futures-sink",
  "http",
- "indexmap 2.7.0",
+ "indexmap",
  "slab",
  "tokio",
  "tokio-util",
  "tracing",
 ]
-
-[[package]]
-name = "hashbrown"
-version = "0.12.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8a9ee70c43aaf417c914396645a0fa852624801b24ebb7ae78fe8272889ac888"
 
 [[package]]
 name = "hashbrown"
@@ -1552,7 +1545,7 @@ version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7382cf6263419f2d8df38c55d7da83da5c18aef87fc7a7fc1fb1e344edfe14c1"
 dependencies = [
- "hashbrown 0.15.2",
+ "hashbrown",
 ]
 
 [[package]]
@@ -1944,24 +1937,12 @@ checksum = "ce23b50ad8242c51a442f3ff322d56b02f08852c77e4c0b4d3fd684abc89c683"
 
 [[package]]
 name = "indexmap"
-version = "1.9.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bd070e393353796e801d209ad339e89596eb4c8d430d18ede6a1cced8fafbd99"
-dependencies = [
- "autocfg",
- "hashbrown 0.12.3",
- "serde",
-]
-
-[[package]]
-name = "indexmap"
 version = "2.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "62f822373a4fe84d4bb149bf54e584a7f4abec90e072ed49cda0edea5b95471f"
 dependencies = [
  "equivalent",
- "hashbrown 0.15.2",
- "serde",
+ "hashbrown",
 ]
 
 [[package]]
@@ -2120,9 +2101,9 @@ dependencies = [
 
 [[package]]
 name = "libc"
-version = "0.2.169"
+version = "0.2.172"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b5aba8db14291edd000dfcc4d620c7ebfb122c613afb886ca8803fa4e128a20a"
+checksum = "d750af042f7ef4f724306de029d18836c26c1765a54a6a3f094cbd23a7267ffa"
 
 [[package]]
 name = "libm"
@@ -2332,7 +2313,7 @@ dependencies = [
 [[package]]
 name = "moss"
 version = "0.25.1"
-source = "git+https://github.com/AerynOS/os-tools.git#ef9d21eb569e282d62c5237047c1fddd9bcd78a7"
+source = "git+https://github.com/AerynOS/os-tools.git#70a8ecd6b10945049c374d5a4362c327bade643f"
 dependencies = [
  "blsforme",
  "bytes",
@@ -2418,6 +2399,18 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "memoffset",
+]
+
+[[package]]
+name = "nix"
+version = "0.30.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "74523f3a35e05aba87a1d978330aef40f67b0304ac79c1c00b294c9830543db6"
+dependencies = [
+ "bitflags 2.6.0",
+ "cfg-if",
+ "cfg_aliases",
+ "libc",
 ]
 
 [[package]]
@@ -2671,12 +2664,12 @@ checksum = "e3148f5046208a5d56bcfc03053e3ca6334e51da8dfb19b6cdc8b306fae3283e"
 
 [[package]]
 name = "petgraph"
-version = "0.6.5"
+version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b4c5cc86750666a3ed20bdaf5ca2a0344f9c67674cae0515bec2da16fbaa47db"
+checksum = "3672b37090dbd86368a4145bc067582552b29c27377cad4e0a306c97f9bd7772"
 dependencies = [
  "fixedbitset",
- "indexmap 2.7.0",
+ "indexmap",
 ]
 
 [[package]]
@@ -3004,13 +2997,13 @@ dependencies = [
 
 [[package]]
 name = "redox_users"
-version = "0.4.6"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba009ff324d1fc1b900bd1fdb31564febe58a8ccc8a6fdbb93b543d33b13ca43"
+checksum = "dd6f9d3d47bdd2ad6945c5015a226ec6155d0bcdfd8f7cd29f86b71f8de99d2b"
 dependencies = [
  "getrandom 0.2.15",
  "libredox",
- "thiserror 1.0.69",
+ "thiserror 2.0.12",
 ]
 
 [[package]]
@@ -3374,42 +3367,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "serde_with"
-version = "3.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d6b6f7f2fcb69f747921f79f3926bd1e203fce4fef62c268dd3abfb6d86029aa"
-dependencies = [
- "base64 0.22.1",
- "chrono",
- "hex",
- "indexmap 1.9.3",
- "indexmap 2.7.0",
- "serde",
- "serde_derive",
- "serde_json",
- "serde_with_macros",
- "time",
-]
-
-[[package]]
-name = "serde_with_macros"
-version = "3.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8d00caa5193a3c8362ac2b73be6b9e768aa5a4b2f721d8f4b339600c3cb51f8e"
-dependencies = [
- "darling",
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
 name = "serde_yaml"
 version = "0.9.34+deprecated"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6a8b1a1a2ebf674015cc02edccce75287f1a0130d394307b36743c2f5d504b47"
 dependencies = [
- "indexmap 2.7.0",
+ "indexmap",
  "itoa",
  "ryu",
  "serde",
@@ -3686,9 +3649,9 @@ dependencies = [
  "futures-intrusive",
  "futures-io",
  "futures-util",
- "hashbrown 0.15.2",
+ "hashbrown",
  "hashlink",
- "indexmap 2.7.0",
+ "indexmap",
  "log",
  "memchr",
  "once_cell",
@@ -3868,7 +3831,7 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 [[package]]
 name = "stone"
 version = "0.25.1"
-source = "git+https://github.com/AerynOS/os-tools.git#ef9d21eb569e282d62c5237047c1fddd9bcd78a7"
+source = "git+https://github.com/AerynOS/os-tools.git#70a8ecd6b10945049c374d5a4362c327bade643f"
 dependencies = [
  "strum",
  "thiserror 2.0.12",
@@ -3879,7 +3842,7 @@ dependencies = [
 [[package]]
 name = "stone_recipe"
 version = "0.25.1"
-source = "git+https://github.com/AerynOS/os-tools.git#ef9d21eb569e282d62c5237047c1fddd9bcd78a7"
+source = "git+https://github.com/AerynOS/os-tools.git#70a8ecd6b10945049c374d5a4362c327bade643f"
 dependencies = [
  "nom",
  "serde",
@@ -3977,11 +3940,10 @@ dependencies = [
 [[package]]
 name = "superblock"
 version = "0.1.0"
-source = "git+https://github.com/AerynOS/disks-rs?rev=7299da936e0a187ff0aba0e6c9370ee92ba960b4#7299da936e0a187ff0aba0e6c9370ee92ba960b4"
+source = "git+https://github.com/AerynOS/disks-rs?rev=eaf696353270f2cb76966f8a858f22c5289c9558#eaf696353270f2cb76966f8a858f22c5289c9558"
 dependencies = [
  "serde",
  "serde_json",
- "serde_with",
  "thiserror 2.0.12",
  "uuid",
  "zerocopy 0.8.24",
@@ -4258,7 +4220,7 @@ version = "0.22.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4ae48d6208a266e853d946088ed816055e556cc6028c5e8e2b84d9fa5dd7c7f5"
 dependencies = [
- "indexmap 2.7.0",
+ "indexmap",
  "serde",
  "serde_spanned",
  "toml_datetime",
@@ -4267,9 +4229,9 @@ dependencies = [
 
 [[package]]
 name = "tonic"
-version = "0.13.0"
+version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "85839f0b32fd242bb3209262371d07feda6d780d16ee9d2bc88581b89da1549b"
+checksum = "7e581ba15a835f4d9ea06c55ab1bd4dce26fc53752c69a04aac00703bfb49ba9"
 dependencies = [
  "async-trait",
  "axum",
@@ -4296,9 +4258,9 @@ dependencies = [
 
 [[package]]
 name = "tonic-build"
-version = "0.13.0"
+version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d85f0383fadd15609306383a90e85eaed44169f931a5d2be1b42c76ceff1825e"
+checksum = "eac6f67be712d12f0b41328db3137e0d0757645d8904b4cb7d51cd9c2279e847"
 dependencies = [
  "prettyplease",
  "proc-macro2",
@@ -4311,7 +4273,7 @@ dependencies = [
 [[package]]
 name = "tools_buildinfo"
 version = "0.25.1"
-source = "git+https://github.com/AerynOS/os-tools.git#ef9d21eb569e282d62c5237047c1fddd9bcd78a7"
+source = "git+https://github.com/AerynOS/os-tools.git#70a8ecd6b10945049c374d5a4362c327bade643f"
 dependencies = [
  "chrono",
  "thiserror 2.0.12",
@@ -4320,11 +4282,11 @@ dependencies = [
 [[package]]
 name = "topology"
 version = "0.1.0"
-source = "git+https://github.com/AerynOS/blsforme.git?rev=5d9aa879be140dc32d952f2d6b8ab602e56fc60e#5d9aa879be140dc32d952f2d6b8ab602e56fc60e"
+source = "git+https://github.com/AerynOS/blsforme.git?rev=6e7ffc5e228f072b50c87dc4eac81e4cd2164d03#6e7ffc5e228f072b50c87dc4eac81e4cd2164d03"
 dependencies = [
  "gpt",
  "log",
- "nix 0.29.0",
+ "nix 0.30.1",
  "superblock",
  "thiserror 2.0.12",
 ]
@@ -4337,7 +4299,7 @@ checksum = "d039ad9159c98b70ecfd540b2573b97f7f52c3e8d9f8ad57a24b916a536975f9"
 dependencies = [
  "futures-core",
  "futures-util",
- "indexmap 2.7.0",
+ "indexmap",
  "pin-project-lite",
  "slab",
  "sync_wrapper",
@@ -4485,7 +4447,7 @@ dependencies = [
 [[package]]
 name = "triggers"
 version = "0.25.1"
-source = "git+https://github.com/AerynOS/os-tools.git#ef9d21eb569e282d62c5237047c1fddd9bcd78a7"
+source = "git+https://github.com/AerynOS/os-tools.git#70a8ecd6b10945049c374d5a4362c327bade643f"
 dependencies = [
  "dag",
  "fnmatch",
@@ -4502,7 +4464,7 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 [[package]]
 name = "tui"
 version = "0.25.1"
-source = "git+https://github.com/AerynOS/os-tools.git#ef9d21eb569e282d62c5237047c1fddd9bcd78a7"
+source = "git+https://github.com/AerynOS/os-tools.git#70a8ecd6b10945049c374d5a4362c327bade643f"
 dependencies = [
  "crossterm",
  "dialoguer",
@@ -4670,7 +4632,7 @@ dependencies = [
 [[package]]
 name = "vfs"
 version = "0.1.0"
-source = "git+https://github.com/AerynOS/os-tools.git#ef9d21eb569e282d62c5237047c1fddd9bcd78a7"
+source = "git+https://github.com/AerynOS/os-tools.git#70a8ecd6b10945049c374d5a4362c327bade643f"
 dependencies = [
  "indextree",
  "thiserror 2.0.12",
@@ -4857,7 +4819,7 @@ version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf221c93e13a30d793f7645a0e7762c55d169dbb0a49671918a2319d289b10bb"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
