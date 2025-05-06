@@ -45,7 +45,6 @@ deploy-service () {
 }
 
 
-
 reset-service-state () {
   local _svc="$1"
   [[ ! -n "${_svc}" || "${_svc}" = "" ]] && return 1
@@ -53,7 +52,7 @@ reset-service-state () {
   [[ -d ${_statedir} ]] && pushd ${_statedir} && rm -rf * && popd
   local _assetsdir="/srv/${_svc}-rs/${_svc}/assets/"
   [[ -d ${_assetsdir} ]] && pushd ${_assetsdir}/.. && rm -rf assets && popd
-  tree -L3 -apugDF --dirsfirst /srv/${_svc}-rs/
+  tree -L 3 -apugDF --dirsfirst /srv/${_svc}-rs/
   echo -e "\n${_svc} state dir reset. NB: The service private key was not deleted.\n"
 }
 
