@@ -182,11 +182,16 @@ async fn build_recipe(
         }
     };
 
+    // By running with nice like this, we ensure that avalanche can run on
+    // systems that also host other services (or are workstations).
+    // "The range of the nice value is +19 (low priority) to -20 (high
+    //  priority).  Attempts to set a nice value outside the range are
+    //  clamped to the range." (from `man 2 nice`)
     service::process::piped(
-        "sudo",
+        "nice",
         |process| {
             process
-                .args(["nice", "-n20", "boulder", "build", "-p", "avalanche", "--update", "-o"])
+                .args(["-n19", "boulder", "build", "-p", "avalanche", "--update", "-o"])
                 .arg(asset_dir)
                 .arg("--config-dir")
                 .arg(work_dir.join("etc/boulder"))
