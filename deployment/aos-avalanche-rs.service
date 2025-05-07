@@ -8,11 +8,10 @@ WantedBy=multi-user.target
 [Service]
 Type=simple
 WorkingDirectory=/srv/avalanche-rs/avalanche/
-# ensure group-writeable files are created
+# Ensure group-writeable files are created
 UMask=0002
-#ExecStart=/usr/bin/script -e -c '/srv/avalanche-rs/avalanche.bin' /dev/null
-# Define ports explicitly
-ExecStart=/srv/avalanche-rs/avalanche/avalanche.app
+# Ensure that processes executed in boulder believe they have a processing terminal
+ExecStart=/usr/bin/script -e -c '/srv/avalanche-rs/avalanche/avalanche.app' /dev/null
 StandardOutput=journal
 User=avalanche-rs
 Group=avalanche-rs
