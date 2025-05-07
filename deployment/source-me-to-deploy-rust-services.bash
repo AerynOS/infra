@@ -43,7 +43,7 @@ deploy-service () {
   sudo systemctl daemon-reload
   # avalanche no longer runs rootful
   # [[ "${_svc}" == "avalanche" ]] && deploy-avalanche-service
-  echo -e "\nDid you remember set up config.toml files and private/public keys?\n"
+  echo -e "\nDid you remember to set up config.toml files and private/public keys?\n"
 }
 
 
