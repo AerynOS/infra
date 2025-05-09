@@ -425,7 +425,7 @@ header h1 {
     color: var(--link-color);
     text-decoration: none;
     font-size: 0.9em;
-    min-width: 2.5em;
+    min-width: 1.5em;
     text-align: center;
 }
 
@@ -493,6 +493,10 @@ header h1 {
 
     .tasks__list__item__timing {
         text-align: left;
+    }
+
+    .page-link {
+        min-width: 2.5em;
     }
 }
 
