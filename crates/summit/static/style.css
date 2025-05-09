@@ -189,12 +189,12 @@ header h1 {
 
 .overview-recent__list__item h4 {
     margin: 0;
-    color: white;
+    color: var(--body-text-color);
 }
 
 .tasks-total-filter {
     padding: 24px 0;
-    color: white;
+    color: var(--body-text-color);
     display: flex;
     flex-direction: column;
     gap: 24px;
