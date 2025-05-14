@@ -7,8 +7,8 @@ use service::{
     grpc::{
         self,
         summit::{
-            BuilderFinished, BuilderLog, BuilderStatus, BuilderStreamIncoming, BuilderStreamOutgoing, ImportRequest,
-            RetryRequest, builder_stream_incoming,
+            BuilderBusy, BuilderFinished, BuilderLog, BuilderStatus, BuilderStreamIncoming, BuilderStreamOutgoing,
+            ImportRequest, RetryRequest, builder_stream_incoming,
             summit_service_server::{SummitService, SummitServiceServer},
         },
     },
@@ -297,6 +297,18 @@ async fn builder(
                         builder::Message::BuildFailed {
                             task_id: (task_id as i64).into(),
                             log_path,
+                        },
+                    ));
+                }
+                builder_stream_incoming::Event::Busy(BuilderBusy {
+                    requested_task_id,
+                    in_progress_task_id,
+                }) => {
+                    let _ = state.worker.send(worker::Message::Builder(
+                        endpoint_id,
+                        builder::Message::Busy {
+                            requested: (requested_task_id as i64).into(),
+                            in_progress: (in_progress_task_id as i64).into(),
                         },
                     ));
                 }

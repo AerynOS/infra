@@ -10,8 +10,8 @@ use service::{
     grpc::{
         collectable::Collectable,
         summit::{
-            BuilderFinished, BuilderLog, BuilderStatus, BuilderStreamIncoming, BuilderUpload, builder_stream_incoming,
-            builder_stream_outgoing,
+            BuilderBusy, BuilderFinished, BuilderLog, BuilderStatus, BuilderStreamIncoming, BuilderUpload,
+            builder_stream_incoming, builder_stream_outgoing,
         },
     },
 };
@@ -135,8 +135,16 @@ async fn connect(state: &State) -> Result<()> {
                         builder_stream_outgoing::Event::Build(request) => {
                             let mut build_guard = building.lock().await;
 
-                            if build_guard.is_some() {
+                            if let Some(in_progress) = *build_guard {
                                 warn!("Build already in progress, ignoring");
+                                let _ = sender
+                                    .send(BuilderStreamIncoming {
+                                        event: Some(builder_stream_incoming::Event::Busy(BuilderBusy {
+                                            requested_task_id: request.task_id,
+                                            in_progress_task_id: in_progress,
+                                        })),
+                                    })
+                                    .await;
                                 continue;
                             }
 

@@ -22,6 +22,7 @@ message BuilderStreamIncoming {
     BuilderLog build_log = 3;
     BuilderFinished build_succeeded = 4;
     uint64 build_failed = 5;
+    BuilderBusy busy = 6;
   }
 }
 
@@ -53,6 +54,11 @@ message BuilderLog {
 message BuilderFinished {
   uint64 task_id = 1;
   repeated collectable.Collectable collectables = 2;
+}
+
+message BuilderBusy {
+  uint64 requested_task_id = 1;
+  uint64 in_progress_task_id = 2;
 }
 
 message BuilderUpload {
