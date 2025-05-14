@@ -42,7 +42,8 @@ pub struct Task {
     pub allocated_builder: Option<endpoint::Id>,
     pub log_path: Option<String>,
     pub blocked_by: Vec<String>,
-    pub started: DateTime<Utc>,
+    pub added: DateTime<Utc>,
+    pub started: Option<DateTime<Utc>>,
     pub updated: DateTime<Utc>,
     pub ended: Option<DateTime<Utc>>,
     pub duration: Option<i64>,
@@ -212,12 +213,18 @@ pub async fn create_missing(
 pub async fn set_status(tx: &mut Transaction, task_id: task::Id, status: Status) -> Result<()> {
     let ended = if !status.is_open() { ", ended = unixepoch()" } else { "" };
 
+    let started = if status == Status::Building {
+        ", started = unixepoch()"
+    } else {
+        ""
+    };
+
     let query = format!(
         "
         UPDATE task
         SET
           status = ?,
-          updated = unixepoch(){ended}
+          updated = unixepoch(){ended}{started}
         WHERE task_id = ?;
         ",
     );

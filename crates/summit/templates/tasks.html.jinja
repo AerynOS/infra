@@ -38,9 +38,14 @@
                         {% if task.ended %}
                             <span>Ended @ {{ task.ended }}</span>
                             <span>{{ task.duration | format_duration }} on {{ task.allocated_builder }}</span>
-                        {% else %}
+                        {% elif task.started %}
                             <span>Started @ {{ task.started }}</span>
                             <span>on {{ task.allocated_builder }}</span>
+                        {% else %}
+                            <span>Added @ {{ task.added }}</span>
+                            {% if task.allocated_builder %}
+                                <span>on {{ task.allocated_builder }}</span>
+                            {% endif %}
                         {% endif %}
                     </div>
                     <div class="tasks__list__item__arch">
