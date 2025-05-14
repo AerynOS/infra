@@ -67,6 +67,8 @@ pub struct Remote {
     pub role: Role,
     /// Bearer token assigned to us by the remote endpoint
     pub bearer_token: VerifiedToken,
+    /// Remote description
+    pub description: String,
 }
 
 /// A received enrollment request
@@ -220,6 +222,7 @@ async fn enroll(state: &State, target: Target, ourself: Issuer) -> Result<(), Er
         account,
         remote_account: verified_token.decoded.payload.account_id.into(),
         role: issuer_role,
+        description: Some(issuer.description.clone()),
     }
     .save(&mut tx)
     .await
@@ -287,6 +290,7 @@ impl Received {
             account: account_id,
             remote_account: self.remote.bearer_token.decoded.payload.account_id.into(),
             role: self.remote.role,
+            description: Some(self.remote.description),
         };
         endpoint.save(&mut tx).await.map_err(Error::CreateEndpoint)?;
 

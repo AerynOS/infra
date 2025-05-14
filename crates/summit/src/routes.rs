@@ -7,6 +7,7 @@ use axum::{
 use color_eyre::eyre::{self, Context};
 use http::StatusCode;
 use serde::Deserialize;
+use service::Endpoint;
 use snafu::Snafu;
 use strum::IntoEnumIterator;
 
@@ -55,6 +56,7 @@ pub async fn tasks(
     }
 
     let projects = project::list(&mut conn).await.context("list projects")?;
+    let endpoints = Endpoint::list(&mut *conn).await.context("list endpoints")?;
     let task_query = task::query(&mut conn, params).await.context("query tasks")?;
 
     let statuses = task::Status::iter().collect::<Vec<_>>();
@@ -69,6 +71,7 @@ pub async fn tasks(
         "tasks.html.jinja",
         minijinja::context! {
             projects,
+            endpoints,
             statuses,
             selected_status,
             page,

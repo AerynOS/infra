@@ -2,6 +2,7 @@ use axum::response::Html;
 use http::StatusCode;
 use minijinja::{Environment, Value, value::ViaDeserialize};
 use serde::Serialize;
+use service::{Endpoint, endpoint};
 
 use crate::Project;
 
@@ -18,6 +19,7 @@ fn env() -> Environment<'static> {
     let mut env = Environment::new();
     env.add_filter("repository", repository_filter);
     env.add_filter("profile", profile_filter);
+    env.add_filter("endpoint", endpoint_filter);
     env.add_filter("format_duration", format_duration_filter);
 
     env
@@ -58,6 +60,15 @@ fn profile_filter(projects: ViaDeserialize<Vec<Project>>, id: i64) -> Option<Val
         .iter()
         .find_map(|p| p.profiles.iter().find(|p| p.id == id.into()))
         .map(Value::from_serialize)
+}
+
+fn endpoint_filter(
+    endpoints: ViaDeserialize<Vec<Endpoint>>,
+    id: ViaDeserialize<Option<endpoint::Id>>,
+) -> Option<Value> {
+    let id = id.0?;
+
+    endpoints.iter().find(|e| e.id == id).map(Value::from_serialize)
 }
 
 fn format_duration_filter(value: Value) -> Result<Value, minijinja::Error> {
