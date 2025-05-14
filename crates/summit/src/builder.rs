@@ -35,12 +35,17 @@ pub enum Message {
         task_id: task::Id,
         log_path: Option<PathBuf>,
     },
+    Busy {
+        requested: task::Id,
+        in_progress: task::Id,
+    },
 }
 
 #[derive(Debug)]
 pub enum Event {
     Connected,
     BuildFailed { task_id: task::Id },
+    BuildRequeued,
 }
 
 #[derive(Debug)]
@@ -68,7 +73,7 @@ impl Builder {
                 ..
             }) => Status::Idle,
             Some(Connection {
-                status: Connected::Building,
+                status: Connected::Building { .. },
                 ..
             }) => Status::Building,
             None => Status::Disconnected,
@@ -117,14 +122,14 @@ impl Builder {
             .await
             .context("send builder stream message")?;
 
-        connection.status = Connected::Building;
+        connection.status = Connected::Building { task: queued.task.id };
 
         let mut tx = state.service_db.begin().await.context("begin db tx")?;
 
         task::set_status(&mut tx, queued.task.id, task::Status::Building)
             .await
             .context("set status")?;
-        task::set_allocated_builder(&mut tx, queued.task.id, &self.endpoint)
+        task::set_allocated_builder(&mut tx, queued.task.id, Some(self.endpoint))
             .await
             .context("set builder")?;
 
@@ -161,7 +166,7 @@ impl Builder {
                     // TODO: Invalidate tasks which still show as building
                     // on this builder that aren't this one
                     connection.status = match building {
-                        Some(_) => Connected::Building,
+                        Some(task) => Connected::Building { task },
                         None => Connected::Idle,
                     };
                 }
@@ -293,6 +298,25 @@ impl Builder {
 
                 return Ok(Some(Event::BuildFailed { task_id }));
             }
+            Message::Busy { requested, in_progress } => {
+                let connection = self.connection.as_mut().ok_or_eyre("builder not connected")?;
+                connection.status = Connected::Building { task: in_progress };
+
+                let mut tx = state.service_db.begin().await.context("begin db tx")?;
+
+                task::set_status(&mut tx, requested, task::Status::New)
+                    .await
+                    .context("set status")?;
+                task::set_allocated_builder(&mut tx, requested, None)
+                    .await
+                    .context("set builder")?;
+
+                tx.commit().await.context("commit tx")?;
+
+                info!(task = %requested, "Build requeued, builder is busy");
+
+                return Ok(Some(Event::BuildRequeued));
+            }
         }
 
         Ok(None)
@@ -320,7 +344,10 @@ struct Connection {
 #[derive(Debug)]
 enum Connected {
     Idle,
-    Building,
+    #[allow(dead_code)]
+    Building {
+        task: task::Id,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
