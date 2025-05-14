@@ -347,6 +347,9 @@ impl Manager {
 
                     return Ok(true);
                 }
+                builder::Event::BuildRequeued => {
+                    return Ok(true);
+                }
             }
         }
 

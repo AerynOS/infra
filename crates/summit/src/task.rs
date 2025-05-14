@@ -258,7 +258,11 @@ pub async fn set_log_path(tx: &mut Transaction, task_id: task::Id, log_path: &Pa
     Ok(())
 }
 
-pub async fn set_allocated_builder(tx: &mut Transaction, task_id: task::Id, builder: &endpoint::Id) -> Result<()> {
+pub async fn set_allocated_builder(
+    tx: &mut Transaction,
+    task_id: task::Id,
+    builder: Option<endpoint::Id>,
+) -> Result<()> {
     sqlx::query(
         "
         UPDATE task
@@ -268,7 +272,7 @@ pub async fn set_allocated_builder(tx: &mut Transaction, task_id: task::Id, buil
         WHERE task_id = ?;
         ",
     )
-    .bind(Uuid::from(*builder))
+    .bind(builder.map(Uuid::from))
     .bind(i64::from(task_id))
     .execute(tx.as_mut())
     .await
