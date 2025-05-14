@@ -115,6 +115,7 @@ async fn enroll(state: Arc<State>, request: tonic::Request<EnrollmentRequest>) -
             public_key,
             role: issuer_role,
             bearer_token: verified_token,
+            description: issuer.description.clone(),
         },
     };
 

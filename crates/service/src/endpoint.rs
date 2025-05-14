@@ -25,7 +25,6 @@ pub(crate) mod service;
 
 /// Unique identifier of an [`Endpoint`]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, From, Into)]
-#[serde(try_from = "&str", into = "String")]
 pub struct Id(Uuid);
 
 impl Id {
@@ -64,7 +63,7 @@ impl From<Id> for String {
 }
 
 /// Details of a remote endpoint (service) that we are connected to
-#[derive(Debug, Clone, Serialize, FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct Endpoint {
     /// Unique identifier of the endpoint
     #[sqlx(rename = "endpoint_id", try_from = "Uuid")]
@@ -88,6 +87,8 @@ pub struct Endpoint {
     /// Endpoint role
     #[sqlx(try_from = "&'a str")]
     pub role: Role,
+    /// Description provided by endpoint
+    pub description: Option<String>,
 }
 
 impl Endpoint {
@@ -105,7 +106,8 @@ impl Endpoint {
               error,
               account_id,
               remote_account_id,
-              role
+              role,
+              description
             FROM endpoint
             WHERE endpoint_id = ?;
             ",
@@ -131,7 +133,8 @@ impl Endpoint {
               error,
               account_id,
               remote_account_id,
-              role
+              role,
+              description
             FROM endpoint
             WHERE account_id = ?;
             ",
@@ -155,16 +158,18 @@ impl Endpoint {
               error,
               account_id,
               remote_account_id,
-              role
+              role,
+              description
             )
-            VALUES (?,?,?,?,?,?,?)
+            VALUES (?,?,?,?,?,?,?,?)
             ON CONFLICT(account_id) DO UPDATE SET 
               host_address=excluded.host_address,
               status=excluded.status,
               error=excluded.error,
               account_id=excluded.account_id,
               remote_account_id=excluded.remote_account_id,
-              role=excluded.role;
+              role=excluded.role,
+              description=excluded.description;
             ",
         )
         .bind(self.id.0)
@@ -174,6 +179,7 @@ impl Endpoint {
         .bind(Uuid::from(self.account))
         .bind(Uuid::from(self.remote_account))
         .bind(self.role.to_string())
+        .bind(self.description.as_ref())
         .execute(tx.as_mut())
         .await?;
 
@@ -194,7 +200,8 @@ impl Endpoint {
               error,
               account_id,
               remote_account_id,
-              role
+              role,
+              description
             FROM endpoint;
             ",
         )
@@ -273,7 +280,7 @@ impl Tokens {
 }
 
 /// Status of the [`Endpoint`]
-#[derive(Debug, Clone, Copy, strum::Display, strum::EnumString, Serialize)]
+#[derive(Debug, Clone, Copy, strum::Display, strum::EnumString, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 #[strum(serialize_all = "kebab-case")]
 pub enum Status {

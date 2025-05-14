@@ -25,6 +25,11 @@
 
             {% for task in tasks %}
                 {% set profile = projects | profile(task.profile_id) %}
+                {% set endpoint = endpoints | endpoint(task.allocated_builder) %}
+
+                {% if endpoint.description is not none -%}
+                    {% set builder_description = endpoint.description ~ ' ' -%}
+                {% endif -%}
 
                 <li class="tasks__list__item">
                     <code style="display:none">{{ task }}</code>
@@ -37,10 +42,10 @@
                     <div class="tasks__list__item__timing">
                         {% if task.ended %}
                             <span>Ended @ {{ task.ended }}</span>
-                            <span>{{ task.duration | format_duration }} on {{ task.allocated_builder }}</span>
+                            <span>{{ task.duration | format_duration }} on {{builder_description}}[{{ task.allocated_builder }}]</span>
                         {% else %}
                             <span>Started @ {{ task.started }}</span>
-                            <span>on {{ task.allocated_builder }}</span>
+                            <span>on {{builder_description}}[{{ task.allocated_builder }}]</span>
                         {% endif %}
                     </div>
                     <div class="tasks__list__item__arch">
