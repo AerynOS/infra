@@ -82,6 +82,8 @@ pub async fn tasks(
             endpoints,
             statuses,
             selected_status,
+            selected_sort,
+            selected_order,
             page,
             total_pages,
             limit,
