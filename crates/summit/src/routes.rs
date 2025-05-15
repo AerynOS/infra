@@ -31,8 +31,8 @@ pub struct TasksQuery {
     pub page: Option<NonZeroU32>,
     pub per_page: Option<u32>,
     pub status: Option<task::Status>,
-    pub sort: Option<task::SortField>,
-    pub order: Option<task::SortOrder>,
+    pub sort: Option<task::query::SortField>,
+    pub order: Option<task::query::SortOrder>,
 }
 
 pub async fn tasks(

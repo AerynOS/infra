@@ -1,13 +1,29 @@
 use chrono::{DateTime, Utc};
 use color_eyre::eyre::{Context, Result};
 use itertools::Itertools;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sqlx::{Sqlite, SqliteConnection, prelude::FromRow, query::QueryAs, sqlite::SqliteArguments};
 use uuid::Uuid;
 
 use crate::{profile, project, repository};
 
-use super::{Id, SortField, SortOrder, Status, Task};
+use super::{Id, Status, Task};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, strum::Display, strum::EnumString)]
+#[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
+pub enum SortField {
+    Ended,
+    Build,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, strum::Display, strum::EnumString)]
+#[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "UPPERCASE")]
+pub enum SortOrder {
+    Asc,
+    Desc,
+}
 
 #[derive(Debug, Default)]
 pub struct Params {
