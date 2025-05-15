@@ -1,5 +1,4 @@
 -- Add migration script here
-
 CREATE TABLE IF NOT EXISTS project (
     project_id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
@@ -14,9 +13,9 @@ CREATE TABLE IF NOT EXISTS profile (
     index_uri TEXT NOT NULL,
     status TEXT NOT NULL,
     project_id INT NOT NULL,
-    UNIQUE(project_id, name),
-    UNIQUE(project_id, index_uri),
-    FOREIGN KEY(project_id) REFERENCES project(project_id) ON DELETE CASCADE
+    UNIQUE (project_id, name),
+    UNIQUE (project_id, index_uri),
+    FOREIGN KEY (project_id) REFERENCES project (project_id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS profile_remote (
@@ -25,7 +24,7 @@ CREATE TABLE IF NOT EXISTS profile_remote (
     name TEXT NOT NULL,
     priority UNSIGNED BIG INT NOT NULL,
     PRIMARY KEY (profile_id, index_uri),
-    FOREIGN KEY(profile_id) REFERENCES profile(profile_id) ON DELETE CASCADE
+    FOREIGN KEY (profile_id) REFERENCES profile (profile_id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS repository (
@@ -38,9 +37,9 @@ CREATE TABLE IF NOT EXISTS repository (
     branch TEXT,
     status TEXT NOT NULL,
     project_id INT NOT NULL,
-    UNIQUE(project_id, name),
-    UNIQUE(project_id, origin_uri),
-    FOREIGN KEY(project_id) REFERENCES project(project_id) ON DELETE CASCADE
+    UNIQUE (project_id, name),
+    UNIQUE (project_id, origin_uri),
+    FOREIGN KEY (project_id) REFERENCES project (project_id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS task (
@@ -58,17 +57,17 @@ CREATE TABLE IF NOT EXISTS task (
     status TEXT NOT NULL,
     allocated_builder TEXT,
     log_path TEXT,
-    started BIGINT NOT NULL DEFAULT (unixepoch()),
-    updated BIGINT NOT NULL DEFAULT (unixepoch()),
+    started BIGINT NOT NULL DEFAULT (unixepoch ()),
+    updated BIGINT NOT NULL DEFAULT (unixepoch ()),
     ended BIGINT,
-    FOREIGN KEY(project_id) REFERENCES project(project_id) ON DELETE CASCADE,
-    FOREIGN KEY(profile_id) REFERENCES profile(profile_id) ON DELETE CASCADE,
-    FOREIGN KEY(repository_id) REFERENCES repository(repository_id) ON DELETE CASCADE
+    FOREIGN KEY (project_id) REFERENCES project (project_id) ON DELETE CASCADE,
+    FOREIGN KEY (profile_id) REFERENCES profile (profile_id) ON DELETE CASCADE,
+    FOREIGN KEY (repository_id) REFERENCES repository (repository_id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS task_blockers (
     task_id INT NOT NULL,
     blocker TEXT NOT NULL,
     PRIMARY KEY (task_id, blocker),
-    FOREIGN KEY(task_id) REFERENCES task(task_id) ON DELETE CASCADE
+    FOREIGN KEY (task_id) REFERENCES task (task_id) ON DELETE CASCADE
 );

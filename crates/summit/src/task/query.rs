@@ -141,7 +141,8 @@ pub async fn query(conn: &mut SqliteConnection, params: Params) -> Result<Query>
         status: Status,
         allocated_builder: Option<Uuid>,
         log_path: Option<String>,
-        started: DateTime<Utc>,
+        added: DateTime<Utc>,
+        started: Option<DateTime<Utc>>,
         updated: DateTime<Utc>,
         ended: Option<DateTime<Utc>>,
     }
@@ -166,6 +167,7 @@ pub async fn query(conn: &mut SqliteConnection, params: Params) -> Result<Query>
           status,
           allocated_builder,
           log_path,
+          added,
           started,
           updated,
           ended
@@ -212,12 +214,13 @@ pub async fn query(conn: &mut SqliteConnection, params: Params) -> Result<Query>
             status: row.status,
             allocated_builder: row.allocated_builder.map(From::from),
             log_path: row.log_path,
+            added: row.added,
             started: row.started,
             updated: row.updated,
             ended: row.ended,
-            duration: match row.ended {
-                Some(end) => Some((end - row.started).num_seconds()),
-                None => None,
+            duration: match (row.started, row.ended) {
+                (Some(start), Some(end)) => Some((end - start).num_seconds()),
+                _ => None,
             },
             // Fetched next
             blocked_by: vec![],

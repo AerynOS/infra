@@ -42,10 +42,12 @@
                     <div class="tasks__list__item__timing">
                         {% if task.ended %}
                             <span>Ended @ {{ task.ended }}</span>
-                            <span>{{ task.duration | format_duration }} on {{builder_description}}[{{ task.allocated_builder }}]</span>
-                        {% else %}
+                            <span title="{{ task.allocated_builder }}">{{ task.duration | format_duration }} on {{ builder_description }}</span>
+                        {% elif task.started %}
                             <span>Started @ {{ task.started }}</span>
-                            <span>on {{builder_description}}[{{ task.allocated_builder }}]</span>
+                            <span title="{{ task.allocated_builder }}">on {{ builder_description }}</span>
+                        {% else %}
+                            <span>Added @ {{ task.added }}</span>
                         {% endif %}
                     </div>
                     <div class="tasks__list__item__arch">
