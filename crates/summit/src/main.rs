@@ -1,7 +1,11 @@
 use std::path::Path;
 use std::{net::IpAddr, path::PathBuf};
 
-use axum::routing::get;
+use axum::{
+    extract::Request,
+    middleware::{self, Next},
+    routing::get,
+};
 use clap::Parser;
 use color_eyre::eyre::Context;
 use service::{Server, State, endpoint::Role};
@@ -32,6 +36,14 @@ mod task;
 mod templates;
 mod worker;
 
+tokio::task_local! {
+    static USE_MOCK_DATA: bool;
+}
+
+fn use_mock_data() -> bool {
+    USE_MOCK_DATA.try_with(|b| *b).unwrap_or(false)
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let Args {
@@ -42,6 +54,7 @@ async fn main() -> Result<()> {
         root,
         seed_from,
         static_dir,
+        use_mock_data,
     } = Args::parse();
 
     let config = Config::load(config.unwrap_or_else(|| root.join("config.toml"))).await?;
@@ -74,6 +87,9 @@ async fn main() -> Result<()> {
             axum::Router::new()
                 .route("/", get(routes::index))
                 .route("/tasks", get(routes::tasks))
+                .route_layer(middleware::from_fn(move |request: Request, next: Next| {
+                    USE_MOCK_DATA.scope(use_mock_data, next.run(request))
+                }))
                 .nest_service("/static", serve_static)
                 .nest_service("/logs", serve_logs)
                 .fallback(get(routes::fallback))
@@ -104,4 +120,6 @@ struct Args {
     seed_from: Option<PathBuf>,
     #[arg(long = "static")]
     static_dir: Option<PathBuf>,
+    #[arg(long)]
+    use_mock_data: bool,
 }

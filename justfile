@@ -34,7 +34,12 @@ down *ARGS:
 
 # Quickly view summit front-end changes (DX feature)
 summit-dev *ARGS:
-	cargo run -p summit --no-default-features --features templates-autoreload -- -c ./test/summit/config.toml --root $(mktemp -d) --static ./crates/summit/static {{ARGS}}
+	cargo run -p summit --no-default-features --features templates-autoreload -- \
+		-c ./test/summit/config.toml \
+		--root $(mktemp -d) \
+		--static ./crates/summit/static \
+		--use-mock-data \
+		{{ARGS}}
 
 # Do a fresh build of 'avalanche|summit|vessel', stop it, reset it, deploy it, and start it.
 reset-then-deploy *ARGS:
