@@ -1,0 +1,5 @@
+ALTER TABLE task
+RENAME COLUMN started TO added;
+
+ALTER TABLE task
+ADD COLUMN started BIGINT;

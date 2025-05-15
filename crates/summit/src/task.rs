@@ -215,6 +215,8 @@ pub async fn set_status(tx: &mut Transaction, task_id: task::Id, status: Status)
 
     let started = if status == Status::Building {
         ", started = unixepoch()"
+    } else if status == Status::New {
+        ", started = null"
     } else {
         ""
     };

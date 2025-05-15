@@ -48,9 +48,6 @@
                             <span title="{{ task.allocated_builder }}">on {{ builder_description }}</span>
                         {% else %}
                             <span>Added @ {{ task.added }}</span>
-                            {% if task.allocated_builder %}
-                                <span title="{{ task.allocated_builder }}">on {{ builder_description }}</span>
-                            {% endif %}
                         {% endif %}
                     </div>
                     <div class="tasks__list__item__arch">
