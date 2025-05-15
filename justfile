@@ -42,7 +42,7 @@ reset-then-deploy *ARGS:
 	cargo build --profile infratest -p {{ARGS}} \
 	&& pushd deployment \
 	&& source source-me-to-deploy-rust-services.bash >/dev/null \
-	&& sudo systemctl stop aos-{{ARGS}}-rs \
+	&& { sudo systemctl stop aos-{{ARGS}}-rs || true ; } \
 	&& reset-service-state {{ARGS}} \
 	&& deploy-service {{ARGS}} \
 	&& echo -e "Run 'sudo systemctl start aos-{{ARGS}}-rs' to start {{ARGS}}\n"  \

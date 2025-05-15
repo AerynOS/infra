@@ -5,6 +5,7 @@
 create-service-user () {
   local _svc="$1"
   [[ ! -n "${_svc}" || "${_svc}" = "" ]] && return 1
+  # create a switch statement here?
 
   # create service users and home dirs
   sudo useradd --create-home --home-dir /srv/${_svc}-rs --user-group --system --add-subids-for-system ${_svc}-rs
@@ -13,13 +14,15 @@ create-service-user () {
   echo -e "\nNow Relog to ensure that your user is part of the ${_svc}-rs group.\n"
 }
 
-# deploy-avalanche-service ()
-# {
+deploy-avalanche-service ()
+{
 #  echo -e "\nAllow avalanche-rs user to call /usr/bin/boulder w/no password:"
 #  echo "avalanche-rs ALL = NOPASSWD: /usr/bin/nice, /usr/bin/boulder" | sudo tee /etc/sudoers.d/avalanche-rs-boulder
 #  sudo ls -laF /etc/sudoers.d/avalanche-rs-boulder
-# }
-
+  [[ -d /srv/avalanche-rs/.cache/boulder ]] \
+  && echo -e "\nCleaning out avalanche-rs user boulder cache..." \
+  && rm -rf /srv/avalanche-rs/.cache/boulder/*
+}
 
 deploy-service () {
   local _svc="$1"
@@ -41,8 +44,8 @@ deploy-service () {
   sudo cp -v aos-${_svc}-rs.service /etc/systemd/system/
   ls -la /etc/systemd/system/aos-${_svc}-rs.service
   sudo systemctl daemon-reload
-  # avalanche no longer runs rootful
-  # [[ "${_svc}" == "avalanche" ]] && deploy-avalanche-service
+  # delete boulder cache if we're resetting avalanche
+  [[ "${_svc}" == "avalanche" ]] && deploy-avalanche-service
   echo -e "\nDid you remember to set up config.toml files and private/public keys?\n"
 }
 
