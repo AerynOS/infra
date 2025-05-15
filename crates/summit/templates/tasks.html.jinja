@@ -9,6 +9,18 @@
                 <a href="/tasks?status={{ status }}">{{ status }}</a>
             {% endfor %}
         </span>
+        <span class="tasks-total-filter__sort">
+            <span>Sort by:</span>
+            <div class="custom-select-wrapper">
+                <select class="custom-select" id="taskSortSelect">
+                    <option value="">Default</option>
+                    <option value="sort=ended&order=desc">Newest Finished</option>
+                    <option value="sort=ended&order=asc">Oldest Finished</option>
+                    <option value="sort=build&order=asc">Shortest Build Time</option>
+                    <option value="sort=build&order=desc">Longest Build Time</option>
+                </select>
+            </div>
+        </span>
     </div>
 
     <div class="tasks">
@@ -115,4 +127,31 @@
         </nav>
     {% endif %}
 
+{% endblock %}
+
+{% block javascript %}
+    <script>
+        const taskSortSelect = document.getElementById('taskSortSelect');
+
+        document.addEventListener('DOMContentLoaded', function() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const sort = urlParams.get('sort');
+            const order = urlParams.get('order');
+
+            if (sort && order) {
+                const queryValue = `sort=${sort}&order=${order}`;
+
+                for (const option of taskSortSelect.options) {
+                    if (option.value === queryValue) {
+                        option.selected = true;
+                        break;
+                    }
+                }
+            }
+        });
+
+        taskSortSelect.addEventListener('change', function(e) {
+            window.location.href = '?' + this.value;
+        });
+    </script>
 {% endblock %}
