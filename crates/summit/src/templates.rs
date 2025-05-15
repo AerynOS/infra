@@ -80,5 +80,5 @@ fn format_duration_filter(value: Value) -> Result<Value, minijinja::Error> {
     let minutes = (secs % 3600) / 60;
     let seconds = secs % 60;
 
-    Ok(Value::from(format!("{:02}h {:02}m {:02}s", hours, minutes, seconds)))
+    Ok(Value::from(format!("{hours:02}h {minutes:02}m {seconds:02}s")))
 }
