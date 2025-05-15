@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::{profile, project, repository};
 
-use super::{Id, Status, Task};
+use super::{Id, SortField, SortOrder, Status, Task};
 
 #[derive(Debug, Default)]
 pub struct Params {
@@ -16,6 +16,8 @@ pub struct Params {
     source_path: Option<String>,
     offset: Option<i64>,
     limit: Option<u32>,
+    sort_field: Option<SortField>,
+    sort_order: Option<SortOrder>,
 }
 
 impl Params {
@@ -51,6 +53,14 @@ impl Params {
         }
     }
 
+    pub fn sort(self, field: SortField, order: SortOrder) -> Self {
+        Self {
+            sort_field: Some(field),
+            sort_order: Some(order),
+            ..self
+        }
+    }
+
     fn where_clause(&self) -> String {
         if self.id.is_some() || self.statuses.is_some() {
             let conditions = self
@@ -68,6 +78,55 @@ impl Params {
             format!("WHERE {conditions}")
         } else {
             String::default()
+        }
+    }
+
+    fn sort_order_clause(&self) -> &'static str {
+        match (self.sort_field, self.sort_order) {
+            (None, _) => "ORDER BY added DESC, task_id DESC",
+            (Some(SortField::Ended), Some(SortOrder::Asc)) => {
+                "ORDER BY
+                (ended IS NULL),
+                ended ASC,
+                added DESC,
+                task_id DESC"
+            }
+            (Some(SortField::Ended), Some(SortOrder::Desc)) => {
+                "ORDER BY
+                (ended IS NULL),
+                ended DESC,
+                added DESC,
+                task_id DESC"
+            }
+            (Some(SortField::Build), Some(SortOrder::Asc)) => {
+                "ORDER BY
+                    (CASE
+                        WHEN started IS NULL OR ended IS NULL THEN 1
+                        ELSE 0
+                    END),
+                    (CASE
+                        WHEN started IS NOT NULL AND ended IS NOT NULL
+                        THEN ended - started
+                        ELSE NULL
+                    END) ASC,
+                    added DESC,
+                    task_id DESC"
+            }
+            (Some(SortField::Build), Some(SortOrder::Desc)) => {
+                "ORDER BY
+                    (CASE
+                        WHEN started IS NULL OR ended IS NULL THEN 1
+                        ELSE 0
+                    END),
+                    (CASE
+                        WHEN started IS NOT NULL AND ended IS NOT NULL
+                        THEN ended - started
+                        ELSE NULL
+                    END) DESC,
+                    added DESC,
+                    task_id DESC"
+            }
+            _ => "ORDER BY added DESC, task_id DESC",
         }
     }
 
@@ -149,6 +208,7 @@ pub async fn query(conn: &mut SqliteConnection, params: Params) -> Result<Query>
 
     let where_clause = params.where_clause();
     let limit_offset_clause = params.limit_offset_clause();
+    let sort_order_clause = params.sort_order_clause();
 
     let query_str = format!(
         "
@@ -173,7 +233,7 @@ pub async fn query(conn: &mut SqliteConnection, params: Params) -> Result<Query>
           ended
         FROM task
         {where_clause}
-        ORDER BY started DESC, task_id DESC
+        {sort_order_clause}
         {limit_offset_clause}
         ",
     );

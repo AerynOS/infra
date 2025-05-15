@@ -83,6 +83,22 @@ impl Status {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, strum::Display, strum::EnumString)]
+#[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
+pub enum SortField {
+    Ended,
+    Build,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, strum::Display, strum::EnumString)]
+#[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "UPPERCASE")]
+pub enum SortOrder {
+    Asc,
+    Desc,
+}
+
 #[derive(Debug, Clone)]
 pub struct Queued {
     pub task: Task,

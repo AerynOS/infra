@@ -1,4 +1,4 @@
-use std::{cmp::Ordering, iter, num::NonZeroU32};
+use std::{iter, num::NonZeroU32};
 
 use axum::{
     extract::{Query, State},
@@ -31,8 +31,8 @@ pub struct TasksQuery {
     pub page: Option<NonZeroU32>,
     pub per_page: Option<u32>,
     pub status: Option<task::Status>,
-    pub sort: Option<String>,
-    pub order: Option<String>,
+    pub sort: Option<task::SortField>,
+    pub order: Option<task::SortOrder>,
 }
 
 pub async fn tasks(
@@ -59,9 +59,13 @@ pub async fn tasks(
         params = params.statuses(iter::once(status));
     }
 
+    if let (Some(sort_field), Some(sort_order)) = (selected_sort, selected_order) {
+        params = params.sort(sort_field, sort_order);
+    }
+
     let projects = project::list(&mut conn).await.context("list projects")?;
     let endpoints = Endpoint::list(&mut *conn).await.context("list endpoints")?;
-    let mut task_query = task::query(&mut conn, params).await.context("query tasks")?;
+    let task_query = task::query(&mut conn, params).await.context("query tasks")?;
 
     let statuses = task::Status::iter().collect::<Vec<_>>();
     let total_pages = (task_query.total / limit as usize + 1) as u32;
@@ -70,16 +74,6 @@ pub async fn tasks(
     let start = page.saturating_sub(side_window).max(1);
     let end = (page + side_window).min(total_pages);
     let pages_to_show = (start..=end).collect::<Vec<u32>>();
-
-    if let (Some(sort), Some(order)) = (&selected_sort, &selected_order) {
-        let is_asc = order == "asc";
-
-        match sort.as_str() {
-            "ended" => sort_tasks_by_ended(&mut task_query, is_asc),
-            "build" => sort_tasks_by_build_time(&mut task_query, is_asc),
-            _ => {}
-        }
-    }
 
     Ok(render_html(
         "tasks.html.jinja",
@@ -100,36 +94,6 @@ pub async fn tasks(
 
 pub async fn fallback() -> impl IntoResponse {
     render_html("404.html.jinja", ())
-}
-
-fn sort_tasks_by_ended(task_query: &mut task::query::Query, is_asc: bool) {
-    task_query.tasks.sort_by(|a, b| match (a.ended, b.ended) {
-        (Some(a_time), Some(b_time)) => {
-            if is_asc {
-                a_time.cmp(&b_time)
-            } else {
-                b_time.cmp(&a_time)
-            }
-        }
-        (Some(_), None) => Ordering::Less,
-        (None, Some(_)) => Ordering::Greater,
-        (None, None) => Ordering::Equal,
-    });
-}
-
-fn sort_tasks_by_build_time(task_query: &mut task::query::Query, is_asc: bool) {
-    task_query.tasks.sort_by(|a, b| match (a.duration, b.duration) {
-        (Some(a_duration), Some(b_duration)) => {
-            if is_asc {
-                a_duration.cmp(&b_duration)
-            } else {
-                b_duration.cmp(&a_duration)
-            }
-        }
-        (Some(_), None) => Ordering::Less,
-        (None, Some(_)) => Ordering::Greater,
-        (None, None) => Ordering::Equal,
-    });
 }
 
 #[derive(Debug, Snafu)]
