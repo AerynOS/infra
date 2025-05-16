@@ -9,6 +9,18 @@
                 <a href="/tasks?status={{ status }}">{{ status }}</a>
             {% endfor %}
         </span>
+        <span class="tasks-total-filter__sort">
+            <span>Sort by:</span>
+            <div class="custom-select-wrapper">
+                <select class="custom-select" id="taskSortSelect">
+                    <option value="">Default</option>
+                    <option value="sort=ended&order=desc">Newest Finished</option>
+                    <option value="sort=ended&order=asc">Oldest Finished</option>
+                    <option value="sort=build&order=asc">Shortest Build Time</option>
+                    <option value="sort=build&order=desc">Longest Build Time</option>
+                </select>
+            </div>
+        </span>
     </div>
 
     <div class="tasks">
@@ -63,12 +75,15 @@
         {% if selected_status is not none -%}
             {% set and_status_filter = '&status=' ~ selected_status -%}
         {% endif -%}
+        {% if selected_sort is not none and selected_order is not none -%}
+            {% set and_sort_order = '&sort=' ~ selected_sort ~ '&order=' ~ selected_order -%}
+        {% endif -%}
         <nav class="pagination-wrap" aria-label="Pagination">
             <ul class="pagination">
 
                 {# Previous Button #}
                 <li class="page-item {% if page <= 1 %}disabled{% endif %}">
-                    <a class="page-link" href="?page={{ page - 1 }}{{ and_status_filter }}" aria-label="Previous">
+                    <a class="page-link" href="?page={{ page - 1 }}{{ and_status_filter }}{{ and_sort_order }}" aria-label="Previous">
                         <span aria-hidden="true">&laquo;</span>
                     </a>
                 </li>
@@ -76,7 +91,7 @@
                 {# First page + ellipsis if not in pages_to_show #}
                 {% if pages_to_show[0] > 1 %}
                     <li class="page-item">
-                        <a class="page-link" href="?page=1{{ and_status_filter }}">1</a>
+                        <a class="page-link" href="?page=1{{ and_status_filter }}{{ and_sort_order }}">1</a>
                     </li>
                     {% if pages_to_show[0] > 2 %}
                         <li class="page-item disabled">
@@ -88,7 +103,7 @@
                 {# Page Numbers #}
                 {% for p in pages_to_show %}
                     <li class="page-item {% if p == page %}active{% endif %}">
-                        <a class="page-link" href="?page={{ p }}{{ and_status_filter }}">{{ p }}</a>
+                        <a class="page-link" href="?page={{ p }}{{ and_status_filter }}{{ and_sort_order }}">{{ p }}</a>
                     </li>
                 {% endfor %}
 
@@ -100,13 +115,13 @@
                         </li>
                     {% endif %}
                     <li class="page-item">
-                        <a class="page-link" href="?page={{ total_pages }}{{ and_status_filter }}">{{ total_pages }}</a>
+                        <a class="page-link" href="?page={{ total_pages }}{{ and_status_filter }}{{ and_sort_order }}">{{ total_pages }}</a>
                     </li>
                 {% endif %}
 
                 {# Next Button #}
                 <li class="page-item {% if page >= total_pages %}disabled{% endif %}">
-                    <a class="page-link" href="?page={{ page + 1 }}{{ and_status_filter }}" aria-label="Next">
+                    <a class="page-link" href="?page={{ page + 1 }}{{ and_status_filter }}{{ and_sort_order }}" aria-label="Next">
                         <span aria-hidden="true">&raquo;</span>
                     </a>
                 </li>
@@ -115,4 +130,31 @@
         </nav>
     {% endif %}
 
+{% endblock %}
+
+{% block javascript %}
+    <script>
+        const taskSortSelect = document.getElementById('taskSortSelect');
+
+        document.addEventListener('DOMContentLoaded', function() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const sort = urlParams.get('sort');
+            const order = urlParams.get('order');
+
+            if (sort && order) {
+                const queryValue = `sort=${sort}&order=${order}`;
+
+                for (const option of taskSortSelect.options) {
+                    if (option.value === queryValue) {
+                        option.selected = true;
+                        break;
+                    }
+                }
+            }
+        });
+
+        taskSortSelect.addEventListener('change', function(e) {
+            window.location.href = '?' + this.value;
+        });
+    </script>
 {% endblock %}

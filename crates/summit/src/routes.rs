@@ -31,6 +31,8 @@ pub struct TasksQuery {
     pub page: Option<NonZeroU32>,
     pub per_page: Option<u32>,
     pub status: Option<task::Status>,
+    pub sort: Option<task::query::SortField>,
+    pub order: Option<task::query::SortOrder>,
 }
 
 pub async fn tasks(
@@ -50,9 +52,15 @@ pub async fn tasks(
     let mut params = task::query::Params::default().offset(offset).limit(limit);
 
     let selected_status = query.status;
+    let selected_sort = query.sort;
+    let selected_order = query.order;
 
     if let Some(status) = selected_status {
         params = params.statuses(iter::once(status));
+    }
+
+    if let (Some(sort_field), Some(sort_order)) = (selected_sort, selected_order) {
+        params = params.sort(sort_field, sort_order);
     }
 
     let projects = project::list(&mut conn).await.context("list projects")?;
@@ -74,6 +82,8 @@ pub async fn tasks(
             endpoints,
             statuses,
             selected_status,
+            selected_sort,
+            selected_order,
             page,
             total_pages,
             limit,
