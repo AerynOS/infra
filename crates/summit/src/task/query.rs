@@ -1,11 +1,13 @@
-use chrono::{DateTime, Utc};
+use std::sync::LazyLock;
+
+use chrono::{DateTime, TimeZone as _, Utc};
 use color_eyre::eyre::{Context, Result};
 use itertools::Itertools;
 use serde::Serialize;
 use sqlx::{Sqlite, SqliteConnection, prelude::FromRow, query::QueryAs, sqlite::SqliteArguments};
 use uuid::Uuid;
 
-use crate::{profile, project, repository};
+use crate::{profile, project, repository, use_mock_data};
 
 use super::{Id, Status, Task};
 
@@ -120,6 +122,10 @@ pub struct Query {
 }
 
 pub async fn query(conn: &mut SqliteConnection, params: Params) -> Result<Query> {
+    if use_mock_data() {
+        return Ok(query_mock_data(params));
+    }
+
     #[derive(FromRow)]
     struct Row {
         #[sqlx(rename = "task_id", try_from = "i64")]
@@ -261,4 +267,69 @@ pub async fn query(conn: &mut SqliteConnection, params: Params) -> Result<Query>
         tasks,
         total: total as usize,
     })
+}
+
+pub fn query_mock_data(params: Params) -> Query {
+    static MOCK_TASKS: LazyLock<Vec<Task>> = LazyLock::new(|| {
+        let a_start = Utc.with_ymd_and_hms(2025, 5, 15, 22, 10, 32).unwrap();
+        let a_end = Utc.with_ymd_and_hms(2025, 5, 15, 22, 16, 12).unwrap();
+
+        vec![Task {
+            id: 1.into(),
+            project_id: 1.into(),
+            profile_id: 1.into(),
+            repository_id: 1.into(),
+            slug: "pkg-a".to_owned(),
+            package_id: "a".to_owned(),
+            arch: "x86_64".to_owned(),
+            build_id: "build-id-a".to_owned(),
+            description: "dummy package a".to_owned(),
+            commit_ref: "abcdefg".to_owned(),
+            source_path: "idk/man".to_owned(),
+            status: Status::Completed,
+            allocated_builder: None,
+            log_path: None,
+            blocked_by: vec![],
+            added: Utc.with_ymd_and_hms(2025, 5, 15, 22, 0, 0).unwrap(),
+            started: Some(a_start),
+            updated: a_end,
+            ended: Some(a_end),
+            duration: Some((a_end - a_start).num_seconds()),
+        }]
+    });
+
+    let matched_tasks: Vec<_> = MOCK_TASKS
+        .iter()
+        .filter(|task| {
+            params.id.is_none_or(|id| id == task.id)
+                && params
+                    .statuses
+                    .as_deref()
+                    .is_none_or(|statuses| statuses.contains(&task.status))
+                && params
+                    .source_path
+                    .as_deref()
+                    .is_none_or(|source_path| source_path == task.source_path)
+        })
+        .collect();
+
+    let total = matched_tasks.len();
+
+    let tasks: Vec<_> = match (params.offset, params.limit) {
+        (Some(offset), Some(limit)) => matched_tasks
+            .into_iter()
+            .skip(offset as usize)
+            .take(limit as usize)
+            .cloned()
+            .collect(),
+        (Some(offset), None) => matched_tasks.into_iter().skip(offset as usize).cloned().collect(),
+        (None, Some(limit)) => matched_tasks.into_iter().take(limit as usize).cloned().collect(),
+        (None, None) => matched_tasks.into_iter().cloned().collect(),
+    };
+
+    Query {
+        count: tasks.len(),
+        tasks,
+        total,
+    }
 }
