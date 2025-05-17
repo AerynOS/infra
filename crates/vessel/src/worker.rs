@@ -17,7 +17,7 @@ use service::{
 };
 use sha2::{Digest, Sha256};
 use tokio::{sync::mpsc, time::Instant};
-use tracing::{Instrument, error, info, info_span};
+use tracing::{Instrument, error, info, info_span, warn};
 
 use crate::collection;
 
@@ -250,7 +250,8 @@ fn import_package(
             return Err(eyre!("Bump release number to {}", e.source_release + 1));
         }
         Some(e) if e.source_release as u64 == meta.source_release => {
-            return Err(eyre!("Cannot include build with identical release field"));
+            warn!("Cannot include build with identical release field");
+            return Ok(());
         }
         _ => {}
     }
