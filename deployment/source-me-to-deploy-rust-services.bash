@@ -21,7 +21,10 @@ deploy-avalanche-service ()
 #  sudo ls -laF /etc/sudoers.d/avalanche-rs-boulder
   [[ -d /srv/avalanche-rs/.cache/boulder ]] \
   && echo -e "\nCleaning out avalanche-rs user boulder cache..." \
-  && rm -rf /srv/avalanche-rs/.cache/boulder/*
+  && sudo rm -rf /srv/avalanche-rs/.cache/boulder
+  [[ -d /srv/avalanche-rs/.cache/moss ]] \
+  && echo -e "\nCleaning out avalanche-rs user moss cache..." \
+  && sudo rm -rf /srv/avalanche-rs/.cache/moss
 }
 
 deploy-service () {
@@ -36,6 +39,8 @@ deploy-service () {
   # copy binaries to service home dirs
   sudo cp -v ../target/infratest/${_svc} /srv/${_svc}-rs/${_svc}/${_svc}.app
   sudo chmod -c a+x /srv/${_svc}-rs/${_svc}/${_svc}.app
+  # delete boulder + moss cache if we're resetting avalanche
+  [[ "${_svc}" == "avalanche" ]] && deploy-avalanche-service
   # reset permissions
   sudo chown -Rc ${_svc}-rs:${_svc}-rs /srv/${_svc}-rs
   sudo chmod -Rc u+rwX,g+rwX,o+X /srv/${_svc}-rs/${_svc}
@@ -44,8 +49,7 @@ deploy-service () {
   sudo cp -v aos-${_svc}-rs.service /etc/systemd/system/
   ls -la /etc/systemd/system/aos-${_svc}-rs.service
   sudo systemctl daemon-reload
-  # delete boulder cache if we're resetting avalanche
-  [[ "${_svc}" == "avalanche" ]] && deploy-avalanche-service
+
   echo -e "\nDid you remember to set up config.toml files and private/public keys?\n"
 }
 
@@ -57,6 +61,7 @@ reset-service-state () {
   [[ -d ${_statedir} ]] && pushd ${_statedir} && rm -rf * && popd
   local _assetsdir="/srv/${_svc}-rs/${_svc}/assets/"
   [[ -d ${_assetsdir} ]] && pushd ${_assetsdir}/.. && rm -rf assets && popd
+
   tree -L 3 -apugDF --dirsfirst /srv/${_svc}-rs/
   echo -e "\n${_svc} state dir reset. NB: The service private key was not deleted.\n"
 }
