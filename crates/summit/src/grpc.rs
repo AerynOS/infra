@@ -8,7 +8,7 @@ use service::{
         self,
         summit::{
             BuilderBusy, BuilderFinished, BuilderLog, BuilderStatus, BuilderStreamIncoming, BuilderStreamOutgoing,
-            ImportRequest, RetryRequest, builder_stream_incoming,
+            FailRequest, ImportRequest, RetryRequest, builder_stream_incoming,
             summit_service_server::{SummitService, SummitServiceServer},
         },
     },
@@ -71,6 +71,12 @@ impl SummitService for Service {
         let state = self.state.clone();
 
         grpc::handle(request, async move |request| retry(state, request).await).await
+    }
+
+    async fn fail(&self, request: tonic::Request<FailRequest>) -> Result<tonic::Response<()>, tonic::Status> {
+        let state = self.state.clone();
+
+        grpc::handle(request, async move |request| fail(state, request).await).await
     }
 
     async fn refresh(&self, request: tonic::Request<()>) -> Result<tonic::Response<()>, tonic::Status> {
@@ -172,10 +178,37 @@ async fn retry(state: Arc<State>, request: tonic::Request<RetryRequest>) -> Resu
 
     info!(
         account = %account_id,
-        "Retry"
+        "Retry task"
     );
 
-    let _ = state.worker.send(worker::Message::Retry {
+    let _ = state.worker.send(worker::Message::RetryTask {
+        task_id: (request.into_inner().task_id as i64).into(),
+    });
+
+    Ok(())
+}
+
+#[tracing::instrument(
+    skip_all,
+    fields(
+        task_id = %request.get_ref().task_id,
+    )
+)]
+async fn fail(state: Arc<State>, request: tonic::Request<FailRequest>) -> Result<(), Error> {
+    let token = request
+        .extensions()
+        .get::<VerifiedToken>()
+        .cloned()
+        .ok_or(Error::MissingRequestToken)?;
+
+    let account_id = token.decoded.payload.account_id;
+
+    info!(
+        account = %account_id,
+        "Fail task"
+    );
+
+    let _ = state.worker.send(worker::Message::FailTask {
         task_id: (request.into_inner().task_id as i64).into(),
     });
 

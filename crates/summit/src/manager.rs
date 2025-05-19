@@ -300,7 +300,7 @@ impl Manager {
         Ok(())
     }
 
-    pub async fn retry(&mut self, task_id: task::Id) -> Result<()> {
+    pub async fn retry_task(&mut self, task_id: task::Id) -> Result<()> {
         let mut tx = self.begin().await.context("begin db tx")?;
 
         let task = task::query(tx.as_mut(), task::query::Params::default().id(task_id))
@@ -323,6 +323,38 @@ impl Manager {
         tx.commit().await.context("commit db tx")?;
 
         info!("Task marked for retry");
+
+        Ok(())
+    }
+
+    pub async fn fail_task(&mut self, task_id: task::Id) -> Result<()> {
+        let mut tx = self.begin().await.context("begin db tx")?;
+
+        let task = task::query(tx.as_mut(), task::query::Params::default().id(task_id))
+            .await
+            .context("get task")?
+            .tasks
+            .into_iter()
+            .next()
+            .ok_or_eyre("task is missing")?;
+
+        if !task.status.is_in_progress() {
+            warn!(status = %task.status, "Task isn't in progress and won't be failed");
+            return Ok(());
+        }
+
+        task::set_status(&mut tx, task_id, task::Status::Failed)
+            .await
+            .context("set task as import failed")?;
+
+        self.queue
+            .task_failed(&mut tx, task_id)
+            .await
+            .context("add queue blockers")?;
+
+        tx.commit().await.context("commit db tx")?;
+
+        info!("Task marked as failed");
 
         Ok(())
     }
