@@ -78,6 +78,10 @@ impl Status {
         !matches!(self, Status::Completed | Status::Failed | Status::Superseded)
     }
 
+    pub fn is_in_progress(&self) -> bool {
+        matches!(self, Status::Building | Status::Publishing)
+    }
+
     pub fn open() -> impl Iterator<Item = Status> {
         Status::iter().filter(Status::is_open)
     }

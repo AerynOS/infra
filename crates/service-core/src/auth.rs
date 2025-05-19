@@ -49,7 +49,7 @@ impl Role {
         use Permission::*;
 
         match self {
-            Role::Admin => [RetryTask, Refresh].into_iter().collect(),
+            Role::Admin => [RetryTask, FailTask, Refresh].into_iter().collect(),
             Role::Hub => [RequestUploadToken].into_iter().collect(),
             Role::RepositoryManager => [ReportImportStatus].into_iter().collect(),
             Role::Builder => [ConnectBuilderStream].into_iter().collect(),
@@ -72,6 +72,8 @@ pub enum Permission {
     ConnectBuilderStream,
     /// Retry a task
     RetryTask,
+    /// Fail a task
+    FailTask,
     /// Force refresh all projects
     Refresh,
 }
