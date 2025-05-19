@@ -27,6 +27,14 @@ deploy-avalanche-service ()
   && sudo rm -rf /srv/avalanche-rs/.cache/moss
 }
 
+deploy-vessel-service ()
+{
+  # ensure an empty import/ dir is created
+  [[ ! -d /srv/vessel-rs/import ]] \
+  && echo -e "\nCreating /srv/vessel-rs/import/ dir for preseeding .stones..." \
+  && mkdir -pv /srv/vessel-rs/import/
+}
+
 deploy-service () {
   local _svc="$1"
   [[ ! -n "${_svc}" || "${_svc}" = "" ]] && return 1
@@ -41,6 +49,8 @@ deploy-service () {
   sudo chmod -c a+x /srv/${_svc}-rs/${_svc}/${_svc}.app
   # delete boulder + moss cache if we're resetting avalanche
   [[ "${_svc}" == "avalanche" ]] && deploy-avalanche-service
+  # ensure that the vessel import dir always exists
+  [[ "${_svc}" == "vessel" ]] && deploy-vessel-service
   # reset permissions
   sudo chown -Rc ${_svc}-rs:${_svc}-rs /srv/${_svc}-rs
   sudo chmod -Rc u+rwX,g+rwX,o+X /srv/${_svc}-rs/${_svc}
