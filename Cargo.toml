@@ -16,7 +16,7 @@ stone_recipe = { git = "https://github.com/AerynOS/os-tools.git" }
 async-trait = "0.1.88"
 axum = "0.8.0"
 base64 = "0.22.1"
-bitflags = "2.4.1"
+bitflags = "2.9.1"
 bytes = "1.5"
 camino = "1.1.9"
 chrono = "0.4.30"
@@ -28,7 +28,7 @@ hex = "0.4.3"
 http = "1.0"
 http-serde = "2.0"
 include_dir = "0.7.4"
-itertools = "0.13.0"
+itertools = "0.14.0"
 minijinja = "2.9.0"
 minijinja-autoreload = "2.9.0"
 prost = "0.13.5"
@@ -48,16 +48,16 @@ tonic-build = "0.13"
 tracing = "0.1.40"
 url = "2.5.2"
 
-clap = { version = "4.4", features = ["derive"] }
+clap = { version = "4.5", features = ["derive"] }
 ed25519-dalek = { version = "2.1.0", features = ["rand_core", "pkcs8", "pem"] }
 jsonwebtoken = { version = "9.2.0", default-features = false }
 reqwest = { version = "0.12.9", features = ["json"] }
 serde = { version = "1.0", features = ["derive"] }
 sqlx = { version = "=0.8.5", features = ["sqlite", "chrono", "uuid", "runtime-tokio"] }
-strum = { version = "0.26.3", features = ["derive"] }
+strum = { version = "0.27.1", features = ["derive"] }
 tokio = { version = "1.35.1", features = ["full"] }
 tower = { version = "0.5.1", features = ["util"] }
-tower-http = { version = "0.6.2", features = ["fs", "set-header"] }
+tower-http = { version = "0.6.4", features = ["fs", "set-header"] }
 tracing-futures = { version = "0.2.5", features = ["futures-03"] }
 tracing-subscriber = { version = "0.3.18", features = ["env-filter", "json"] }
 uuid = { version = "1.6.1", features = ["v4", "serde"] }
