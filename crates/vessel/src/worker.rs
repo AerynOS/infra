@@ -202,7 +202,7 @@ fn import_package(
     let stone::Header::V1(header) = reader.header;
 
     if !matches!(header.file_type, stone::header::v1::FileType::Binary) {
-        return Err(eyre!("Invalid archive, expected binary stone"));
+        return Err(eyre!("{:?}: Invalid archive, expected binary stone", &file));
     }
 
     let payloads = reader
@@ -214,7 +214,7 @@ fn import_package(
     let meta_payload = payloads
         .iter()
         .find_map(stone::read::PayloadKind::meta)
-        .ok_or(eyre!("Invalid archive, missing meta payload"))?;
+        .ok_or(eyre!("{:?}: Invalid archive, missing meta payload", &file))?;
 
     let mut meta = moss::package::Meta::from_stone_payload(&meta_payload.body)
         .context("convert meta payload into moss package metadata")?;
@@ -244,13 +244,17 @@ fn import_package(
 
     match existing {
         Some(e) if e.source_release as u64 > meta.source_release => {
-            return Err(eyre!("Newer candidate (rel: {}) exists already", e.source_release));
+            return Err(eyre!(
+                "{:?}: Newer candidate (rel: {}) exists already",
+                &file,
+                e.source_release
+            ));
         }
         Some(e) if e.source_release as u64 == meta.source_release && e.build_release as u64 > meta.build_release => {
-            return Err(eyre!("Bump release number to {}", e.source_release + 1));
+            return Err(eyre!("{:?}: Bump release number to {}", &file, e.source_release + 1));
         }
         Some(e) if e.source_release as u64 == meta.source_release => {
-            warn!("Cannot include build with identical release field");
+            warn!("{:?}: Cannot include build with identical release field", &file);
             return Ok(());
         }
         _ => {}
