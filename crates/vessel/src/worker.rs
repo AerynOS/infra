@@ -17,7 +17,7 @@ use service::{
 };
 use sha2::{Digest, Sha256};
 use tokio::{sync::mpsc, time::Instant};
-use tracing::{Instrument, error, info, info_span, warn};
+use tracing::{Instrument, debug, error, info, info_span, warn};
 
 use crate::collection;
 
@@ -193,6 +193,8 @@ fn import_package(
     destructive_move: bool,
 ) -> Result<()> {
     use std::fs::{self, File};
+
+    debug!("Attempting to open {:?}", &package.path);
 
     let mut file = File::open(&package.path).context("open staged stone")?;
     let file_size = file.metadata().context("read file metadata")?.size();
