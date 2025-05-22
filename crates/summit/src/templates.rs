@@ -4,6 +4,7 @@ use minijinja::Environment;
 use serde::Serialize;
 
 mod filters;
+mod functions;
 #[cfg_attr(
     all(feature = "templates-bundled", not(feature = "templates-autoreload")),
     path = "templates/bundled.rs"
@@ -19,6 +20,7 @@ fn env() -> Environment<'static> {
     env.add_filter("profile", filters::profile);
     env.add_filter("endpoint", filters::endpoint);
     env.add_filter("format_duration", filters::format_duration);
+    env.add_function("build_task_query_url", functions::build_task_query_url);
 
     env
 }

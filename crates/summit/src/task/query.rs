@@ -36,6 +36,7 @@ pub struct Params {
     limit: Option<u32>,
     sort_field: Option<SortField>,
     sort_order: Option<SortOrder>,
+    search_query: Option<String>,
 }
 
 impl Params {
@@ -79,8 +80,15 @@ impl Params {
         }
     }
 
+    pub fn search_tasks(self, search: String) -> Self {
+        Self {
+            search_query: Some(search),
+            ..self
+        }
+    }
+
     fn where_clause(&self) -> String {
-        if self.id.is_some() || self.statuses.is_some() {
+        if self.id.is_some() || self.statuses.is_some() || self.search_query.is_some() {
             let conditions = self
                 .id
                 .map(|_| "task_id = ?".to_owned())
@@ -91,6 +99,11 @@ impl Params {
                     format!("status IN ({binds})")
                 }))
                 .chain(self.source_path.is_some().then(|| "source_path = ?".to_owned()))
+                .chain(
+                    self.search_query
+                        .is_some()
+                        .then(|| "description LIKE ? COLLATE NOCASE".to_owned()),
+                )
                 .join(" AND ");
 
             format!("WHERE {conditions}")
@@ -171,6 +184,10 @@ impl Params {
         }
         if let Some(source_path) = self.source_path.clone() {
             query = query.bind(source_path);
+        }
+        if let Some(search_query) = self.search_query.clone() {
+            let pattern = format!("%{}%", search_query);
+            query = query.bind(pattern);
         }
         query
     }
