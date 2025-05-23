@@ -83,14 +83,14 @@ impl Params {
         if self.id.is_some() || self.statuses.is_some() {
             let conditions = self
                 .id
-                .map(|_| "task_id = ?".to_owned())
+                .map(|_| "t.task_id = ?".to_owned())
                 .into_iter()
                 .chain(self.statuses.as_ref().map(|statuses| {
                     let binds = ",?".repeat(statuses.len()).chars().skip(1).collect::<String>();
 
-                    format!("status IN ({binds})")
+                    format!("t.status IN ({binds})")
                 }))
-                .chain(self.source_path.is_some().then(|| "source_path = ?".to_owned()))
+                .chain(self.source_path.is_some().then(|| "t.source_path = ?".to_owned()))
                 .join(" AND ");
 
             format!("WHERE {conditions}")
@@ -101,50 +101,50 @@ impl Params {
 
     fn sort_order_clause(&self) -> &'static str {
         match (self.sort_field, self.sort_order) {
-            (None, _) => "ORDER BY added DESC, task_id DESC",
+            (None, _) => "ORDER BY t.added DESC, t.task_id DESC",
             (Some(SortField::Ended), Some(SortOrder::Asc)) => {
                 "ORDER BY
-                (ended IS NULL),
-                ended ASC,
-                added DESC,
-                task_id DESC"
+                (t.ended IS NULL),
+                t.ended ASC,
+                t.added DESC,
+                t.task_id DESC"
             }
             (Some(SortField::Ended), Some(SortOrder::Desc)) => {
                 "ORDER BY
-                (ended IS NULL),
-                ended DESC,
-                added DESC,
-                task_id DESC"
+                (t.ended IS NULL),
+                t.ended DESC,
+                t.added DESC,
+                t.task_id DESC"
             }
             (Some(SortField::Build), Some(SortOrder::Asc)) => {
                 "ORDER BY
                     (CASE
-                        WHEN started IS NULL OR ended IS NULL THEN 1
+                        WHEN t.started IS NULL OR t.ended IS NULL THEN 1
                         ELSE 0
                     END),
                     (CASE
-                        WHEN started IS NOT NULL AND ended IS NOT NULL
-                        THEN ended - started
+                        WHEN t.started IS NOT NULL AND t.ended IS NOT NULL
+                        THEN t.ended - t.started
                         ELSE NULL
                     END) ASC,
-                    added DESC,
-                    task_id DESC"
+                    t.added DESC,
+                    t.task_id DESC"
             }
             (Some(SortField::Build), Some(SortOrder::Desc)) => {
                 "ORDER BY
                     (CASE
-                        WHEN started IS NULL OR ended IS NULL THEN 1
+                        WHEN t.started IS NULL OR t.ended IS NULL THEN 1
                         ELSE 0
                     END),
                     (CASE
-                        WHEN started IS NOT NULL AND ended IS NOT NULL
-                        THEN ended - started
+                        WHEN t.started IS NOT NULL AND t.ended IS NOT NULL
+                        THEN t.ended - t.started
                         ELSE NULL
                     END) DESC,
-                    added DESC,
-                    task_id DESC"
+                    t.added DESC,
+                    t.task_id DESC"
             }
-            _ => "ORDER BY added DESC, task_id DESC",
+            _ => "ORDER BY t.added DESC, t.task_id DESC",
         }
     }
 
@@ -226,6 +226,7 @@ pub async fn query(conn: &mut SqliteConnection, params: Params) -> Result<Query>
         started: Option<DateTime<Utc>>,
         updated: DateTime<Utc>,
         ended: Option<DateTime<Utc>>,
+        blockers: Option<String>,
     }
 
     let where_clause = params.where_clause();
@@ -235,26 +236,29 @@ pub async fn query(conn: &mut SqliteConnection, params: Params) -> Result<Query>
     let query_str = format!(
         "
         SELECT
-          task_id,
-          project_id,
-          profile_id,
-          repository_id,
-          slug,
-          package_id,
-          arch,
-          build_id,
-          description,
-          commit_ref,
-          source_path,
-          status,
-          allocated_builder,
-          log_path,
-          added,
-          started,
-          updated,
-          ended
-        FROM task
+          t.task_id,
+          t.project_id,
+          t.profile_id,
+          t.repository_id,
+          t.slug,
+          t.package_id,
+          t.arch,
+          t.build_id,
+          t.description,
+          t.commit_ref,
+          t.source_path,
+          t.status,
+          t.allocated_builder,
+          t.log_path,
+          t.added,
+          t.started,
+          t.updated,
+          t.ended,
+          GROUP_CONCAT(tb.blocker, '||') AS blockers
+        FROM task t
+        LEFT JOIN task_blockers tb ON t.task_id = tb.task_id
         {where_clause}
+        GROUP BY t.task_id
         {sort_order_clause}
         {limit_offset_clause}
         ",
@@ -269,7 +273,7 @@ pub async fn query(conn: &mut SqliteConnection, params: Params) -> Result<Query>
     let query_str = format!(
         "
         SELECT COUNT(*)
-        FROM task
+        FROM task t
         {where_clause}
         "
     );
@@ -279,7 +283,7 @@ pub async fn query(conn: &mut SqliteConnection, params: Params) -> Result<Query>
 
     let (total,) = query.fetch_one(&mut *conn).await.context("fetch tasks count")?;
 
-    let mut tasks = rows
+    let tasks = rows
         .into_iter()
         .map(|row| Task {
             id: row.id,
@@ -304,39 +308,15 @@ pub async fn query(conn: &mut SqliteConnection, params: Params) -> Result<Query>
                 (Some(start), Some(end)) => Some((end - start).num_seconds()),
                 _ => None,
             },
-            // Fetched next
-            blocked_by: vec![],
+            blocked_by: row
+                .blockers
+                .as_deref()
+                .unwrap_or("")
+                .split("||")
+                .map(|s| s.to_string())
+                .collect(),
         })
         .collect::<Vec<_>>();
-
-    // max number of sqlite params
-    for chunk in tasks.chunks_mut(32766) {
-        let binds = ",?".repeat(chunk.len()).chars().skip(1).collect::<String>();
-
-        let query_str = format!(
-            "
-            SELECT
-              task_id,
-              blocker
-            FROM task_blockers
-            WHERE task_id IN ({binds});
-            ",
-        );
-
-        let mut query = sqlx::query_as::<_, (i64, String)>(&query_str);
-
-        for task in chunk.iter() {
-            query = query.bind(i64::from(task.id));
-        }
-
-        let rows = query.fetch_all(&mut *conn).await.context("fetch task blockers")?;
-
-        for (id, blocker) in rows {
-            if let Some(task) = chunk.iter_mut().find(|t| t.id == Id::from(id)) {
-                task.blocked_by.push(blocker);
-            }
-        }
-    }
 
     Ok(Query {
         count: tasks.len(),
@@ -350,28 +330,56 @@ pub fn query_mock_data(params: Params) -> Query {
         let a_start = Utc.with_ymd_and_hms(2025, 5, 15, 22, 10, 32).unwrap();
         let a_end = Utc.with_ymd_and_hms(2025, 5, 15, 22, 16, 12).unwrap();
 
-        vec![Task {
-            id: 1.into(),
-            project_id: 1.into(),
-            profile_id: 1.into(),
-            repository_id: 1.into(),
-            slug: "pkg-a".to_owned(),
-            package_id: "a".to_owned(),
-            arch: "x86_64".to_owned(),
-            build_id: "build-id-a".to_owned(),
-            description: "dummy package a".to_owned(),
-            commit_ref: "abcdefg".to_owned(),
-            source_path: "idk/man".to_owned(),
-            status: Status::Completed,
-            allocated_builder: None,
-            log_path: None,
-            blocked_by: vec![],
-            added: Utc.with_ymd_and_hms(2025, 5, 15, 22, 0, 0).unwrap(),
-            started: Some(a_start),
-            updated: a_end,
-            ended: Some(a_end),
-            duration: Some((a_end - a_start).num_seconds()),
-        }]
+        vec![
+            Task {
+                id: 1.into(),
+                project_id: 1.into(),
+                profile_id: 1.into(),
+                repository_id: 1.into(),
+                slug: "pkg-a".to_owned(),
+                package_id: "a".to_owned(),
+                arch: "x86_64".to_owned(),
+                build_id: "build-id-a".to_owned(),
+                description: "dummy package a".to_owned(),
+                commit_ref: "abcdefg".to_owned(),
+                source_path: "idk/man".to_owned(),
+                status: Status::Completed,
+                allocated_builder: None,
+                log_path: None,
+                blocked_by: vec![],
+                added: Utc.with_ymd_and_hms(2025, 5, 15, 22, 0, 0).unwrap(),
+                started: Some(a_start),
+                updated: a_end,
+                ended: Some(a_end),
+                duration: Some((a_end - a_start).num_seconds()),
+            },
+            Task {
+                id: 2.into(),
+                project_id: 2.into(),
+                profile_id: 2.into(),
+                repository_id: 2.into(),
+                slug: "pkg-b".to_owned(),
+                package_id: "b".to_owned(),
+                arch: "x86_64".to_owned(),
+                build_id: "build-id-b".to_owned(),
+                description: "dummy package b".to_owned(),
+                commit_ref: "abcdefg".to_owned(),
+                source_path: "idk/man".to_owned(),
+                status: Status::Blocked,
+                allocated_builder: None,
+                log_path: None,
+                blocked_by: vec![
+                    "autocc_x86_64@1/1".to_string(),
+                    "polkit_x86_64@1/1".to_string(),
+                    "pulseaudio_x86_64@1/1".to_string(),
+                ],
+                added: Utc.with_ymd_and_hms(2025, 5, 15, 22, 0, 0).unwrap(),
+                started: None,
+                updated: a_end,
+                ended: None,
+                duration: None,
+            },
+        ]
     });
 
     let matched_tasks: Vec<_> = MOCK_TASKS

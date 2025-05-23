@@ -65,7 +65,13 @@
                     <div class="tasks__list__item__arch">
                         <span>{{ profile.arch }}</span>
                     </div>
-                    <div class="tasks__list__item__status"><span class="badge badge--{{ task.status }}">{{ task.status }}</span></div>
+                    <div
+                        class="tasks__list__item__status"
+                        {% if task.blocked_by %}
+                            title="{{ task.blocked_by | join("\n") }}"
+                        {% endif %}
+                    ><span class="badge badge--{{ task.status }}">{{ task.status }}</span></div>
+
                 </li>
             {% endfor %}
         </ul>
