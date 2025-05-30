@@ -32,6 +32,6 @@ pub(super) fn build_task_query_url(
     if parts.is_empty() {
         "".to_string()
     } else {
-        format!("{}", parts.join("&"))
+        parts.join("&").to_string()
     }
 }
