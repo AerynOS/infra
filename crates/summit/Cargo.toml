@@ -45,3 +45,4 @@ uuid.workspace = true
 camino = { workspace = true, optional = true }
 include_dir = { workspace = true, optional = true }
 minijinja-autoreload = { workspace = true, optional = true }
+urlencoding = "2.1.3"
