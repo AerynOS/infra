@@ -1,4 +1,5 @@
 use std::{
+    cmp::Ordering,
     convert::Infallible,
     ffi::OsStr,
     future::Future,
@@ -8,6 +9,7 @@ use std::{
 
 use color_eyre::eyre::{self, Context, OptionExt, Result, eyre};
 use moss::db::meta;
+use natural_sort_rs::NaturalSortable;
 use service::{
     Endpoint,
     client::{AuthClient, EndpointAuth, SummitServiceClient},
@@ -33,11 +35,36 @@ pub enum Message {
     },
 }
 
-#[derive(Debug)]
+// Eq depends on the definition of PartialEq, because we only use
+// it to sort path names essentially
+#[derive(Debug, Eq)]
 pub struct Package {
     pub name: String,
     pub path: PathBuf,
     pub sha256sum: String,
+}
+
+// Compare Packages via natural sort on paths
+impl Ord for Package {
+    fn cmp(&self, other: &Self) -> Ordering {
+        let my_path = &self.path.to_string_lossy();
+        let other_path = &other.path.to_string_lossy();
+        my_path.natural_cmp(other_path)
+    }
+}
+
+// Filenames are guaranteed to be unique via the filesystem
+impl PartialEq for Package {
+    fn eq(&self, other: &Self) -> bool {
+        self.path == other.path
+    }
+}
+
+// Conveniently uses natural_cmp
+impl PartialOrd for Package {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 pub async fn run(state: State) -> Result<(Sender, impl Future<Output = Result<(), Infallible>> + use<>)> {
@@ -270,7 +297,7 @@ fn import_package(
 
     // Adding meta records is idempotent as we delete / insert so
     // it doesn't matter we are adding them outside a TX if we encounter
-    // and error
+    // an error
     state
         .meta_db
         .add(id.clone(), meta.clone())
@@ -406,7 +433,7 @@ fn enumerate_stones(dir: &Path) -> Result<Vec<Package>> {
 
     let contents = fs::read_dir(dir).context("read directory")?;
 
-    let mut files = vec![];
+    let mut packages = vec![];
 
     for entry in contents {
         let entry = entry.context("read directory entry")?;
@@ -426,11 +453,16 @@ fn enumerate_stones(dir: &Path) -> Result<Vec<Package>> {
 
             let sha256sum = hex::encode(hasher.finalize());
 
-            files.push(Package { name, path, sha256sum });
+            packages.push(Package { name, path, sha256sum });
         } else if meta.is_dir() {
-            files.extend(enumerate_stones(&path)?);
+            packages.extend(enumerate_stones(&path)?);
         }
     }
 
-    Ok(files)
+    // this is where we human sort the packages in ascending order to enable a directory to have
+    // multiple stones with the same recipe origin but different versions, source-releases
+    // and build-releases
+    packages.sort();
+
+    Ok(packages)
 }
