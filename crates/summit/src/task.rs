@@ -361,7 +361,7 @@ pub async fn unblock(tx: &mut Transaction, task_id: Id, blocker: &str) -> Result
         debug!(%task_id, "task remains blocked by {remaining} blockers");
     } else {
         set_status(tx, task_id, Status::New).await?;
-        debug!("task_id={task_id:?} is now unblocked ({remaining:?} blockers remain)");
+        debug!(%task_id, "task is now unblocked ({remaining} blockers remain)");
     }
 
     Ok(remaining as usize)
