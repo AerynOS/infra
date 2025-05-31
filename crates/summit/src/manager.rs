@@ -248,7 +248,7 @@ impl Manager {
 
         task::set_status(&mut tx, task_id, task::Status::Completed)
             .await
-            .context("set task as import failed")?;
+            .context("set task_id={task_id:?} as import completed")?;
 
         let mut projects = project::list(tx.as_mut()).await.context("list projects")?;
 
@@ -263,7 +263,7 @@ impl Manager {
         self.queue
             .task_completed(&mut tx, task_id)
             .await
-            .context("add queue blockers")?;
+            .context("remove queue blockers for task_id={task_id:?}")?;
 
         tx.commit().await.context("commit db tx")?;
 
@@ -288,12 +288,12 @@ impl Manager {
 
         task::set_status(&mut tx, task_id, task::Status::Failed)
             .await
-            .context("set task as import failed")?;
+            .context("set task_id={task_id:?} as import failed")?;
 
         self.queue
             .task_failed(&mut tx, task_id)
             .await
-            .context("add queue blockers")?;
+            .context("add queue blockers for task_id={task_id}")?;
 
         tx.commit().await.context("commit db tx")?;
 
@@ -345,16 +345,16 @@ impl Manager {
 
         task::set_status(&mut tx, task_id, task::Status::Failed)
             .await
-            .context("set task as import failed")?;
+            .context("set task_id={task_id:?} as import failed")?;
 
         self.queue
             .task_failed(&mut tx, task_id)
             .await
-            .context("add queue blockers")?;
+            .context("add queue blockers for task_id={task_id:?}")?;
 
         tx.commit().await.context("commit db tx")?;
 
-        info!("Task marked as failed");
+        info!("task_id={task_id:?} marked as failed");
 
         Ok(())
     }

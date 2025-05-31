@@ -60,10 +60,11 @@ pub async fn create(
         tx.as_mut(),
         query::Params::default()
             .statuses(Status::iter().filter(|status| match status {
-                Status::New | Status::Blocked => true,
+                // Blocked and New tasks will not have been built
+                Status::Blocked | Status::New => true,
                 // Tasks already building / publishing shouldn't get cancelled & should have their
                 // lifecycle finished since they're already in-flight
-                Status::Building | Status::Publishing | Status::Completed | Status::Failed | Status::Superseded => {
+                Status::Building | Status::Completed | Status::Failed | Status::Publishing | Status::Superseded => {
                     false
                 }
             }))
@@ -106,7 +107,7 @@ pub async fn create(
     .bind(slug)
     .bind(meta.id().to_string())
     .bind(&profile.arch)
-    .bind(build_id)
+    .bind(&build_id)
     .bind(description)
     .bind(repository.commit_ref.as_deref().ok_or_eyre("missing repo commit ref")?)
     .bind(source_path)
@@ -115,7 +116,7 @@ pub async fn create(
     .await
     .context("insert task")?;
 
-    info!("Task created");
+    info!(build_id = &build_id, "Task created");
 
     Ok(())
 }
