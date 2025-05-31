@@ -358,7 +358,7 @@ pub async fn unblock(tx: &mut Transaction, task_id: Id, blocker: &str) -> Result
 
     if remaining > 0 {
         set_status(tx, task_id, Status::Blocked).await?;
-        debug!("task_id={task_id:?} remains blocked by {remaining:?} blockers");
+        debug!(%task_id, "task remains blocked by {remaining} blockers");
     } else {
         set_status(tx, task_id, Status::New).await?;
         debug!("task_id={task_id:?} is now unblocked ({remaining:?} blockers remain)");
