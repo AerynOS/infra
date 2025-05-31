@@ -2351,6 +2351,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "natural-sort-rs"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7955b5597d93c0f70b18e141ba4fd07982f02774391e718728064cc9c40b0aa4"
+
+[[package]]
 name = "nix"
 version = "0.27.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4621,6 +4627,7 @@ dependencies = [
  "hex",
  "http",
  "moss",
+ "natural-sort-rs",
  "prost",
  "service",
  "sha2",

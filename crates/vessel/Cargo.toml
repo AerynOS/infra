@@ -25,3 +25,4 @@ tonic.workspace = true
 tracing.workspace = true
 url.workspace = true
 uuid.workspace = true
+natural-sort-rs.workspace = true
