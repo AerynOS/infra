@@ -56,6 +56,7 @@ impl Queue {
                     Ok(meta) => meta,
                     Err(err) => {
                         // TODO: Mark these tasks as failed / some other terminal status?
+                        //       status::Zombie maybe?
                         warn!(
                             error = error::chain(&*err),
                             task = %task.id,
@@ -154,13 +155,13 @@ impl Queue {
         Ok(())
     }
 
-    #[tracing::instrument(name = "queue_task_failed", skip_all, fields(%task))]
-    pub async fn task_failed(&mut self, tx: &mut Transaction, task: task::Id) -> Result<()> {
+    #[tracing::instrument(name = "queue_task_failed", skip_all, fields(%task_id))]
+    pub async fn task_failed(&mut self, tx: &mut Transaction, task_id: task::Id) -> Result<()> {
         let idx = self
             .0
             .iter()
-            .position(|queued| queued.task.id == task)
-            .ok_or_eyre("task is missing")?;
+            .position(|queued| queued.task.id == task_id)
+            .ok_or_eyre("task_id={task_id:?} is missing")?;
         let removed = self.0.remove(idx);
 
         let blocker_id = format!(
@@ -170,29 +171,29 @@ impl Queue {
 
         let mut num_blocked = 0;
 
-        for blocked in self.0.iter().filter(|queued| queued.dependencies.contains(&task)) {
+        for blocked in self.0.iter().filter(|queued| queued.dependencies.contains(&task_id)) {
             task::block(tx, blocked.task.id, &blocker_id)
                 .await
                 .context("add task blocker")?;
 
             num_blocked += 1;
 
-            warn!(task = %blocked.task.id, blocker = %removed.task.id, "Task blocked");
+            warn!(task_id = %blocked.task.id, blocker = %removed.task.id, "Task blocked");
         }
 
         if num_blocked == 0 {
-            debug!("No dependents to block");
+            debug!(task_id = %task_id, "No dependents to block");
         }
 
         Ok(())
     }
 
-    #[tracing::instrument(name = "queue_task_completed", skip_all, fields(%task))]
-    pub async fn task_completed(&mut self, tx: &mut Transaction, task: task::Id) -> Result<()> {
+    #[tracing::instrument(name = "queue_task_completed", skip_all, fields(%task_id))]
+    pub async fn task_completed(&mut self, tx: &mut Transaction, task_id: task::Id) -> Result<()> {
         let idx = self
             .0
             .iter()
-            .position(|queued| queued.task.id == task)
+            .position(|queued| queued.task.id == task_id)
             .ok_or_eyre("task is missing")?;
         let removed = self.0.remove(idx);
 
@@ -201,15 +202,15 @@ impl Queue {
             removed.meta.source_id, removed.task.arch, removed.task.project_id, removed.task.repository_id
         );
 
-        for blocked in self.0.iter().filter(|queued| queued.dependencies.contains(&task)) {
+        for blocked in self.0.iter().filter(|queued| queued.dependencies.contains(&task_id)) {
             let remaining = task::unblock(tx, blocked.task.id, &blocker_id)
                 .await
-                .context("add task blocker")?;
+                .context("unblock task")?;
 
             if remaining > 0 {
-                info!(task = %blocked.task.id, "Task still blocked");
+                info!(task_id = %blocked.task.id, "Task still blocked ({remaining:?} remaining blockers)");
             } else {
-                info!(task = %blocked.task.id, "Task unblocked");
+                info!(task_id = %blocked.task.id, "Task unblocked");
             }
         }
 
