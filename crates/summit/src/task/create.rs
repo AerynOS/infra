@@ -116,7 +116,7 @@ pub async fn create(
     .await
     .context("insert task")?;
 
-    info!(build_id = &build_id, "Task created");
+    info!(build_id, "Task created");
 
     Ok(())
 }
