@@ -4,7 +4,7 @@ This document is intended to give a rough outline of the necessary steps to manu
 deploy AerynOS infra on a bare metal Linux install.
 
 The documentation assumes that the summit-rs and vessel-rs instances run on the host `aosinfra.lan`. It also
-assumes that binaries have been built and are available in the `../target/release/` folder relative to this document.
+assumes that binaries have been built and are available in the `../target/infratest/` folder relative to this document.
 
 This hostname should obviously be changed to whatever fully qualified domain or IP is used by deployments.
 
