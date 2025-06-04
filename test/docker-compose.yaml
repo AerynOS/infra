@@ -56,3 +56,5 @@ volumes:
 
 networks:
   infra-test:
+    ipam:
+      driver: default
