@@ -156,25 +156,26 @@ pub async fn create_missing(
                     .max_by(|(_, a), (_, b)| a.source_release.cmp(&b.source_release));
 
                 if let Some((_, published)) = latest {
-                    if published.source_release >= meta.source_release {
-                        // distinguishing between > and == is the kind thing to do in logs
-                        if published.source_release == meta.source_release {
-                            warn!(
-                                slug = slug(),
-                                published = version(published),
-                                recipe = version(&meta),
-                                "Current package version already present in index"
-                            );
-                        } else {
-                            warn!(
-                                slug = slug(),
-                                published = version(published),
-                                recipe = version(&meta),
-                                "Newer package version already present in index"
-                            );
-                        }
-
+                    // distinguishing between > and == is the kind thing to do in logs
+                    if published.source_release > meta.source_release {
+                        warn!(
+                            slug = slug(),
+                            published = version(published),
+                            recipe = version(&meta),
+                            "Newer package version already present in index"
+                        );
                         continue 'providers;
+                    } else if published.source_release == meta.source_release {
+                        warn!(
+                            slug = slug(),
+                            published = version(published),
+                            recipe = version(&meta),
+                            "Current package version already present in index"
+                        );
+                        continue 'providers;
+
+                    // published.source_release > meta.source_release below
+                    // so we need to create a new task for the newer package
                     } else {
                         debug!(
                             slug = slug(),
