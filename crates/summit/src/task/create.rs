@@ -1,10 +1,12 @@
+use std::collections::HashSet;
+
 use color_eyre::eyre::{Context, OptionExt, Result};
 use moss::package::Meta;
 use service::database::Transaction;
 use strum::IntoEnumIterator;
 use tracing::{Span, info, warn};
 
-use super::{Status, query, set_status};
+use super::{Status, block, query, set_status};
 use crate::{Profile, Project, Repository};
 
 #[tracing::instrument(name = "create_task", skip_all, fields(slug, build_id, version))]
@@ -56,7 +58,7 @@ pub async fn create(
 
     let source_path = meta.uri.clone().ok_or_eyre("missing relative recipe path")?;
 
-    let superseded = query(
+    let superseded_tasks = query(
         tx.as_mut(),
         query::Params::default()
             .statuses(Status::iter().filter(|status| match status {
@@ -73,15 +75,7 @@ pub async fn create(
     .context("find superseded tasks")?
     .tasks;
 
-    for task in superseded {
-        info!(old = task.build_id, new = build_id, "Task superseded by newer build");
-
-        set_status(tx, task.id, Status::Superseded)
-            .await
-            .context("set task as superseded")?;
-    }
-
-    sqlx::query(
+    let (task,): (i64,) = sqlx::query_as(
         "
         INSERT INTO task
         (
@@ -97,7 +91,8 @@ pub async fn create(
           source_path,
           status
         )
-        VALUES (?,?,?,?,?,?,?,?,?,?,?);
+        VALUES (?,?,?,?,?,?,?,?,?,?,?)
+        RETURNING task_id;
         ",
     )
     .bind(i64::from(project.id))
@@ -106,14 +101,59 @@ pub async fn create(
     .bind(slug)
     .bind(meta.id().to_string())
     .bind(&profile.arch)
-    .bind(build_id)
+    .bind(&build_id)
     .bind(description)
     .bind(repository.commit_ref.as_deref().ok_or_eyre("missing repo commit ref")?)
     .bind(source_path)
     .bind(Status::New.to_string())
-    .execute(tx.as_mut())
+    .fetch_one(tx.as_mut())
     .await
     .context("insert task")?;
+
+    // Mark all superseded tasks as superseded and
+    // migrate their blockers to the new task, if any
+    if !superseded_tasks.is_empty() {
+        let mut blockers = HashSet::new();
+
+        for superseded_task in superseded_tasks {
+            info!(
+                old = superseded_task.build_id,
+                new = build_id,
+                "Task superseded by newer build"
+            );
+
+            set_status(tx, superseded_task.id, Status::Superseded)
+                .await
+                .context("set task as superseded")?;
+
+            blockers.extend(
+                sqlx::query_as::<_, (String,)>(
+                    "
+                    DELETE FROM task_blockers
+                    WHERE task_id = ?
+                    RETURNING blocker;
+                    ",
+                )
+                .bind(i64::from(superseded_task.id))
+                .fetch_all(tx.as_mut())
+                .await?
+                .into_iter()
+                .map(|(blocker,)| blocker),
+            );
+        }
+
+        if !blockers.is_empty() {
+            for blocker in &blockers {
+                block(tx, task.into(), blocker).await.context("add blocker to task")?;
+            }
+
+            info!(
+                task,
+                num_blockers = blockers.len(),
+                "Task set as blocked due to superseded tasks being blocked"
+            );
+        }
+    }
 
     info!("Task created");
 
