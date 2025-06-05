@@ -14,7 +14,7 @@ use tokio::task::spawn_blocking;
 use tracing::{Span, debug, warn};
 use uuid::Uuid;
 
-use crate::{Manager, Project, Repository, profile, project, repository, task};
+use crate::{Manager, Profile, Project, Repository, profile, project, repository, task};
 
 pub use self::create::create;
 pub use self::query::query;
@@ -122,6 +122,13 @@ pub async fn create_missing(
 ) -> Result<()> {
     let span = Span::current();
 
+    struct MissingTask<'a> {
+        description: String,
+        profile: &'a Profile,
+        meta: Meta,
+    }
+    let mut missing_tasks = Vec::new();
+
     for profile in &project.profiles {
         span.record("profile", &profile.name);
 
@@ -194,21 +201,16 @@ pub async fn create_missing(
                             "Adding newer package release as task"
                         );
 
-                        create(
-                            tx,
-                            project,
-                            profile,
-                            repo,
-                            &meta,
-                            format!(
+                        missing_tasks.push(MissingTask {
+                            description: format!(
                                 "Update {} from {} to {}",
                                 meta.source_id,
                                 version(published),
                                 version(&meta)
                             ),
-                        )
-                        .await
-                        .context("create task")?;
+                            profile,
+                            meta,
+                        });
 
                         break 'providers;
                     }
@@ -219,21 +221,23 @@ pub async fn create_missing(
                         "Adding missing package release as task"
                     );
 
-                    create(
-                        tx,
-                        project,
+                    missing_tasks.push(MissingTask {
+                        description: format!("Initial build of {} ({})", meta.source_id, version(&meta)),
                         profile,
-                        repo,
-                        &meta,
-                        format!("Initial build of {} ({})", meta.source_id, version(&meta)),
-                    )
-                    .await
-                    .context("create task")?;
+                        meta,
+                    });
 
                     break 'providers;
                 };
             }
         }
+    }
+
+    for task in missing_tasks {
+        // FIXME: do a batch insert?
+        create(tx, project, task.profile, repo, &task.meta, task.description)
+            .await
+            .context("create task")?;
     }
 
     Ok(())
