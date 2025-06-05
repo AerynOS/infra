@@ -163,7 +163,7 @@ pub async fn create_missing(
                             slug = slug(),
                             published = version(published),
                             recipe = version(&meta),
-                            "Newer package version already present in index"
+                            "Newer package release already present in index"
                         );
                         continue 'providers;
                     } else if published.source_release == meta.source_release {
@@ -171,7 +171,7 @@ pub async fn create_missing(
                             slug = slug(),
                             published = version(published),
                             recipe = version(&meta),
-                            "Current package version already present in index"
+                            "Current package release already present in index"
                         );
                         continue 'providers;
 
@@ -182,7 +182,7 @@ pub async fn create_missing(
                             slug = slug(),
                             published = version(published),
                             recipe = version(&meta),
-                            "Adding newer package as task"
+                            "Adding newer package release as task"
                         );
 
                         create(
@@ -207,7 +207,7 @@ pub async fn create_missing(
                     debug!(
                         slug = slug(),
                         version = version(&meta),
-                        "Adding missing package as task"
+                        "Adding missing package release as task"
                     );
 
                     create(
@@ -279,7 +279,7 @@ pub async fn set_log_path(tx: &mut Transaction, task_id: task::Id, log_path: &Pa
     .await
     .context("set log_path for task_id={task_id:?}")?;
 
-    debug!("set log_path for task_id={task_id:?}");
+    debug!(%task_id, "will use log_path='{log_path:?}' for output");
 
     Ok(())
 }
@@ -305,7 +305,7 @@ pub async fn set_allocated_builder(
     .await
     .context("update allocated_builder for task_id={task_id:?}")?;
 
-    debug!("update allocated_builder for task_id={task_id:?}");
+    debug!(%task_id, "update allocated_builder");
 
     Ok(())
 }
@@ -360,10 +360,10 @@ pub async fn unblock(tx: &mut Transaction, task_id: Id, blocker: &str) -> Result
 
     if remaining > 0 {
         set_status(tx, task_id, Status::Blocked).await?;
-        debug!("task_id={task_id:?} remains blocked by {remaining:?} blockers");
+        debug!(%task_id, "remains blocked by {remaining:?} blockers");
     } else {
         set_status(tx, task_id, Status::New).await?;
-        debug!("task_id={task_id:?} is now unblocked ({remaining:?} blockers remain)");
+        debug!(%task_id, "is now unblocked ({remaining:?} blockers remain)");
     }
 
     Ok(remaining as usize)

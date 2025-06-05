@@ -91,7 +91,7 @@ impl Manager {
 
                         profile::refresh(&self.state, profile, profile_db)
                             .await
-                            .context("refres profile")?;
+                            .context("refresh profile")?;
 
                         Result::<_, Report>::Ok(true)
                     } else {
@@ -322,7 +322,7 @@ impl Manager {
 
         tx.commit().await.context("commit db tx")?;
 
-        info!("Task marked for retry");
+        info!(%task_id, "task marked for retry");
 
         Ok(())
     }
@@ -339,7 +339,7 @@ impl Manager {
             .ok_or_eyre("task is missing")?;
 
         if !task.status.is_in_progress() {
-            warn!(status = %task.status, "Task isn't in progress and won't be failed");
+            warn!(%task_id, status = %task.status, "Task isn't in progress and won't be failed");
             return Ok(());
         }
 
