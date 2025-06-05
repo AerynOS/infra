@@ -354,7 +354,7 @@ impl Manager {
 
         tx.commit().await.context("commit db tx")?;
 
-        info!("task_id={task_id:?} marked as failed");
+        info!(%task_id, "task marked as failed");
 
         Ok(())
     }
