@@ -182,7 +182,7 @@ impl Queue {
         }
 
         if num_blocked == 0 {
-            debug!(task_id = %task_id, "No dependents to block");
+            debug!(%task_id, "No dependents to block");
         }
 
         Ok(())
