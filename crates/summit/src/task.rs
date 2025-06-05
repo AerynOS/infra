@@ -63,7 +63,12 @@ pub enum Status {
     Building,
     /// Now publishing to Vessel
     Publishing,
-    /// Build was superseded by a newer build
+    /// Task was superseded by a newer task.
+    ///
+    /// If this task was previously blocked, it must be
+    /// removed from the task_blockers table, but only after the
+    /// superseding task has been marked blocked by the blocker
+    /// in a new row in the task_blockers table.
     Superseded,
     /// Job successfully completed!
     Completed,
@@ -152,21 +157,32 @@ pub async fn create_missing(
                     .max_by(|(_, a), (_, b)| a.source_release.cmp(&b.source_release));
 
                 if let Some((_, published)) = latest {
-                    if published.source_release >= meta.source_release {
+                    // distinguishing between > and == is the kind thing to do in logs
+                    if published.source_release > meta.source_release {
                         warn!(
                             slug = slug(),
                             published = version(published),
                             recipe = version(&meta),
-                            "Newer package already in index"
+                            "Newer package release already present in index"
                         );
-
                         continue 'providers;
+                    } else if published.source_release == meta.source_release {
+                        warn!(
+                            slug = slug(),
+                            published = version(published),
+                            recipe = version(&meta),
+                            "Current package release already present in index"
+                        );
+                        continue 'providers;
+
+                    // published.source_release > meta.source_release below
+                    // so we need to create a new task for the newer package
                     } else {
                         debug!(
                             slug = slug(),
                             published = version(published),
                             recipe = version(&meta),
-                            "Adding newer package as task"
+                            "Adding newer package release as task"
                         );
 
                         create(
@@ -191,7 +207,7 @@ pub async fn create_missing(
                     debug!(
                         slug = slug(),
                         version = version(&meta),
-                        "Adding missing package as task"
+                        "Adding missing package release as task"
                     );
 
                     create(
@@ -214,6 +230,7 @@ pub async fn create_missing(
     Ok(())
 }
 
+/// Set the status of a task_id in the db
 pub async fn set_status(tx: &mut Transaction, task_id: task::Id, status: Status) -> Result<()> {
     let ended = if !status.is_open() { ", ended = unixepoch()" } else { "" };
 
@@ -245,6 +262,7 @@ pub async fn set_status(tx: &mut Transaction, task_id: task::Id, status: Status)
     Ok(())
 }
 
+/// Set the path to the task logfile in the filesystem
 pub async fn set_log_path(tx: &mut Transaction, task_id: task::Id, log_path: &Path) -> Result<()> {
     sqlx::query(
         "
@@ -259,11 +277,14 @@ pub async fn set_log_path(tx: &mut Transaction, task_id: task::Id, log_path: &Pa
     .bind(i64::from(task_id))
     .execute(tx.as_mut())
     .await
-    .context("update task")?;
+    .context("set log_path for task_id={task_id:?}")?;
+
+    debug!(%task_id, "will use log_path='{log_path:?}' for output");
 
     Ok(())
 }
 
+/// Allocate a builder for a task
 pub async fn set_allocated_builder(
     tx: &mut Transaction,
     task_id: task::Id,
@@ -282,13 +303,16 @@ pub async fn set_allocated_builder(
     .bind(i64::from(task_id))
     .execute(tx.as_mut())
     .await
-    .context("update task")?;
+    .context("update allocated_builder for task_id={task_id:?}")?;
+
+    debug!(%task_id, "update allocated_builder");
 
     Ok(())
 }
 
-pub async fn block(tx: &mut Transaction, task: Id, blocker: &str) -> Result<()> {
-    set_status(tx, task, Status::Blocked).await?;
+/// block a task Id with a blocker string and insert it into the task_blockers table
+pub async fn block(tx: &mut Transaction, task_id: Id, blocker: &str) -> Result<()> {
+    set_status(tx, task_id, Status::Blocked).await?;
 
     let _ = sqlx::query(
         "
@@ -297,22 +321,26 @@ pub async fn block(tx: &mut Transaction, task: Id, blocker: &str) -> Result<()> 
         ON CONFLICT DO NOTHING;
         ",
     )
-    .bind(i64::from(task))
+    .bind(i64::from(task_id))
     .bind(blocker)
     .execute(tx.as_mut())
-    .await?;
+    .await
+    .context("add blocker={blocker:?} for task_id={task_id:?}")?;
+
+    debug!("add blocker={blocker:?} for task_id={task_id:?}");
 
     Ok(())
 }
 
-pub async fn unblock(tx: &mut Transaction, task: Id, blocker: &str) -> Result<usize> {
+/// Unblock a task Id previously blocked by blocker string from the task_blockers table
+pub async fn unblock(tx: &mut Transaction, task_id: Id, blocker: &str) -> Result<usize> {
     let _ = sqlx::query(
         "
         DELETE FROM task_blockers
         WHERE task_id = ? AND blocker = ?;
         ",
     )
-    .bind(i64::from(task))
+    .bind(i64::from(task_id))
     .bind(blocker)
     .execute(tx.as_mut())
     .await?;
@@ -324,11 +352,19 @@ pub async fn unblock(tx: &mut Transaction, task: Id, blocker: &str) -> Result<us
         WHERE task_id = ?;
         ",
     )
-    .bind(i64::from(task))
+    .bind(i64::from(task_id))
     .fetch_one(tx.as_mut())
     .await?;
 
-    set_status(tx, task, if remaining > 0 { Status::Blocked } else { Status::New }).await?;
+    debug!("remove blocker={blocker:?} for task_id={task_id:?} ({remaining:?} blockers remain)");
+
+    if remaining > 0 {
+        set_status(tx, task_id, Status::Blocked).await?;
+        debug!(%task_id, "remains blocked by {remaining:?} blockers");
+    } else {
+        set_status(tx, task_id, Status::New).await?;
+        debug!(%task_id, "is now unblocked ({remaining:?} blockers remain)");
+    }
 
     Ok(remaining as usize)
 }

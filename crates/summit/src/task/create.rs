@@ -62,10 +62,11 @@ pub async fn create(
         tx.as_mut(),
         query::Params::default()
             .statuses(Status::iter().filter(|status| match status {
-                Status::New | Status::Blocked => true,
+                // Blocked and New tasks will not have been built
+                Status::Blocked | Status::New => true,
                 // Tasks already building / publishing shouldn't get cancelled & should have their
                 // lifecycle finished since they're already in-flight
-                Status::Building | Status::Publishing | Status::Completed | Status::Failed | Status::Superseded => {
+                Status::Building | Status::Completed | Status::Failed | Status::Publishing | Status::Superseded => {
                     false
                 }
             }))
@@ -155,7 +156,7 @@ pub async fn create(
         }
     }
 
-    info!("Task created");
+    info!(build_id, "Task created");
 
     Ok(())
 }

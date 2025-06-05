@@ -8,6 +8,7 @@ use std::{
 
 use color_eyre::eyre::{self, Context, OptionExt, Result, eyre};
 use moss::db::meta;
+use natural_sort_rs::NaturalSortable;
 use service::{
     Endpoint,
     client::{AuthClient, EndpointAuth, SummitServiceClient},
@@ -270,7 +271,7 @@ fn import_package(
 
     // Adding meta records is idempotent as we delete / insert so
     // it doesn't matter we are adding them outside a TX if we encounter
-    // and error
+    // an error
     state
         .meta_db
         .add(id.clone(), meta.clone())
@@ -406,7 +407,7 @@ fn enumerate_stones(dir: &Path) -> Result<Vec<Package>> {
 
     let contents = fs::read_dir(dir).context("read directory")?;
 
-    let mut files = vec![];
+    let mut packages = vec![];
 
     for entry in contents {
         let entry = entry.context("read directory entry")?;
@@ -426,11 +427,17 @@ fn enumerate_stones(dir: &Path) -> Result<Vec<Package>> {
 
             let sha256sum = hex::encode(hasher.finalize());
 
-            files.push(Package { name, path, sha256sum });
+            packages.push(Package { name, path, sha256sum });
         } else if meta.is_dir() {
-            files.extend(enumerate_stones(&path)?);
+            packages.extend(enumerate_stones(&path)?);
         }
     }
 
-    Ok(files)
+    // this is where we human sort the packages in ascending order to enable a directory to have
+    // multiple stones with the same recipe origin but different versions, source-releases
+    // and build-releases.
+    // The to_string_lossy() call is necessary because Rust cannot guarantee that the OS formats
+    // PathBuf filenames in valid utf-8.
+    packages.sort_by(|a, b| (a.path.to_string_lossy()).natural_cmp(&b.path.to_string_lossy()));
+    Ok(packages)
 }

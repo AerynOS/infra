@@ -91,7 +91,7 @@ impl Manager {
 
                         profile::refresh(&self.state, profile, profile_db)
                             .await
-                            .context("refres profile")?;
+                            .context("refresh profile")?;
 
                         Result::<_, Report>::Ok(true)
                     } else {
@@ -248,7 +248,7 @@ impl Manager {
 
         task::set_status(&mut tx, task_id, task::Status::Completed)
             .await
-            .context("set task as import failed")?;
+            .context("set task_id={task_id:?} as import completed")?;
 
         let mut projects = project::list(tx.as_mut()).await.context("list projects")?;
 
@@ -263,7 +263,7 @@ impl Manager {
         self.queue
             .task_completed(&mut tx, task_id)
             .await
-            .context("add queue blockers")?;
+            .context("remove queue blockers for task_id={task_id:?}")?;
 
         tx.commit().await.context("commit db tx")?;
 
@@ -288,12 +288,12 @@ impl Manager {
 
         task::set_status(&mut tx, task_id, task::Status::Failed)
             .await
-            .context("set task as import failed")?;
+            .context("set task_id={task_id:?} as import failed")?;
 
         self.queue
             .task_failed(&mut tx, task_id)
             .await
-            .context("add queue blockers")?;
+            .context("add queue blockers for task_id={task_id}")?;
 
         tx.commit().await.context("commit db tx")?;
 
@@ -322,7 +322,7 @@ impl Manager {
 
         tx.commit().await.context("commit db tx")?;
 
-        info!("Task marked for retry");
+        info!(%task_id, "task marked for retry");
 
         Ok(())
     }
@@ -339,22 +339,22 @@ impl Manager {
             .ok_or_eyre("task is missing")?;
 
         if !task.status.is_in_progress() {
-            warn!(status = %task.status, "Task isn't in progress and won't be failed");
+            warn!(%task_id, status = %task.status, "Task isn't in progress and won't be failed");
             return Ok(());
         }
 
         task::set_status(&mut tx, task_id, task::Status::Failed)
             .await
-            .context("set task as import failed")?;
+            .context("set task_id={task_id:?} as import failed")?;
 
         self.queue
             .task_failed(&mut tx, task_id)
             .await
-            .context("add queue blockers")?;
+            .context("add queue blockers for task_id={task_id:?}")?;
 
         tx.commit().await.context("commit db tx")?;
 
-        info!("Task marked as failed");
+        info!(%task_id, "task marked as failed");
 
         Ok(())
     }
