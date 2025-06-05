@@ -29,10 +29,12 @@ pub enum Message {
     BuildSucceeded {
         task_id: task::Id,
         collectables: Vec<Collectable>,
+        /// Path to the log file (uncompressed).
         log_path: PathBuf,
     },
     BuildFailed {
         task_id: task::Id,
+        /// Path to the log file (uncompressed).
         log_path: Option<PathBuf>,
     },
     Busy {

@@ -40,8 +40,17 @@ pub struct Task {
     pub source_path: String,
     pub status: Status,
     pub allocated_builder: Option<endpoint::Id>,
+
+    /// Path to the compressed log file.
+    ///
+    /// Relative to the state directory.
     pub log_path: Option<String>,
+
+    /// Failed dependencies that stop this task from getting executed.
+    ///
+    /// Items are blocker IDs consisting of source ID, arch, project ID and repo ID.
     pub blocked_by: Vec<String>,
+
     pub added: DateTime<Utc>,
     pub started: Option<DateTime<Utc>>,
     pub updated: DateTime<Utc>,
