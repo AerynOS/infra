@@ -1,22 +1,23 @@
 use std::collections::HashSet;
 
 use color_eyre::eyre::{Context, OptionExt, Result};
-use moss::package::Meta;
 use service::database::Transaction;
 use strum::IntoEnumIterator;
 use tracing::{Span, info, warn};
 
 use super::{Status, block, query, set_status};
-use crate::{Profile, Project, Repository};
+use crate::{Project, Repository, task::MissingTask};
 
 #[tracing::instrument(name = "create_task", skip_all, fields(slug, build_id, version))]
 pub async fn create(
     tx: &mut Transaction,
     project: &Project,
-    profile: &Profile,
     repository: &Repository,
-    meta: &Meta,
-    description: String,
+    MissingTask {
+        description,
+        profile,
+        meta,
+    }: MissingTask<'_>,
 ) -> Result<()> {
     let build_id = format!(
         "{} / {} / {}-{}-{}_{}-{}",
