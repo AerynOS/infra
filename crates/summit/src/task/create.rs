@@ -13,11 +13,7 @@ pub async fn create(
     tx: &mut Transaction,
     project: &Project,
     repository: &Repository,
-    MissingTask {
-        description,
-        profile,
-        meta,
-    }: MissingTask<'_>,
+    task @ MissingTask { profile, meta, .. }: &MissingTask<'_>,
 ) -> Result<()> {
     let build_id = format!(
         "{} / {} / {}-{}-{}_{}-{}",
@@ -104,7 +100,7 @@ pub async fn create(
     .bind(meta.id().to_string())
     .bind(&profile.arch)
     .bind(&build_id)
-    .bind(description)
+    .bind(task.description())
     .bind(repository.commit_ref.as_deref().ok_or_eyre("missing repo commit ref")?)
     .bind(source_path)
     .bind(Status::New.to_string())

@@ -120,7 +120,7 @@ pub async fn create_missing(
     repo: &Repository,
     repo_db: &meta::Database,
 ) -> Result<()> {
-    for task in collect_missing(manager, project, repo, repo_db).await? {
+    for task in &collect_missing(manager, project, repo, repo_db).await? {
         // FIXME: do a batch insert?
         create(tx, project, repo, task).await.context("create task")?;
     }
@@ -268,9 +268,26 @@ pub async fn unblock(tx: &mut Transaction, task_id: Id, blocker: &str) -> Result
 }
 
 struct MissingTask<'a> {
-    description: String,
+    kind: MissingTaskKind,
     profile: &'a Profile,
     meta: Meta,
+}
+
+impl<'a> MissingTask<'a> {
+    fn description(&self) -> String {
+        let source_id = &self.meta.source_id;
+        let version = version(&self.meta);
+
+        match &self.kind {
+            MissingTaskKind::Initial => format!("Initial build of {source_id} ({version})"),
+            MissingTaskKind::Update { published } => format!("Update {source_id} from {published} to {version}"),
+        }
+    }
+}
+
+enum MissingTaskKind {
+    Initial,
+    Update { published: String },
 }
 
 async fn collect_missing<'a>(
@@ -318,7 +335,6 @@ async fn collect_missing<'a>(
                     .context("list package dependents")?;
 
                     let slug = || format!("~/{}/{}/{}", project.slug, repo.name, meta.name);
-                    let version = |meta: &Meta| format!("{}-{}", meta.version_identifier, meta.source_release);
 
                     let latest = corresponding
                         .iter()
@@ -346,20 +362,16 @@ async fn collect_missing<'a>(
                         // published.source_release > meta.source_release below
                         // so we need to create a new task for the newer package
                         } else {
+                            let published = version(published);
                             debug!(
                                 slug = slug(),
-                                published = version(published),
+                                published,
                                 recipe = version(&meta),
                                 "Adding newer package release as task"
                             );
 
                             missing_tasks.push(MissingTask {
-                                description: format!(
-                                    "Update {} from {} to {}",
-                                    meta.source_id,
-                                    version(published),
-                                    version(&meta)
-                                ),
+                                kind: MissingTaskKind::Update { published },
                                 profile,
                                 meta,
                             });
@@ -374,7 +386,7 @@ async fn collect_missing<'a>(
                         );
 
                         missing_tasks.push(MissingTask {
-                            description: format!("Initial build of {} ({})", meta.source_id, version(&meta)),
+                            kind: MissingTaskKind::Initial,
                             profile,
                             meta,
                         });
@@ -391,4 +403,8 @@ async fn collect_missing<'a>(
     }
 
     Ok(missing_tasks)
+}
+
+fn version(meta: &Meta) -> String {
+    format!("{}-{}", meta.version_identifier, meta.source_release)
 }
