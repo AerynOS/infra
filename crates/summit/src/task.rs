@@ -305,7 +305,7 @@ async fn collect_missing<'a>(
             .context("list source repo packages")?;
 
             for (_, meta) in packages {
-                'providers: for name in meta
+                for name in meta
                     .providers
                     .iter()
                     .filter(|p| p.kind == dependency::Kind::PackageName)
@@ -335,7 +335,7 @@ async fn collect_missing<'a>(
                                 recipe = version(&meta),
                                 "Newer package release already present in index"
                             );
-                            continue 'providers;
+                            continue;
                         } else if published.source_release == meta.source_release {
                             warn!(
                                 slug = slug(),
@@ -343,7 +343,7 @@ async fn collect_missing<'a>(
                                 recipe = version(&meta),
                                 "Current package release already present in index"
                             );
-                            continue 'providers;
+                            continue;
 
                         // published.source_release > meta.source_release below
                         // so we need to create a new task for the newer package
@@ -366,7 +366,7 @@ async fn collect_missing<'a>(
                                 meta,
                             });
 
-                            break 'providers;
+                            break;
                         }
                     } else {
                         debug!(
@@ -381,7 +381,7 @@ async fn collect_missing<'a>(
                             meta,
                         });
 
-                        break 'providers;
+                        break;
                     };
                 }
             }
