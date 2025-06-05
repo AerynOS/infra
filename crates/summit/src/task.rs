@@ -122,9 +122,7 @@ pub async fn create_missing(
 ) -> Result<()> {
     for task in collect_missing(manager, project, repo, repo_db).await? {
         // FIXME: do a batch insert?
-        create(tx, project, task.profile, repo, &task.meta, task.description)
-            .await
-            .context("create task")?;
+        create(tx, project, repo, task).await.context("create task")?;
     }
 
     Ok(())
