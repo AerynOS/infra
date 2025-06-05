@@ -64,6 +64,7 @@ pub enum Status {
     /// Now publishing to Vessel
     Publishing,
     /// Task was superseded by a newer task.
+    ///
     /// If this task was previously blocked, it must be
     /// removed from the task_blockers table, but only after the
     /// superseding task has been marked blocked by the blocker
