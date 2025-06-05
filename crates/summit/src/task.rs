@@ -120,120 +120,7 @@ pub async fn create_missing(
     repo: &Repository,
     repo_db: &meta::Database,
 ) -> Result<()> {
-    let span = Span::current();
-
-    struct MissingTask<'a> {
-        description: String,
-        profile: &'a Profile,
-        meta: Meta,
-    }
-    let mut missing_tasks = Vec::new();
-
-    for profile in &project.profiles {
-        span.record("profile", &profile.name);
-
-        if !matches!(profile.status, profile::Status::Indexed) {
-            warn!(
-                status = %profile.status,
-                "Profile not fully indexed, skipping task creation"
-            );
-            continue;
-        }
-
-        let profile_db = manager.profile_db(&profile.id).context("missing profile db")?;
-
-        let packages = spawn_blocking({
-            let repo_db = repo_db.clone();
-            move || repo_db.query(None)
-        })
-        .await
-        .context("join handle")?
-        .context("list source repo packages")?;
-
-        for (_, meta) in packages {
-            'providers: for name in meta
-                .providers
-                .iter()
-                .filter(|p| p.kind == dependency::Kind::PackageName)
-                .cloned()
-            {
-                let corresponding = task::spawn_blocking({
-                    let profile_db = profile_db.clone();
-                    move || profile_db.query(Some(meta::Filter::Provider(name)))
-                })
-                .await
-                .context("join handle")?
-                .context("list package dependents")?;
-
-                let slug = || format!("~/{}/{}/{}", project.slug, repo.name, meta.name);
-                let version = |meta: &Meta| format!("{}-{}", meta.version_identifier, meta.source_release);
-
-                let latest = corresponding
-                    .iter()
-                    .max_by(|(_, a), (_, b)| a.source_release.cmp(&b.source_release));
-
-                if let Some((_, published)) = latest {
-                    // distinguishing between > and == is the kind thing to do in logs
-                    if published.source_release > meta.source_release {
-                        warn!(
-                            slug = slug(),
-                            published = version(published),
-                            recipe = version(&meta),
-                            "Newer package release already present in index"
-                        );
-                        continue 'providers;
-                    } else if published.source_release == meta.source_release {
-                        warn!(
-                            slug = slug(),
-                            published = version(published),
-                            recipe = version(&meta),
-                            "Current package release already present in index"
-                        );
-                        continue 'providers;
-
-                    // published.source_release > meta.source_release below
-                    // so we need to create a new task for the newer package
-                    } else {
-                        debug!(
-                            slug = slug(),
-                            published = version(published),
-                            recipe = version(&meta),
-                            "Adding newer package release as task"
-                        );
-
-                        missing_tasks.push(MissingTask {
-                            description: format!(
-                                "Update {} from {} to {}",
-                                meta.source_id,
-                                version(published),
-                                version(&meta)
-                            ),
-                            profile,
-                            meta,
-                        });
-
-                        break 'providers;
-                    }
-                } else {
-                    debug!(
-                        slug = slug(),
-                        version = version(&meta),
-                        "Adding missing package release as task"
-                    );
-
-                    missing_tasks.push(MissingTask {
-                        description: format!("Initial build of {} ({})", meta.source_id, version(&meta)),
-                        profile,
-                        meta,
-                    });
-
-                    break 'providers;
-                };
-            }
-        }
-    }
-
-    for task in missing_tasks {
+    for task in collect_missing(manager, project, repo, repo_db).await? {
         // FIXME: do a batch insert?
         create(tx, project, task.profile, repo, &task.meta, task.description)
             .await
@@ -380,4 +267,126 @@ pub async fn unblock(tx: &mut Transaction, task_id: Id, blocker: &str) -> Result
     }
 
     Ok(remaining as usize)
+}
+
+struct MissingTask<'a> {
+    description: String,
+    profile: &'a Profile,
+    meta: Meta,
+}
+
+async fn collect_missing<'a>(
+    manager: &Manager,
+    project: &'a Project,
+    repo: &Repository,
+    repo_db: &meta::Database,
+) -> Result<Vec<MissingTask<'a>>> {
+    let span = Span::current();
+    let mut missing_tasks = Vec::new();
+
+    for profile in &project.profiles {
+        span.record("profile", &profile.name);
+
+        if !matches!(profile.status, profile::Status::Indexed) {
+            warn!(
+                status = %profile.status,
+                "Profile not fully indexed, skipping task creation"
+            );
+            continue;
+        }
+
+        let profile_db = manager.profile_db(&profile.id).context("missing profile db")?;
+
+        let packages = spawn_blocking({
+            let repo_db = repo_db.clone();
+            move || repo_db.query(None)
+        })
+        .await
+        .context("join handle")?
+        .context("list source repo packages")?;
+
+        for (_, meta) in packages {
+            'providers: for name in meta
+                .providers
+                .iter()
+                .filter(|p| p.kind == dependency::Kind::PackageName)
+                .cloned()
+            {
+                let corresponding = task::spawn_blocking({
+                    let profile_db = profile_db.clone();
+                    move || profile_db.query(Some(meta::Filter::Provider(name)))
+                })
+                .await
+                .context("join handle")?
+                .context("list package dependents")?;
+
+                let slug = || format!("~/{}/{}/{}", project.slug, repo.name, meta.name);
+                let version = |meta: &Meta| format!("{}-{}", meta.version_identifier, meta.source_release);
+
+                let latest = corresponding
+                    .iter()
+                    .max_by(|(_, a), (_, b)| a.source_release.cmp(&b.source_release));
+
+                if let Some((_, published)) = latest {
+                    // distinguishing between > and == is the kind thing to do in logs
+                    if published.source_release > meta.source_release {
+                        warn!(
+                            slug = slug(),
+                            published = version(published),
+                            recipe = version(&meta),
+                            "Newer package release already present in index"
+                        );
+                        continue 'providers;
+                    } else if published.source_release == meta.source_release {
+                        warn!(
+                            slug = slug(),
+                            published = version(published),
+                            recipe = version(&meta),
+                            "Current package release already present in index"
+                        );
+                        continue 'providers;
+
+                    // published.source_release > meta.source_release below
+                    // so we need to create a new task for the newer package
+                    } else {
+                        debug!(
+                            slug = slug(),
+                            published = version(published),
+                            recipe = version(&meta),
+                            "Adding newer package release as task"
+                        );
+
+                        missing_tasks.push(MissingTask {
+                            description: format!(
+                                "Update {} from {} to {}",
+                                meta.source_id,
+                                version(published),
+                                version(&meta)
+                            ),
+                            profile,
+                            meta,
+                        });
+
+                        break 'providers;
+                    }
+                } else {
+                    debug!(
+                        slug = slug(),
+                        version = version(&meta),
+                        "Adding missing package release as task"
+                    );
+
+                    missing_tasks.push(MissingTask {
+                        description: format!("Initial build of {} ({})", meta.source_id, version(&meta)),
+                        profile,
+                        meta,
+                    });
+
+                    break 'providers;
+                };
+            }
+        }
+    }
+
+    Ok(missing_tasks)
 }
