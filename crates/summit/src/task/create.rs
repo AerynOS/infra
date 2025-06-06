@@ -5,7 +5,7 @@ use service::database::Transaction;
 use strum::IntoEnumIterator;
 use tracing::{Span, info, warn};
 
-use super::{Status, block, query, set_status};
+use super::{Status, block, query, set_status, version};
 use crate::{Project, Repository, task::MissingTask};
 
 #[tracing::instrument(name = "create_task", skip_all, fields(slug, build_id, version))]
@@ -30,10 +30,7 @@ pub async fn create(
     let span = Span::current();
     span.record("build_id", &build_id);
     span.record("slug", &slug);
-    span.record(
-        "version",
-        format!("{}-{}", meta.version_identifier, meta.source_release),
-    );
+    span.record("version", version(meta));
 
     let exists = sqlx::query_as::<_, (i64,)>(
         "
