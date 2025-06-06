@@ -186,7 +186,7 @@ impl Params {
             query = query.bind(source_path);
         }
         if let Some(search_query) = self.search_query.clone() {
-            let pattern = format!("%{}%", search_query);
+            let pattern = format!("%{search_query}%");
             query = query.bind(pattern);
         }
         query
