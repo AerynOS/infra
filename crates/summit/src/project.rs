@@ -24,7 +24,7 @@ pub struct Project {
 }
 
 pub async fn create(tx: &mut Transaction, name: String, slug: String, summary: String) -> Result<Project, sqlx::Error> {
-    let (id,): (i64,) = sqlx::query_as(
+    let id: i64 = sqlx::query_scalar(
         "
         INSERT INTO project
         (

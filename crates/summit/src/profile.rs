@@ -46,7 +46,7 @@ pub async fn create(
     arch: String,
     index_uri: Uri,
 ) -> Result<Profile, sqlx::Error> {
-    let (id,): (i64,) = sqlx::query_as(
+    let id: i64 = sqlx::query_scalar(
         "
         INSERT INTO profile
         (

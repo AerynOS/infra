@@ -263,7 +263,7 @@ pub struct Admin {
 pub(crate) async fn sync_admin(db: &Database, admin: Admin) -> Result<(), Error> {
     let mut tx = db.begin().await?;
 
-    let account: Option<(Uuid,)> = sqlx::query_as(
+    let account: Option<Uuid> = sqlx::query_scalar(
         "
         SELECT
           account_id

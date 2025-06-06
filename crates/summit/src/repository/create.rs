@@ -13,7 +13,7 @@ pub async fn create(
     origin_uri: Uri,
     branch: Option<String>,
 ) -> Result<Repository, sqlx::Error> {
-    let (id,): (i64,) = sqlx::query_as(
+    let id: i64 = sqlx::query_scalar(
         "
         INSERT INTO repository
         (
