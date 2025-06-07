@@ -92,7 +92,7 @@ impl ServiceGenerator for Generator {
         for (method, _, _) in &methods {
             buf.push_str(&format!(
                 "\n\"/{}.{}/{}\" => Some(Self::{}),",
-                service.package, service.proto_name, &method.proto_name, &method.proto_name
+                service.package, service.proto_name, method.proto_name, method.proto_name
             ));
         }
         buf.push_str("_ => None,");
@@ -107,7 +107,7 @@ impl ServiceGenerator for Generator {
                 .collect::<Vec<_>>()
                 .join(" | ");
 
-            buf.push_str(&format!("\nSelf::{} => {flags},", &method.proto_name,));
+            buf.push_str(&format!("\nSelf::{} => {flags},", method.proto_name));
         }
         buf.push('}');
         buf.push_str("\n}");
@@ -119,7 +119,7 @@ impl ServiceGenerator for Generator {
                 .map(|perm| format!("Some(Permission::{perm})"))
                 .unwrap_or_else(|| "None".to_owned());
 
-            buf.push_str(&format!("\nSelf::{} => {perm},", &method.proto_name,));
+            buf.push_str(&format!("\nSelf::{} => {perm},", method.proto_name));
         }
         buf.push('}');
         buf.push_str("\n}");

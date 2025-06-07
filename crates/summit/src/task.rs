@@ -243,7 +243,7 @@ pub async fn unblock(tx: &mut Transaction, task_id: Id, blocker: &str) -> Result
     .execute(tx.as_mut())
     .await?;
 
-    let (remaining,) = sqlx::query_as::<_, (u32,)>(
+    let remaining: u32 = sqlx::query_scalar(
         "
         SELECT COUNT(*)
         FROM task_blockers

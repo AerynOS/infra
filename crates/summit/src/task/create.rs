@@ -5,7 +5,7 @@ use service::database::Transaction;
 use strum::IntoEnumIterator;
 use tracing::{Span, info, warn};
 
-use super::{Status, block, query, set_status};
+use super::{Status, block, query, set_status, version};
 use crate::{Project, Repository, task::MissingTask};
 
 #[tracing::instrument(name = "create_task", skip_all, fields(slug, build_id, version))]
@@ -30,12 +30,9 @@ pub async fn create(
     let span = Span::current();
     span.record("build_id", &build_id);
     span.record("slug", &slug);
-    span.record(
-        "version",
-        format!("{}-{}", meta.version_identifier, meta.source_release),
-    );
+    span.record("version", version(meta));
 
-    let exists = sqlx::query_as::<_, (i64,)>(
+    let exists: Option<i64> = sqlx::query_scalar(
         "
         SELECT task_id
         FROM task
@@ -73,7 +70,7 @@ pub async fn create(
     .context("find superseded tasks")?
     .tasks;
 
-    let (task,): (i64,) = sqlx::query_as(
+    let task: i64 = sqlx::query_scalar(
         "
         INSERT INTO task
         (
@@ -125,7 +122,7 @@ pub async fn create(
                 .context("set task as superseded")?;
 
             blockers.extend(
-                sqlx::query_as::<_, (String,)>(
+                sqlx::query_scalar::<_, String>(
                     "
                     DELETE FROM task_blockers
                     WHERE task_id = ?
@@ -134,9 +131,7 @@ pub async fn create(
                 )
                 .bind(i64::from(superseded_task.id))
                 .fetch_all(tx.as_mut())
-                .await?
-                .into_iter()
-                .map(|(blocker,)| blocker),
+                .await?,
             );
         }
 
