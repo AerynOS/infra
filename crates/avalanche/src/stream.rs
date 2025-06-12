@@ -8,12 +8,14 @@ use service::{
     endpoint::Role,
     error,
     grpc::{
+        self,
         collectable::Collectable,
         summit::{
-            BuilderBusy, BuilderFinished, BuilderLog, BuilderStatus, BuilderStreamIncoming, BuilderUpload,
-            builder_stream_incoming, builder_stream_outgoing,
+            BuilderBusy, BuilderFinished, BuilderLog, BuilderStatus, BuilderStreamIncoming, BuilderStreamIncomingEvent,
+            BuilderUpload, builder_stream_incoming_event, builder_stream_outgoing_event,
         },
     },
+    tracing::{OpenTelemetryContext, OpenTelemetrySpanExt},
 };
 use tokio::{
     select,
@@ -21,7 +23,7 @@ use tokio::{
     time,
 };
 use tokio_stream::wrappers::ReceiverStream;
-use tracing::{debug, error, info, warn};
+use tracing::{Instrument, Span, debug, error, info, info_span, warn};
 
 use crate::{build, upload};
 
@@ -35,7 +37,10 @@ impl Handle {
         let _ = self
             .sender
             .send(BuilderStreamIncoming {
-                event: Some(builder_stream_incoming::Event::BuildStarted(task_id)),
+                event: Some(BuilderStreamIncomingEvent {
+                    event: Some(builder_stream_incoming_event::Event::BuildStarted(task_id)),
+                }),
+                tracing_context: Some(grpc::inject_tracing_context()),
             })
             .await;
     }
@@ -44,7 +49,10 @@ impl Handle {
         let _ = self
             .sender
             .send(BuilderStreamIncoming {
-                event: Some(builder_stream_incoming::Event::BuildLog(BuilderLog { chunk })),
+                event: Some(BuilderStreamIncomingEvent {
+                    event: Some(builder_stream_incoming_event::Event::BuildLog(BuilderLog { chunk })),
+                }),
+                tracing_context: Some(grpc::inject_tracing_context()),
             })
             .await;
     }
@@ -53,10 +61,13 @@ impl Handle {
         let _ = self
             .sender
             .send(BuilderStreamIncoming {
-                event: Some(builder_stream_incoming::Event::BuildSucceeded(BuilderFinished {
-                    task_id,
-                    collectables,
-                })),
+                event: Some(BuilderStreamIncomingEvent {
+                    event: Some(builder_stream_incoming_event::Event::BuildSucceeded(BuilderFinished {
+                        task_id,
+                        collectables,
+                    })),
+                }),
+                tracing_context: Some(grpc::inject_tracing_context()),
             })
             .await;
     }
@@ -65,7 +76,10 @@ impl Handle {
         let _ = self
             .sender
             .send(BuilderStreamIncoming {
-                event: Some(builder_stream_incoming::Event::BuildFailed(task_id)),
+                event: Some(BuilderStreamIncomingEvent {
+                    event: Some(builder_stream_incoming_event::Event::BuildFailed(task_id)),
+                }),
+                tracing_context: Some(grpc::inject_tracing_context()),
             })
             .await;
     }
@@ -121,7 +135,10 @@ async fn connect(state: &State) -> Result<()> {
 
                 let _ = sender
                     .send(BuilderStreamIncoming {
-                        event: Some(builder_stream_incoming::Event::Status(BuilderStatus { building })),
+                        event: Some(BuilderStreamIncomingEvent {
+                            event: Some(builder_stream_incoming_event::Event::Status(BuilderStatus { building })),
+                        }),
+                        tracing_context: Some(grpc::inject_tracing_context()),
                     })
                     .await;
 
@@ -129,60 +146,82 @@ async fn connect(state: &State) -> Result<()> {
             },
             result = stream.try_next() => {
                 if let Some(message) = result.context("stream grpc error")? {
-                    let event = message.event.ok_or_eyre("missing stream event")?;
+                    let context = message.tracing_context.as_ref().map(grpc::extract_tracing_context).unwrap_or(OpenTelemetryContext::current());
+                    let span = info_span!(parent: None, "stream_event");
+                    span.set_parent(context);
 
-                    match event {
-                        builder_stream_outgoing::Event::Build(request) => {
-                            let mut build_guard = building.lock().await;
+                    let event = message.event.and_then(|event| event.event).ok_or_eyre("missing stream event")?;
 
-                            if let Some(in_progress) = *build_guard {
-                                warn!("Build already in progress, ignoring");
-                                let _ = sender
-                                    .send(BuilderStreamIncoming {
-                                        event: Some(builder_stream_incoming::Event::Busy(BuilderBusy {
-                                            requested_task_id: request.task_id,
-                                            in_progress_task_id: in_progress,
-                                        })),
-                                    })
-                                    .await;
-                                continue;
-                            }
-
-                            *build_guard = Some(request.task_id);
-
-                            drop(build_guard);
-
-                            tokio::spawn({
-                                let state = state.clone();
-                                let handle = Handle { sender: sender.clone() };
-                                let building = building.clone();
-
-                                async move {
-                                    build(request, state, handle).await;
-                                    building.lock().await.take();
-                                }
-                            });
-                        }
-                        builder_stream_outgoing::Event::Upload(BuilderUpload { build, token, uri }) => {
-                            let build = build.ok_or_eyre("missing build message")?;
-
-                            tokio::spawn({
-                                let state = state.clone();
-
-                                async move {
-                                    if let Err(e) = upload(state, build, token, &uri).await {
-                                        let error = error::chain(&*e);
-                                        error!(uri, %error, "Failed to upload packages to vessel");
-                                    }
-                                }
-                            });
-                        }
-                    }
+                    handle_stream_event(event, &building, &sender, state).instrument(span).await?;
                 } else {
                     break;
                 }
 
             }
+        }
+    }
+
+    Ok(())
+}
+
+async fn handle_stream_event(
+    event: builder_stream_outgoing_event::Event,
+    building: &Arc<Mutex<Option<u64>>>,
+    sender: &mpsc::Sender<BuilderStreamIncoming>,
+    state: &State,
+) -> Result<()> {
+    let span = Span::current();
+
+    match event {
+        builder_stream_outgoing_event::Event::Build(request) => {
+            let mut build_guard = building.lock().await;
+
+            if let Some(in_progress) = *build_guard {
+                warn!("Build already in progress, ignoring");
+                let _ = sender
+                    .send(BuilderStreamIncoming {
+                        event: Some(BuilderStreamIncomingEvent {
+                            event: Some(builder_stream_incoming_event::Event::Busy(BuilderBusy {
+                                requested_task_id: request.task_id,
+                                in_progress_task_id: in_progress,
+                            })),
+                        }),
+                        tracing_context: Some(grpc::inject_tracing_context()),
+                    })
+                    .await;
+                return Ok(());
+            }
+
+            *build_guard = Some(request.task_id);
+
+            drop(build_guard);
+
+            tokio::spawn({
+                let state = state.clone();
+                let handle = Handle { sender: sender.clone() };
+                let building = building.clone();
+
+                async move {
+                    build(request, state, handle).await;
+                    building.lock().await.take();
+                }
+                .instrument(span)
+            });
+        }
+        builder_stream_outgoing_event::Event::Upload(BuilderUpload { build, token, uri }) => {
+            let build = build.ok_or_eyre("missing build message")?;
+
+            tokio::spawn({
+                let state = state.clone();
+
+                async move {
+                    if let Err(e) = upload(state, build, token, &uri).await {
+                        let error = error::chain(&*e);
+                        error!(uri, %error, "Failed to upload packages to vessel");
+                    }
+                }
+                .instrument(span)
+            });
         }
     }
 

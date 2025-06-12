@@ -5,7 +5,7 @@ use moss::{db::meta, package::Meta};
 use service::{State, git};
 use sqlx::SqliteConnection;
 use tokio::{fs, task};
-use tracing::{info, trace};
+use tracing::{Span, info, trace};
 
 use super::{Repository, Status, set_description, set_status};
 
@@ -16,6 +16,8 @@ pub async fn reindex(
     mut repo: Repository,
     db: meta::Database,
 ) -> Result<Repository> {
+    let span = Span::current();
+
     info!("Reindexing repository");
 
     set_status(conn, &mut repo, Status::Indexing)
@@ -34,7 +36,7 @@ pub async fn reindex(
         .await
         .context("update readme")?;
 
-    let num_indexed = task::spawn_blocking(move || update_manifests(work_dir, db))
+    let num_indexed = task::spawn_blocking(move || span.in_scope(|| update_manifests(work_dir, db)))
         .await
         .context("join handle")?
         .context("update manifests")?;

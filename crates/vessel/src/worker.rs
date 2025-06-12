@@ -18,7 +18,7 @@ use service::{
 };
 use sha2::{Digest, Sha256};
 use tokio::{sync::mpsc, time::Instant};
-use tracing::{Instrument, debug, error, info, info_span, warn};
+use tracing::{Instrument, Span, debug, error, info, info_span, warn};
 
 use crate::collection;
 
@@ -31,6 +31,7 @@ pub enum Message {
         task_id: u64,
         endpoint: Endpoint,
         packages: Vec<Package>,
+        span: Span,
     },
 }
 
@@ -90,8 +91,10 @@ async fn handle_message(state: &State, message: Message) -> Result<()> {
             task_id,
             endpoint,
             packages,
+            span,
         } => {
             let span = info_span!(
+                parent: &span,
                 "import_packages",
                 task_id,
                 endpoint = %endpoint.id,
@@ -138,7 +141,9 @@ async fn handle_message(state: &State, message: Message) -> Result<()> {
 pub async fn import_directory(state: &State, directory: PathBuf) -> Result<()> {
     info!("Import started");
 
-    let stones = tokio::task::spawn_blocking(move || enumerate_stones(&directory))
+    let span = Span::current();
+
+    let stones = tokio::task::spawn_blocking(move || span.in_scope(|| enumerate_stones(&directory)))
         .await
         .context("spawn blocking")?
         .context("enumerate stones")?;

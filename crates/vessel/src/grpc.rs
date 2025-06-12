@@ -219,6 +219,7 @@ async fn upload(state: Arc<State>, request: tonic::Request<tonic::Streaming<Uplo
             task_id: body.task_id,
             endpoint,
             packages,
+            span,
         })
         .context(SendWorkerSnafu)?;
 

@@ -23,7 +23,7 @@ async fn main() -> Result<()> {
 
     let config = Config::load(config.unwrap_or_else(|| root.join("config.toml"))).await?;
 
-    service::tracing::init(&config.tracing);
+    service::tracing::init(&config.tracing, &config.description)?;
 
     let state = State::load(root)
         .await?
@@ -48,6 +48,8 @@ async fn main() -> Result<()> {
         .with_task("worker", worker_task)
         .start()
         .await?;
+
+    service::tracing::shutdown().await;
 
     Ok(())
 }

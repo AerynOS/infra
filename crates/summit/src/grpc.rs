@@ -8,11 +8,12 @@ use service::{
         self,
         summit::{
             BuilderBusy, BuilderFinished, BuilderLog, BuilderStatus, BuilderStreamIncoming, BuilderStreamOutgoing,
-            FailRequest, ImportRequest, RetryRequest, builder_stream_incoming,
+            FailRequest, ImportRequest, RetryRequest, builder_stream_incoming_event,
             summit_service_server::{SummitService, SummitServiceServer},
         },
     },
     token::VerifiedToken,
+    tracing::{OpenTelemetryContext, OpenTelemetrySpanExt},
 };
 use snafu::{ResultExt, Snafu};
 use tokio::{
@@ -22,7 +23,7 @@ use tokio::{
     time::Instant,
 };
 use tokio_stream::{StreamExt, wrappers::ReceiverStream};
-use tracing::{Instrument, Span, info, warn};
+use tracing::{Instrument, Span, info, info_span, warn};
 
 use crate::{builder, worker};
 
@@ -124,6 +125,7 @@ async fn import_succeeded(state: Arc<State>, request: tonic::Request<ImportReque
 
     let _ = state.worker.send(worker::Message::ImportSucceeded {
         task_id: (request.into_inner().task_id as i64).into(),
+        span: Span::current(),
     });
 
     Ok(())
@@ -156,6 +158,7 @@ async fn import_failed(state: Arc<State>, request: tonic::Request<ImportRequest>
 
     let _ = state.worker.send(worker::Message::ImportFailed {
         task_id: (request.into_inner().task_id as i64).into(),
+        span: Span::current(),
     });
 
     Ok(())
@@ -268,84 +271,114 @@ async fn builder(
     let mut inner = async || {
         let mut log_file = None;
 
-        while let Some(message) = stream.next().await {
-            let Some(event) = message.context(BuilderStreamSnafu)?.event else {
+        while let Some(result) = stream.next().await {
+            let message = result.context(BuilderStreamSnafu)?;
+
+            let Some(event) = message.event.and_then(|e| e.event) else {
                 continue;
             };
 
-            match event {
-                builder_stream_incoming::Event::Status(BuilderStatus { building }) => {
-                    let _ = state.worker.send(worker::Message::Builder(
-                        endpoint_id,
-                        builder::Message::Status {
-                            now: Instant::now(),
-                            building: building.map(|id| (id as i64).into()),
-                        },
-                    ));
-                }
-                builder_stream_incoming::Event::BuildStarted(task_id) => {
-                    let parent = state.service.state_dir.join("logs").join(task_id.to_string());
+            let context = message
+                .tracing_context
+                .as_ref()
+                .map(grpc::extract_tracing_context)
+                .unwrap_or(OpenTelemetryContext::current());
+            let span = info_span!(parent: None, "stream_event");
+            span.set_parent(context);
 
-                    let _ = fs::remove_dir_all(&parent).await;
-                    let _ = fs::create_dir_all(&parent).await;
+            let cloned_span = span.clone();
 
-                    let path = parent.join("build.log");
+            async {
+                match event {
+                    builder_stream_incoming_event::Event::Status(BuilderStatus { building }) => {
+                        let _ = state.worker.send(worker::Message::Builder(
+                            endpoint_id,
+                            builder::Message::Status {
+                                now: Instant::now(),
+                                building: building.map(|id| (id as i64).into()),
+                            },
+                        ));
+                    }
+                    builder_stream_incoming_event::Event::BuildStarted(task_id) => {
+                        let parent = state.service.state_dir.join("logs").join(task_id.to_string());
 
-                    let file = File::create(&path).await.context(CreateLogFileSnafu { task_id })?;
+                        let _ = fs::remove_dir_all(&parent).await;
+                        let _ = fs::create_dir_all(&parent).await;
 
-                    log_file = Some((task_id, path, file));
-                }
-                builder_stream_incoming::Event::BuildLog(BuilderLog { chunk }) => {
-                    if let Some((task_id, _, file)) = log_file.as_mut() {
-                        file.write_all(&chunk)
-                            .await
-                            .context(WriteLogFileSnafu { task_id: *task_id })?;
+                        let path = parent.join("build.log");
+
+                        let file = File::create(&path).await.context(CreateLogFileSnafu { task_id })?;
+
+                        log_file = Some((task_id, path, file));
+                    }
+                    builder_stream_incoming_event::Event::BuildLog(BuilderLog { chunk }) => {
+                        // Disable tracing for this as its very noisy & wasteful
+                        let span = Span::none();
+
+                        async {
+                            if let Some((task_id, _, file)) = log_file.as_mut() {
+                                file.write_all(&chunk)
+                                    .await
+                                    .context(WriteLogFileSnafu { task_id: *task_id })?;
+                            }
+
+                            Ok(())
+                        }
+                        .instrument(span)
+                        .await?;
+                    }
+                    builder_stream_incoming_event::Event::BuildSucceeded(BuilderFinished { task_id, collectables }) => {
+                        let (_, log_path, mut log_file) = log_file.take().ok_or(Error::TakeLogFile { task_id })?;
+
+                        log_file.flush().await.context(WriteLogFileSnafu { task_id })?;
+
+                        let _ = state.worker.send(worker::Message::Builder(
+                            endpoint_id,
+                            builder::Message::BuildSucceeded {
+                                task_id: (task_id as i64).into(),
+                                collectables,
+                                log_path,
+                                span,
+                            },
+                        ));
+                    }
+                    builder_stream_incoming_event::Event::BuildFailed(task_id) => {
+                        let log_path = if let Some((_, path, mut file)) = log_file.take() {
+                            file.flush().await.context(WriteLogFileSnafu { task_id })?;
+
+                            Some(path)
+                        } else {
+                            None
+                        };
+
+                        let _ = state.worker.send(worker::Message::Builder(
+                            endpoint_id,
+                            builder::Message::BuildFailed {
+                                task_id: (task_id as i64).into(),
+                                log_path,
+                                span,
+                            },
+                        ));
+                    }
+                    builder_stream_incoming_event::Event::Busy(BuilderBusy {
+                        requested_task_id,
+                        in_progress_task_id,
+                    }) => {
+                        let _ = state.worker.send(worker::Message::Builder(
+                            endpoint_id,
+                            builder::Message::Busy {
+                                requested: (requested_task_id as i64).into(),
+                                in_progress: (in_progress_task_id as i64).into(),
+                                span,
+                            },
+                        ));
                     }
                 }
-                builder_stream_incoming::Event::BuildSucceeded(BuilderFinished { task_id, collectables }) => {
-                    let (_, log_path, mut log_file) = log_file.take().ok_or(Error::TakeLogFile { task_id })?;
 
-                    log_file.flush().await.context(WriteLogFileSnafu { task_id })?;
-
-                    let _ = state.worker.send(worker::Message::Builder(
-                        endpoint_id,
-                        builder::Message::BuildSucceeded {
-                            task_id: (task_id as i64).into(),
-                            collectables,
-                            log_path,
-                        },
-                    ));
-                }
-                builder_stream_incoming::Event::BuildFailed(task_id) => {
-                    let log_path = if let Some((_, path, mut file)) = log_file.take() {
-                        file.flush().await.context(WriteLogFileSnafu { task_id })?;
-
-                        Some(path)
-                    } else {
-                        None
-                    };
-
-                    let _ = state.worker.send(worker::Message::Builder(
-                        endpoint_id,
-                        builder::Message::BuildFailed {
-                            task_id: (task_id as i64).into(),
-                            log_path,
-                        },
-                    ));
-                }
-                builder_stream_incoming::Event::Busy(BuilderBusy {
-                    requested_task_id,
-                    in_progress_task_id,
-                }) => {
-                    let _ = state.worker.send(worker::Message::Builder(
-                        endpoint_id,
-                        builder::Message::Busy {
-                            requested: (requested_task_id as i64).into(),
-                            in_progress: (in_progress_task_id as i64).into(),
-                        },
-                    ));
-                }
+                Ok(())
             }
+            .instrument(cloned_span)
+            .await?;
         }
 
         Ok(())
