@@ -6,6 +6,7 @@ members = [
 
 [workspace.package]
 edition = "2024"
+rust-version = "1.87"
 
 [workspace.dependencies]
 dag = { git = "https://github.com/AerynOS/os-tools.git" }
