@@ -6,7 +6,7 @@ use tokio::{
     sync::mpsc,
     time::{self, Instant},
 };
-use tracing::{debug, error, info};
+use tracing::{Instrument, Span, debug, error, info};
 
 use crate::{Manager, builder, task};
 
@@ -18,8 +18,8 @@ pub type Sender = mpsc::UnboundedSender<Message>;
 #[strum(serialize_all = "kebab-case")]
 pub enum Message {
     AllocateBuilds,
-    ImportSucceeded { task_id: task::Id },
-    ImportFailed { task_id: task::Id },
+    ImportSucceeded { task_id: task::Id, span: Span },
+    ImportFailed { task_id: task::Id, span: Span },
     RetryTask { task_id: task::Id },
     FailTask { task_id: task::Id },
     Timer(Instant),
@@ -68,8 +68,8 @@ async fn timer_task(sender: Sender) -> Result<(), Infallible> {
 async fn handle_message(sender: &Sender, manager: &mut Manager, message: Message) -> Result<()> {
     match message {
         Message::AllocateBuilds => allocate_builds(manager).await,
-        Message::ImportSucceeded { task_id } => import_succeeded(sender, manager, task_id).await,
-        Message::ImportFailed { task_id } => import_failed(sender, manager, task_id).await,
+        Message::ImportSucceeded { task_id, span } => import_succeeded(sender, manager, task_id).instrument(span).await,
+        Message::ImportFailed { task_id, span } => import_failed(sender, manager, task_id).instrument(span).await,
         Message::RetryTask { task_id } => retry_task(sender, manager, task_id).await,
         Message::FailTask { task_id } => fail_task(sender, manager, task_id).await,
         Message::Timer(_) => timer(sender, manager).await,

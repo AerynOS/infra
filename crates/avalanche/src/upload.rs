@@ -13,7 +13,7 @@ use tokio::{
 };
 use tokio_stream::{StreamExt, wrappers::ReceiverStream};
 use tokio_util::io::ReaderStream;
-use tracing::{debug, error, info, warn};
+use tracing::{Instrument, Span, debug, error, info, warn};
 
 #[tracing::instrument(
     skip_all,
@@ -36,11 +36,14 @@ pub async fn upload(state: State, build: BuilderFinished, token: String, uri: &s
 
     let (sender, receiver) = mpsc::channel(1);
 
-    tokio::spawn(async move {
-        if let Err(e) = client.upload(ReceiverStream::new(receiver)).await {
-            error!(error = error::chain(e), "Upload stream failed");
+    tokio::spawn(
+        async move {
+            if let Err(e) = client.upload(ReceiverStream::new(receiver)).await {
+                error!(error = error::chain(e), "Upload stream failed");
+            }
         }
-    });
+        .instrument(Span::current()),
+    );
 
     sender
         .send(UploadRequest { chunk: header.into() })

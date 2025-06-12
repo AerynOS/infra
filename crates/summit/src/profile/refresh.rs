@@ -20,6 +20,8 @@ use super::{Profile, Status, set_status};
 
 #[tracing::instrument(name = "refresh_profile", skip_all, fields(profile = profile.name))]
 pub async fn refresh(state: &State, profile: &mut Profile, db: meta::Database) -> Result<()> {
+    let span = Span::current();
+
     let profile_dir = state.cache_dir.join("profile").join(profile.id.to_string());
     let index_path = profile_dir.join("index");
 
@@ -41,7 +43,7 @@ pub async fn refresh(state: &State, profile: &mut Profile, db: meta::Database) -
         .await
         .context("fetch index file")?;
 
-    task::spawn_blocking(move || update_db(db, &index_path))
+    task::spawn_blocking(move || span.in_scope(|| update_db(db, &index_path)))
         .await
         .context("join handle")?
         .context("update index db")?;

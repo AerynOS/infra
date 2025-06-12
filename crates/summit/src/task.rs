@@ -273,7 +273,7 @@ struct MissingTask<'a> {
     meta: Meta,
 }
 
-impl<'a> MissingTask<'a> {
+impl MissingTask<'_> {
     fn description(&self) -> String {
         let source_id = &self.meta.source_id;
         let version = version(&self.meta);

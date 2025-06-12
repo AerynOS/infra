@@ -7,14 +7,19 @@ use service::{
     database::Transaction,
     endpoint, error,
     grpc::{
+        self,
         collectable::{self, Collectable},
         remote::Remote,
-        summit::{BuilderBuild, BuilderFinished, BuilderStreamOutgoing, BuilderUpload, builder_stream_outgoing},
+        summit::{
+            BuilderBuild, BuilderFinished, BuilderStreamOutgoing, BuilderStreamOutgoingEvent, BuilderUpload,
+            builder_stream_outgoing_event,
+        },
         vessel::UploadTokenRequest,
     },
+    tracing::OpenTelemetrySpanExt,
 };
 use tokio::{sync::mpsc, task::spawn_blocking, time::Instant};
-use tracing::{error, info, warn};
+use tracing::{Span, debug, error, info, info_span, warn};
 
 use crate::task;
 
@@ -31,15 +36,18 @@ pub enum Message {
         collectables: Vec<Collectable>,
         /// Path to the log file (uncompressed).
         log_path: PathBuf,
+        span: Span,
     },
     BuildFailed {
         task_id: task::Id,
         /// Path to the log file (uncompressed).
         log_path: Option<PathBuf>,
+        span: Span,
     },
     Busy {
         requested: task::Id,
         in_progress: task::Id,
+        span: Span,
     },
 }
 
@@ -98,28 +106,31 @@ impl Builder {
             .handle
             .sender
             .send(BuilderStreamOutgoing {
-                event: Some(builder_stream_outgoing::Event::Build(BuilderBuild {
-                    task_id: i64::from(queued.task.id) as u64,
-                    uri: queued.origin_uri.to_string(),
-                    commit_ref: queued.commit_ref.clone(),
-                    relative_path: queued
-                        .meta
-                        .uri
-                        .as_ref()
-                        .ok_or_eyre("missing relative path on metadata")?
-                        .to_string(),
-                    build_architecture: queued.task.arch.clone(),
-                    remotes: queued
-                        .remotes
-                        .iter()
-                        .enumerate()
-                        .map(|(idx, uri)| Remote {
-                            index_uri: uri.to_string(),
-                            name: format!("repo{idx}"),
-                            priority: idx as u64 * 10,
-                        })
-                        .collect(),
-                })),
+                event: Some(BuilderStreamOutgoingEvent {
+                    event: Some(builder_stream_outgoing_event::Event::Build(BuilderBuild {
+                        task_id: i64::from(queued.task.id) as u64,
+                        uri: queued.origin_uri.to_string(),
+                        commit_ref: queued.commit_ref.clone(),
+                        relative_path: queued
+                            .meta
+                            .uri
+                            .as_ref()
+                            .ok_or_eyre("missing relative path on metadata")?
+                            .to_string(),
+                        build_architecture: queued.task.arch.clone(),
+                        remotes: queued
+                            .remotes
+                            .iter()
+                            .enumerate()
+                            .map(|(idx, uri)| Remote {
+                                index_uri: uri.to_string(),
+                                name: format!("repo{idx}"),
+                                priority: idx as u64 * 10,
+                            })
+                            .collect(),
+                    })),
+                }),
+                tracing_context: Some(grpc::inject_tracing_context()),
             })
             .await
             .context("send builder stream message")?;
@@ -145,7 +156,7 @@ impl Builder {
     #[tracing::instrument(name = "update_builder", skip_all, fields(builder = %self.endpoint))]
     pub async fn update(&mut self, state: &State, message: Message) -> Result<Option<Event>> {
         match message {
-            Message::Connected(handle) => {
+            Message::Connected(handle) => info_span!("connected").in_scope(|| {
                 info!("Builder connected");
 
                 self.connection = Some(Connection {
@@ -154,14 +165,18 @@ impl Builder {
                     status: Connected::Idle,
                 });
 
-                return Ok(Some(Event::Connected));
-            }
-            Message::Disconnected => {
+                Ok(Some(Event::Connected))
+            }),
+            Message::Disconnected => info_span!("disconnected").in_scope(|| {
                 warn!("Builder disconnected");
 
                 self.connection = None;
-            }
-            Message::Status { now, building } => {
+
+                Ok(None)
+            }),
+            Message::Status { now, building } => info_span!("status").in_scope(|| {
+                debug!(?building, "Status reported");
+
                 if let Some(connection) = self.connection.as_mut() {
                     connection.last_seen = now;
 
@@ -172,156 +187,205 @@ impl Builder {
                         None => Connected::Idle,
                     };
                 }
-            }
+
+                Ok(None)
+            }),
             Message::BuildSucceeded {
                 task_id,
                 collectables,
                 log_path,
+                span,
             } => {
-                let connection = self.connection.as_mut().ok_or_eyre("builder not connected")?;
-                connection.status = Connected::Idle;
-
-                let mut conn = state.service_db.acquire().await.context("acquire db conn")?;
-
-                let task = task::query(&mut conn, task::query::Params::default().id(task_id))
+                Span::current().set_parent(span.context());
+                self.handle_build_succeeded(task_id, collectables, log_path, state)
                     .await
-                    .context("get task")?
-                    .tasks
-                    .into_iter()
-                    .next()
-                    .ok_or_eyre("task is missing")?;
+            }
+            Message::BuildFailed {
+                task_id,
+                log_path,
+                span,
+            } => {
+                Span::current().set_parent(span.context());
+                self.handle_build_failed(task_id, log_path, state).await
+            }
+            Message::Busy {
+                requested,
+                in_progress,
+                span,
+            } => {
+                Span::current().set_parent(span.context());
+                self.handle_busy(requested, in_progress, state).await
+            }
+        }
+    }
 
-                let vessel = Endpoint::list(&mut *conn)
-                    .await
-                    .context("list endpoints")?
-                    .into_iter()
-                    .find(|endpoint| {
-                        matches!(endpoint.status, endpoint::Status::Operational)
-                            && matches!(endpoint.role, endpoint::Role::RepositoryManager)
+    #[tracing::instrument(name = "build_succeeded", skip_all, fields(task_id))]
+    async fn handle_build_succeeded(
+        &mut self,
+        task_id: task::Id,
+        collectables: Vec<Collectable>,
+        log_path: PathBuf,
+        state: &State,
+    ) -> Result<Option<Event>> {
+        let connection = self.connection.as_mut().ok_or_eyre("builder not connected")?;
+        connection.status = Connected::Idle;
+
+        let mut conn = state.service_db.acquire().await.context("acquire db conn")?;
+
+        let task = task::query(&mut conn, task::query::Params::default().id(task_id))
+            .await
+            .context("get task")?
+            .tasks
+            .into_iter()
+            .next()
+            .ok_or_eyre("task is missing")?;
+
+        let vessel = Endpoint::list(&mut *conn)
+            .await
+            .context("list endpoints")?
+            .into_iter()
+            .find(|endpoint| {
+                matches!(endpoint.status, endpoint::Status::Operational)
+                    && matches!(endpoint.role, endpoint::Role::RepositoryManager)
+            })
+            .ok_or_eyre("no operational vessel instance")?;
+
+        // Reject tasks that somehow already failed
+        if matches!(task.status, task::Status::Failed) {
+            error!(task = %task_id, "Blocking inclusion of previously failed build");
+            return Ok(None);
+        }
+
+        drop(conn);
+
+        let mut client = VesselServiceClient::connect_with_auth(
+            vessel.host_address.clone(),
+            EndpointAuth::new(&vessel, state.service_db.clone(), state.key_pair.clone()),
+        )
+        .await
+        .context("connect vessel client")?;
+
+        let result = client
+            .upload_token(UploadTokenRequest {
+                task_id: i64::from(task_id) as u64,
+                collectables: collectables
+                    .iter()
+                    .filter(|c| matches!(c.kind(), collectable::Kind::Package))
+                    .cloned()
+                    .collect(),
+            })
+            .await
+            .context("send import request");
+
+        let (status, failed) = match result {
+            Ok(response) => {
+                connection
+                    .handle
+                    .sender
+                    .send(BuilderStreamOutgoing {
+                        event: Some(BuilderStreamOutgoingEvent {
+                            event: Some(builder_stream_outgoing_event::Event::Upload(BuilderUpload {
+                                build: Some(BuilderFinished {
+                                    task_id: i64::from(task_id) as u64,
+                                    collectables: collectables
+                                        .into_iter()
+                                        .filter(|c| matches!(c.kind(), collectable::Kind::Package))
+                                        .collect(),
+                                }),
+                                token: response.into_inner().token,
+                                uri: vessel.host_address.to_string(),
+                            })),
+                        }),
+                        tracing_context: Some(grpc::inject_tracing_context()),
                     })
-                    .ok_or_eyre("no operational vessel instance")?;
-
-                // Reject tasks that somehow already failed
-                if matches!(task.status, task::Status::Failed) {
-                    error!(task = %task_id, "Blocking inclusion of previously failed build");
-                    return Ok(None);
-                }
-
-                drop(conn);
-
-                let mut client = VesselServiceClient::connect_with_auth(
-                    vessel.host_address.clone(),
-                    EndpointAuth::new(&vessel, state.service_db.clone(), state.key_pair.clone()),
-                )
-                .await
-                .context("connect vessel client")?;
-
-                let result = client
-                    .upload_token(UploadTokenRequest {
-                        task_id: i64::from(task_id) as u64,
-                        collectables: collectables
-                            .iter()
-                            .filter(|c| matches!(c.kind(), collectable::Kind::Package))
-                            .cloned()
-                            .collect(),
-                    })
                     .await
-                    .context("send import request");
+                    .context("send builder stream message")?;
 
-                let (status, failed) = match result {
-                    Ok(response) => {
-                        connection
-                            .handle
-                            .sender
-                            .send(BuilderStreamOutgoing {
-                                event: Some(builder_stream_outgoing::Event::Upload(BuilderUpload {
-                                    build: Some(BuilderFinished {
-                                        task_id: i64::from(task_id) as u64,
-                                        collectables: collectables
-                                            .into_iter()
-                                            .filter(|c| matches!(c.kind(), collectable::Kind::Package))
-                                            .collect(),
-                                    }),
-                                    token: response.into_inner().token,
-                                    uri: vessel.host_address.to_string(),
-                                })),
-                            })
-                            .await
-                            .context("send builder stream message")?;
+                info!(task = %task_id, "Upload token sent to builder");
 
-                        info!(task = %task_id, "Upload token sent to builder");
-
-                        (task::Status::Publishing, false)
-                    }
-                    Err(error) => {
-                        error!(
-                            error = error::chain(&*error),
-                            task = %task_id,
-                            "Request failed to get upload token"
-                        );
-
-                        (task::Status::Failed, true)
-                    }
-                };
-
-                let mut tx = state.service_db.begin().await.context("begin db tx")?;
-
-                stash_log(&mut tx, state, task_id, log_path)
-                    .await
-                    .context("stash build log")?;
-
-                task::set_status(&mut tx, task_id, status).await.context("set status")?;
-
-                tx.commit().await.context("commit tx")?;
-
-                if failed {
-                    return Ok(Some(Event::BuildFailed { task_id }));
-                }
+                (task::Status::Publishing, false)
             }
-            Message::BuildFailed { task_id, log_path } => {
-                let connection = self.connection.as_mut().ok_or_eyre("builder not connected")?;
-                connection.status = Connected::Idle;
+            Err(error) => {
+                error!(
+                    error = error::chain(&*error),
+                    task = %task_id,
+                    "Request failed to get upload token"
+                );
 
-                let mut tx = state.service_db.begin().await.context("begin db tx")?;
-
-                if let Some(path) = log_path {
-                    stash_log(&mut tx, state, task_id, path)
-                        .await
-                        .context("stash build log")?;
-                }
-
-                task::set_status(&mut tx, task_id, task::Status::Failed)
-                    .await
-                    .context("set status")?;
-
-                tx.commit().await.context("commit tx")?;
-
-                info!(task = %task_id, "Build marked as failed");
-
-                return Ok(Some(Event::BuildFailed { task_id }));
+                (task::Status::Failed, true)
             }
-            Message::Busy { requested, in_progress } => {
-                let connection = self.connection.as_mut().ok_or_eyre("builder not connected")?;
-                connection.status = Connected::Building { task: in_progress };
+        };
 
-                let mut tx = state.service_db.begin().await.context("begin db tx")?;
+        let mut tx = state.service_db.begin().await.context("begin db tx")?;
 
-                task::set_status(&mut tx, requested, task::Status::New)
-                    .await
-                    .context("set status")?;
-                task::set_allocated_builder(&mut tx, requested, None)
-                    .await
-                    .context("set builder")?;
+        stash_log(&mut tx, state, task_id, log_path)
+            .await
+            .context("stash build log")?;
 
-                tx.commit().await.context("commit tx")?;
+        task::set_status(&mut tx, task_id, status).await.context("set status")?;
 
-                info!(task = %requested, "Build requeued, builder is busy");
+        tx.commit().await.context("commit tx")?;
 
-                return Ok(Some(Event::BuildRequeued));
-            }
+        if failed {
+            return Ok(Some(Event::BuildFailed { task_id }));
         }
 
         Ok(None)
+    }
+
+    #[tracing::instrument(name = "build_failed", skip_all, fields(task_id))]
+    async fn handle_build_failed(
+        &mut self,
+        task_id: task::Id,
+        log_path: Option<PathBuf>,
+        state: &State,
+    ) -> Result<Option<Event>> {
+        let connection = self.connection.as_mut().ok_or_eyre("builder not connected")?;
+        connection.status = Connected::Idle;
+
+        let mut tx = state.service_db.begin().await.context("begin db tx")?;
+
+        if let Some(path) = log_path {
+            stash_log(&mut tx, state, task_id, path)
+                .await
+                .context("stash build log")?;
+        }
+
+        task::set_status(&mut tx, task_id, task::Status::Failed)
+            .await
+            .context("set status")?;
+
+        tx.commit().await.context("commit tx")?;
+
+        info!(task = %task_id, "Build marked as failed");
+
+        Ok(Some(Event::BuildFailed { task_id }))
+    }
+
+    #[tracing::instrument(name = "busy", skip(self, state))]
+    async fn handle_busy(
+        &mut self,
+        requested: task::Id,
+        in_progress: task::Id,
+        state: &State,
+    ) -> Result<Option<Event>> {
+        let connection = self.connection.as_mut().ok_or_eyre("builder not connected")?;
+        connection.status = Connected::Building { task: in_progress };
+
+        let mut tx = state.service_db.begin().await.context("begin db tx")?;
+
+        task::set_status(&mut tx, requested, task::Status::New)
+            .await
+            .context("set status")?;
+        task::set_allocated_builder(&mut tx, requested, None)
+            .await
+            .context("set builder")?;
+
+        tx.commit().await.context("commit tx")?;
+
+        info!(task = %requested, "Build requeued, builder is busy");
+
+        Ok(Some(Event::BuildRequeued))
     }
 }
 
@@ -360,26 +424,30 @@ pub enum Status {
 }
 
 async fn stash_log(tx: &mut Transaction, state: &State, task_id: task::Id, path: PathBuf) -> Result<()> {
+    let span = Span::current();
+
     let compressed_path = spawn_blocking(move || {
-        use flate2::write::GzEncoder;
-        use std::fs::{self, File};
-        use std::io::{self, Write};
+        span.in_scope(|| {
+            use flate2::write::GzEncoder;
+            use std::fs::{self, File};
+            use std::io::{self, Write};
 
-        let mut plain_file = File::open(&path).context("open plain file")?;
+            let mut plain_file = File::open(&path).context("open plain file")?;
 
-        let gz_path = PathBuf::from(format!("{}.gz", path.display()));
-        let mut gz_file = File::create(&gz_path).context("create compressed file")?;
+            let gz_path = PathBuf::from(format!("{}.gz", path.display()));
+            let mut gz_file = File::create(&gz_path).context("create compressed file")?;
 
-        let mut encoder = GzEncoder::new(&mut gz_file, flate2::Compression::new(9));
+            let mut encoder = GzEncoder::new(&mut gz_file, flate2::Compression::new(9));
 
-        io::copy(&mut plain_file, &mut encoder)?;
+            io::copy(&mut plain_file, &mut encoder)?;
 
-        encoder.finish()?;
-        gz_file.flush()?;
+            encoder.finish()?;
+            gz_file.flush()?;
 
-        fs::remove_file(path).context("remove plain file")?;
+            fs::remove_file(path).context("remove plain file")?;
 
-        Result::<_, Report>::Ok(gz_path)
+            Result::<_, Report>::Ok(gz_path)
+        })
     })
     .await
     .context("join handle")?

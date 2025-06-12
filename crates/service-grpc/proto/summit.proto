@@ -5,6 +5,7 @@ package summit;
 import "collectable.proto";
 import "options.proto";
 import "remote.proto";
+import "tracing.proto";
 import "google/protobuf/empty.proto";
 
 message ImportRequest {
@@ -20,6 +21,11 @@ message FailRequest {
 }
 
 message BuilderStreamIncoming {
+  BuilderStreamIncomingEvent event = 1;
+  tracing.Context tracing_context = 2;
+}
+
+message BuilderStreamIncomingEvent {
   oneof event {
     BuilderStatus status = 1;
     uint64 build_started = 2;
@@ -31,6 +37,11 @@ message BuilderStreamIncoming {
 }
 
 message BuilderStreamOutgoing {
+  BuilderStreamOutgoingEvent event = 1;
+  tracing.Context tracing_context = 2;
+}
+
+message BuilderStreamOutgoingEvent {
   oneof event {
     BuilderBuild build = 1;
     BuilderUpload upload = 2;

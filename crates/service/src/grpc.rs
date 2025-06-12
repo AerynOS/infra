@@ -1,13 +1,15 @@
 //! Grpc types
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
+use ::tracing::{Span, error, warn};
 use futures_util::{Stream, StreamExt, stream::BoxStream};
 use service_core::auth::{Flags, Permission, flag_names};
 use service_grpc::vessel::UploadTokenRequest;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
-use tracing::{error, warn};
+use tracing_futures::Instrument;
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::error;
 
@@ -24,15 +26,22 @@ where
 {
     verify_auth(&request)?;
 
-    match handler(request).await {
-        Ok(data) => Ok(tonic::Response::new(data)),
-        Err(err) => {
-            let error = error::chain(&err);
-            error!(%error, "Handler error");
+    let span = Span::current();
+    span.set_parent(service_client::tracing_context(&request));
 
-            Err(err.into())
+    async {
+        match handler(request).await {
+            Ok(data) => Ok(tonic::Response::new(data)),
+            Err(err) => {
+                let error = error::chain(&err);
+                error!(%error, "Handler error");
+
+                Err(err.into())
+            }
         }
     }
+    .instrument(span)
+    .await
 }
 
 /// Verify the incoming request with the supplied [`auth::Flags`]
@@ -47,8 +56,12 @@ where
 {
     verify_auth(&request)?;
 
+    let span = Span::current();
+    span.set_parent(service_client::tracing_context(&request));
+
     Ok(tonic::Response::new(
         handler(request)
+            .instrument(span)
             .map(|result| match result {
                 Ok(data) => Ok(data),
                 Err(err) => {
@@ -77,6 +90,9 @@ where
 {
     verify_auth(&request)?;
 
+    let span = Span::current();
+    span.set_parent(service_client::tracing_context(&request));
+
     let extensions = request.extensions().clone();
     let stream = request.into_inner();
 
@@ -91,14 +107,17 @@ where
             }
         }
     });
-    tokio::spawn(async move {
-        if let Err(err) = handler(extensions, stream, inner_sender).await {
-            let error = error::chain(&err);
-            error!(%error, "Handler error");
+    tokio::spawn(
+        async move {
+            if let Err(err) = handler(extensions, stream, inner_sender).await {
+                let error = error::chain(&err);
+                error!(%error, "Handler error");
 
-            let _ = sender.send(Err(err.into())).await;
+                let _ = sender.send(Err(err.into())).await;
+            }
         }
-    });
+        .instrument(span),
+    );
 
     Ok(tonic::Response::new(ReceiverStream::new(receiver)))
 }
@@ -156,4 +175,20 @@ pub fn upload_request_hash(request: &UploadTokenRequest) -> String {
     }
 
     hex::encode(sha2.finalize())
+}
+
+/// Inject tracing context into proto encoded entries
+pub fn inject_tracing_context() -> tracing::Context {
+    let mut entries = HashMap::new();
+
+    let cx = Span::current().context();
+
+    opentelemetry::global::get_text_map_propagator(|propagator| propagator.inject_context(&cx, &mut entries));
+
+    tracing::Context { entries }
+}
+
+/// Extract tracing context from proto encoded entries
+pub fn extract_tracing_context(context: &tracing::Context) -> opentelemetry::Context {
+    opentelemetry::global::get_text_map_propagator(|prop| prop.extract(&context.entries))
 }

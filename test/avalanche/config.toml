@@ -13,6 +13,9 @@ level_filter = "info,avalanche=debug,service=trace,service_core=trace"
 # compact or json
 format = "compact"
 
+[tracing.otlp]
+endpoint = "http://tempo:4317"
+
 [admin]
 username = "admin"
 name = "Admin"

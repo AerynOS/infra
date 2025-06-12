@@ -10,6 +10,7 @@ const PROTO_FILES: &[&str] = &[
     "proto/endpoint.proto",
     "proto/remote.proto",
     "proto/summit.proto",
+    "proto/tracing.proto",
     "proto/vessel.proto",
 ];
 

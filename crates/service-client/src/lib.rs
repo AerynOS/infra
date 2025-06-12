@@ -8,6 +8,7 @@ use base64::Engine;
 use futures_util::future::BoxFuture;
 use futures_util::{FutureExt, StreamExt};
 use http::{HeaderValue, Request, Response, Uri};
+use opentelemetry::propagation::{Extractor, Injector};
 use service_core::auth;
 use service_core::crypto::KeyPair;
 use service_core::token::VerifiedToken;
@@ -23,12 +24,13 @@ use tonic::metadata::MetadataValue;
 use tonic::service::Interceptor;
 use tonic::transport::{self, Channel};
 use tower::Service;
-use tracing::error;
+use tracing::{Span, error};
 
 pub use service_grpc::account::account_service_client::AccountServiceClient;
 pub use service_grpc::endpoint::endpoint_service_client::EndpointServiceClient;
 pub use service_grpc::summit::summit_service_client::SummitServiceClient;
 pub use service_grpc::vessel::vessel_service_client::VesselServiceClient;
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 const TOKEN_VALIDITY: Duration = Duration::from_secs(15 * 60);
 
@@ -115,6 +117,8 @@ where
         let provider = self.provider.clone();
 
         async move {
+            inject_tracing_http(&mut req);
+
             let method = Method::from_path(req.uri().path());
             let flags = method.map(Method::flags).unwrap_or_default();
 
@@ -334,6 +338,8 @@ where
             MetadataValue::from_str(&format!("Bearer {bearer_token}")).expect("JWT bearer token"),
         );
 
+        inject_tracing_tonic(&mut req);
+
         Ok(req)
     });
 
@@ -353,7 +359,10 @@ async fn authenticate<A>(channel: Channel, credentials: Credentials) -> Result<R
 where
     A: std::error::Error,
 {
-    let mut account_client = AccountServiceClient::new(channel);
+    let mut account_client = AccountServiceClient::with_interceptor(channel, |mut req: tonic::Request<()>| {
+        inject_tracing_tonic(&mut req);
+        Ok(req)
+    });
 
     let (request_tx, request_rx) = mpsc::channel(1);
     let (challenge_tx, mut challenge_rx) = mpsc::channel::<String>(1);
@@ -430,6 +439,74 @@ impl Interceptor for TokenInterceptor {
             req.metadata_mut().insert("authorization", value);
         }
 
+        inject_tracing_tonic(&mut req);
+
         Ok(req)
     }
+}
+
+fn inject_tracing_http<T>(req: &mut http::Request<T>) {
+    struct TracingInjector<'a>(&'a mut http::HeaderMap);
+
+    impl Injector for TracingInjector<'_> {
+        /// Set a key and value in the MetadataMap.  Does nothing if the key or value are not valid inputs
+        fn set(&mut self, key: &str, value: String) {
+            if let Ok(key) = http::HeaderName::from_bytes(key.as_bytes()) {
+                if let Ok(val) = http::HeaderValue::try_from(&value) {
+                    self.0.insert(key, val);
+                }
+            }
+        }
+    }
+
+    let cx = Span::current().context();
+
+    opentelemetry::global::get_text_map_propagator(|propagator| {
+        propagator.inject_context(&cx, &mut TracingInjector(req.headers_mut()))
+    });
+}
+
+fn inject_tracing_tonic<T>(req: &mut tonic::Request<T>) {
+    struct TracingInjector<'a>(&'a mut tonic::metadata::MetadataMap);
+
+    impl Injector for TracingInjector<'_> {
+        /// Set a key and value in the MetadataMap.  Does nothing if the key or value are not valid inputs
+        fn set(&mut self, key: &str, value: String) {
+            if let Ok(key) = tonic::metadata::MetadataKey::from_bytes(key.as_bytes()) {
+                if let Ok(val) = tonic::metadata::MetadataValue::try_from(&value) {
+                    self.0.insert(key, val);
+                }
+            }
+        }
+    }
+
+    let cx = Span::current().context();
+
+    opentelemetry::global::get_text_map_propagator(|propagator| {
+        propagator.inject_context(&cx, &mut TracingInjector(req.metadata_mut()))
+    });
+}
+
+pub fn tracing_context<T>(req: &tonic::Request<T>) -> opentelemetry::Context {
+    struct TracingExtractor<'a>(&'a tonic::metadata::MetadataMap);
+
+    impl Extractor for TracingExtractor<'_> {
+        /// Get a value for a key from the MetadataMap.  If the value can't be converted to &str, returns None
+        fn get(&self, key: &str) -> Option<&str> {
+            self.0.get(key).and_then(|metadata| metadata.to_str().ok())
+        }
+
+        /// Collect all the keys from the MetadataMap.
+        fn keys(&self) -> Vec<&str> {
+            self.0
+                .keys()
+                .map(|key| match key {
+                    tonic::metadata::KeyRef::Ascii(v) => v.as_str(),
+                    tonic::metadata::KeyRef::Binary(v) => v.as_str(),
+                })
+                .collect::<Vec<_>>()
+        }
+    }
+
+    opentelemetry::global::get_text_map_propagator(|prop| prop.extract(&TracingExtractor(req.metadata())))
 }
