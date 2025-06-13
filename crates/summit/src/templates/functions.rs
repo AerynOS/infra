@@ -30,7 +30,7 @@ pub(super) fn build_task_query_url(
     }
 
     if parts.is_empty() {
-        "".to_string()
+        "".to_owned()
     } else {
         parts.join("&").to_string()
     }

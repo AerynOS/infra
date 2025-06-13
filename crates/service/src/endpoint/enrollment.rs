@@ -126,7 +126,7 @@ pub(crate) async fn auto_enroll(target: &Target, ourself: Issuer, state: &State)
         debug!("Enrolling with target service");
 
         if let Err(e) = enroll(state, target.clone(), ourself.clone()).await {
-            error!(error=%error::chain(e), "Enrollment request failed")
+            error!(error = %error::chain(e), "Enrollment request failed");
         }
     }
 

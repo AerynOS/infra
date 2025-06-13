@@ -83,9 +83,9 @@ where
             }
 
             if token.decoded.is_expired() {
-                flags |= Flags::EXPIRED
+                flags |= Flags::EXPIRED;
             } else {
-                flags |= Flags::NOT_EXPIRED
+                flags |= Flags::NOT_EXPIRED;
             }
 
             permissions = token.decoded.payload.permissions;

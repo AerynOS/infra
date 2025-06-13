@@ -42,7 +42,7 @@ where
         let clone = self.inner.clone();
         let mut inner = std::mem::replace(&mut self.inner, clone);
 
-        let path = req.uri().path().to_string();
+        let path = req.uri().path().to_owned();
 
         async move {
             debug!("Request received");

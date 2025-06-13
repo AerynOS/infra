@@ -358,10 +358,10 @@ pub(crate) fn create_token(
     .permissions();
 
     let token = Token::new(token::Payload {
-        aud: role.service_name().to_string(),
+        aud: role.service_name().to_owned(),
         exp: expires_on.timestamp(),
         iat: now.timestamp(),
-        iss: ourself.role.service_name().to_string(),
+        iss: ourself.role.service_name().to_owned(),
         sub: endpoint.to_string(),
         jti: None,
         purpose,

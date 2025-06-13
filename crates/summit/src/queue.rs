@@ -144,7 +144,7 @@ impl Queue {
                 .dfs(dag.get_index(&queued.task.id).expect("topo derived from dag"))
                 // DFS always starts on current node, skip it
                 .skip(1)
-                .cloned()
+                .copied()
                 .collect();
         }
 

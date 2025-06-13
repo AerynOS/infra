@@ -31,7 +31,7 @@ bitflags! {
 
 /// Convert [`Flags`] to an array of flag names
 pub fn flag_names(flags: Flags) -> Vec<String> {
-    flags.iter_names().map(|(name, _)| name.to_string()).collect()
+    flags.iter_names().map(|(name, _)| name.to_owned()).collect()
 }
 
 /// RBAC role
