@@ -7,7 +7,7 @@ use minijinja_autoreload::AutoReloader;
 
 use super::{Response, env};
 
-static AUTO_RELOADER: LazyLock<minijinja_autoreload::AutoReloader> = LazyLock::new(|| {
+static AUTO_RELOADER: LazyLock<AutoReloader> = LazyLock::new(|| {
     let cargo_manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect(
         "templates-autoreload Cargo feature is only meant for development, \
              but CARGO_MANIFEST_DIR is not set",

@@ -1,6 +1,11 @@
 use service_core::auth;
 
-include!(concat!(env!("OUT_DIR"), "/proto.rs"));
+#[allow(unused_qualifications)]
+mod proto {
+    include!(concat!(env!("OUT_DIR"), "/proto.rs"));
+}
+
+pub use proto::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Method {

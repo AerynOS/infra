@@ -70,7 +70,7 @@ impl VesselService for Service {
     async fn upload(
         &self,
         request: tonic::Request<tonic::Streaming<UploadRequest>>,
-    ) -> std::result::Result<tonic::Response<()>, tonic::Status> {
+    ) -> Result<tonic::Response<()>, tonic::Status> {
         let state = self.state.clone();
 
         grpc::handle(request, async move |request| upload(state, request).await).await

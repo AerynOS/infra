@@ -54,7 +54,7 @@ impl AccountService for Service {
     async fn authenticate(
         &self,
         request: tonic::Request<tonic::Streaming<AuthenticateRequest>>,
-    ) -> std::result::Result<tonic::Response<Self::AuthenticateStream>, tonic::Status> {
+    ) -> Result<tonic::Response<Self::AuthenticateStream>, tonic::Status> {
         let state = self.state.clone();
 
         grpc::handle_server_streaming(request, |request| authenticate(state, request))
@@ -63,7 +63,7 @@ impl AccountService for Service {
     async fn refresh_token(
         &self,
         request: tonic::Request<()>,
-    ) -> std::result::Result<tonic::Response<TokenResponse>, tonic::Status> {
+    ) -> Result<tonic::Response<TokenResponse>, tonic::Status> {
         let state = self.state.clone();
 
         grpc::handle(request, async move |request| refresh_token(state, request).await).await
