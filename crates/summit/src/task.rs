@@ -16,11 +16,12 @@ use uuid::Uuid;
 
 use crate::{Manager, Profile, Project, Repository, profile, project, repository, task};
 
-pub use self::create::create;
 pub use self::query::query;
 
 pub mod create;
 pub mod query;
+
+use self::create::create;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, From, Into, Display, FromRow)]
 pub struct Id(i64);

@@ -9,7 +9,7 @@ use super::{Status, block, query, set_status, version};
 use crate::{Project, Repository, task::MissingTask};
 
 #[tracing::instrument(name = "create_task", skip_all, fields(slug, build_id, version))]
-pub async fn create(
+pub(super) async fn create(
     tx: &mut Transaction,
     project: &Project,
     repository: &Repository,

@@ -134,7 +134,7 @@ pub(crate) async fn auto_enroll(target: &Target, ourself: Issuer, state: &State)
 }
 
 #[tracing::instrument(
-    name = "send_enrollment", 
+    name = "send_enrollment",
     skip_all,
     fields(
         public_key = %target.public_key,
@@ -267,7 +267,7 @@ impl Received {
             role = %self.remote.role,
         )
     )]
-    pub async fn accept(self, db: &Database, ourself: Issuer) -> Result<EnrollmentRequest, Error> {
+    pub(crate) async fn accept(self, db: &Database, ourself: Issuer) -> Result<EnrollmentRequest, Error> {
         let account_id = self.account;
         let username = format!("@{account_id}");
 
