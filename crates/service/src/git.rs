@@ -56,5 +56,5 @@ pub async fn rev_parse(source_dir: &Path, arg: &str) -> Result<String, process::
     })
     .await?;
 
-    Ok(output.trim().to_string())
+    Ok(output.trim().to_owned())
 }

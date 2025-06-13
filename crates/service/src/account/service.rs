@@ -303,7 +303,7 @@ fn create_token(
         aud,
         exp: expires_on.timestamp(),
         iat: now.timestamp(),
-        iss: role.service_name().to_string(),
+        iss: role.service_name().to_owned(),
         sub,
         jti: None,
         purpose,

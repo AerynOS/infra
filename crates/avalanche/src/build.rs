@@ -238,7 +238,7 @@ async fn scan_collectables(asset_dir: &Path) -> Result<Vec<Collectable>> {
             name: file_name.to_owned(),
             size,
             sha256sum,
-        })
+        });
     }
 
     Ok(collectables)

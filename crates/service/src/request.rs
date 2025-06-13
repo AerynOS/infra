@@ -29,7 +29,7 @@ pub async fn download_and_verify(url: Url, dest: impl AsRef<Path>, sha256sum: &s
 
     if hash != sha256sum {
         return Err(Error::Sha256Mismatch {
-            expected: sha256sum.to_string(),
+            expected: sha256sum.to_owned(),
             actual: hash,
         });
     }

@@ -42,7 +42,7 @@ impl Token {
         .map_err(Error::decode)?;
 
         Ok(VerifiedToken {
-            encoded: token.to_string(),
+            encoded: token.to_owned(),
             decoded: Token {
                 header: decoded.header,
                 payload: decoded.claims,

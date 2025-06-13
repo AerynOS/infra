@@ -110,7 +110,7 @@ impl AuthProvider for EndpointAuth {
             }
             (Err(token::Error::InvalidSignature), Err(_)) => {
                 endpoint.status = endpoint::Status::Forbidden;
-                endpoint.error = Some("Invalid signature".to_string());
+                endpoint.error = Some("Invalid signature".to_owned());
 
                 error!("Invalid signature");
 
@@ -122,7 +122,7 @@ impl AuthProvider for EndpointAuth {
             }
             _ => {
                 endpoint.status = endpoint::Status::Forbidden;
-                endpoint.error = Some("Invalid token".to_string());
+                endpoint.error = Some("Invalid token".to_owned());
 
                 error!("Invalid token");
 
@@ -147,7 +147,7 @@ impl AuthProvider for EndpointAuth {
         let mut endpoint = Endpoint::get(tx.as_mut(), self.endpoint).await?;
 
         endpoint.status = endpoint::Status::Unreachable;
-        endpoint.error = Some("Failed to refresh tokens".to_string());
+        endpoint.error = Some("Failed to refresh tokens".to_owned());
         error!(%error, "Failed to refresh tokens");
 
         endpoint.save(&mut tx).await?;

@@ -16,7 +16,7 @@ pub async fn output(command: impl AsRef<str>, f: impl FnOnce(&mut Command) -> &m
     let output = f(&mut process)
         .output()
         .await
-        .map_err(|err| Error::Io(command.to_string(), err))?;
+        .map_err(|err| Error::Io(command.to_owned(), err))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -24,7 +24,7 @@ pub async fn output(command: impl AsRef<str>, f: impl FnOnce(&mut Command) -> &m
     trace!(command, stdout, stderr, status = %output.status, "Command finished");
 
     if !output.status.success() {
-        Err(Error::FailedWithOutput(command.to_string(), output.status, stderr))
+        Err(Error::FailedWithOutput(command.to_owned(), output.status, stderr))
     } else {
         Ok(stdout)
     }
@@ -47,21 +47,21 @@ where
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|err| Error::Io(command.to_string(), err))?;
+        .map_err(|err| Error::Io(command.to_owned(), err))?;
 
     let stdout = child.stdout.take().expect("stdout set explicitly");
     let stderr = child.stderr.take().expect("stderr set explicitly");
 
     let task = tokio::spawn(piped(stdout, stderr));
 
-    let status = child.wait().await.map_err(|err| Error::Io(command.to_string(), err))?;
+    let status = child.wait().await.map_err(|err| Error::Io(command.to_owned(), err))?;
 
     let _ = task.await;
 
     trace!(command, %status, "Command finished");
 
     if !status.success() {
-        Err(Error::Failed(command.to_string(), status))
+        Err(Error::Failed(command.to_owned(), status))
     } else {
         Ok(())
     }
