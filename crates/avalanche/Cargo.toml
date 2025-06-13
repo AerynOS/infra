@@ -28,3 +28,6 @@ tracing.workspace = true
 uuid.workspace = true
 
 tokio-util = { workspace = true , features = ["io"] }
+
+[lints]
+workspace = true

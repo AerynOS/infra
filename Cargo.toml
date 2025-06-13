@@ -67,6 +67,10 @@ uuid = { version = "1.6.1", features = ["v4", "serde"] }
 # This was recommended for static musl builds to work, but it doesn't on a f41 install...
 # openssl = { version = "*", features = ["vendored"] }
 
+[workspace.lints.clippy]
+# fixing this requires sacrificing some ergonomics
+result_large_err = "allow"
+
 [profile.release]
 lto = "thin"
 
