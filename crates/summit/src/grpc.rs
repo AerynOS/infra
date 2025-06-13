@@ -88,7 +88,7 @@ impl SummitService for Service {
     async fn builder(
         &self,
         request: tonic::Request<tonic::Streaming<BuilderStreamIncoming>>,
-    ) -> std::result::Result<tonic::Response<Self::BuilderStream>, tonic::Status> {
+    ) -> Result<tonic::Response<Self::BuilderStream>, tonic::Status> {
         let state = self.state.clone();
 
         grpc::handle_streaming(request, move |extensions, stream, sender| {

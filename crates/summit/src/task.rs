@@ -14,7 +14,7 @@ use tokio::task::spawn_blocking;
 use tracing::{Instrument, debug, warn};
 use uuid::Uuid;
 
-use crate::{Manager, Profile, Project, Repository, profile, project, repository, task};
+use crate::{Manager, Profile, Project, Repository, profile, project, repository};
 
 pub use self::query::query;
 
@@ -110,7 +110,7 @@ pub struct Queued {
     pub origin_uri: Uri,
     pub index_uri: Uri,
     pub remotes: Vec<Uri>,
-    pub dependencies: Vec<task::Id>,
+    pub dependencies: Vec<Id>,
 }
 
 #[tracing::instrument(name = "create_missing_tasks", skip_all, fields(repository = %repo.name))]
@@ -130,7 +130,7 @@ pub async fn create_missing(
 }
 
 /// Set the status of a task_id in the db
-pub async fn set_status(tx: &mut Transaction, task_id: task::Id, status: Status) -> Result<()> {
+pub async fn set_status(tx: &mut Transaction, task_id: Id, status: Status) -> Result<()> {
     let ended = if !status.is_open() { ", ended = unixepoch()" } else { "" };
 
     let started = if status == Status::Building {
@@ -162,7 +162,7 @@ pub async fn set_status(tx: &mut Transaction, task_id: task::Id, status: Status)
 }
 
 /// Set the path to the task logfile in the filesystem
-pub async fn set_log_path(tx: &mut Transaction, task_id: task::Id, log_path: &Path) -> Result<()> {
+pub async fn set_log_path(tx: &mut Transaction, task_id: Id, log_path: &Path) -> Result<()> {
     sqlx::query(
         "
         UPDATE task
@@ -184,11 +184,7 @@ pub async fn set_log_path(tx: &mut Transaction, task_id: task::Id, log_path: &Pa
 }
 
 /// Allocate a builder for a task
-pub async fn set_allocated_builder(
-    tx: &mut Transaction,
-    task_id: task::Id,
-    builder: Option<endpoint::Id>,
-) -> Result<()> {
+pub async fn set_allocated_builder(tx: &mut Transaction, task_id: Id, builder: Option<endpoint::Id>) -> Result<()> {
     sqlx::query(
         "
         UPDATE task
@@ -327,7 +323,7 @@ async fn collect_missing<'a>(
                     .filter(|p| p.kind == dependency::Kind::PackageName)
                     .cloned()
                 {
-                    let corresponding = task::spawn_blocking({
+                    let corresponding = spawn_blocking({
                         let profile_db = profile_db.clone();
                         move || profile_db.query(Some(meta::Filter::Provider(name)))
                     })

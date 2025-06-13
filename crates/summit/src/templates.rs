@@ -30,7 +30,7 @@ pub fn render_html<S>(name: &str, ctx: S) -> Response
 where
     S: Serialize,
 {
-    let do_render = |env: &minijinja::Environment<'_>| {
+    let do_render = |env: &Environment<'_>| {
         let Ok(template) = env.get_template(name) else {
             return Err((StatusCode::INTERNAL_SERVER_ERROR, "Couldn't find MiniJinja template").into());
         };

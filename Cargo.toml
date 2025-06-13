@@ -67,6 +67,12 @@ uuid = { version = "1.6.1", features = ["v4", "serde"] }
 # This was recommended for static musl builds to work, but it doesn't on a f41 install...
 # openssl = { version = "*", features = ["vendored"] }
 
+[workspace.lints.rust]
+rust_2018_idioms = { level = "warn", priority = -1 }
+semicolon_in_expressions_from_macros = "warn"
+unused_import_braces = "warn"
+unused_qualifications = "warn"
+
 [workspace.lints.clippy]
 # fixing this requires sacrificing some ergonomics
 result_large_err = "allow"

@@ -36,7 +36,7 @@ const TOKEN_VALIDITY: Duration = Duration::from_secs(15 * 60);
 /// with an [`AuthProvider`]
 #[async_trait]
 pub trait AuthClient<A>: Sized {
-    async fn connect_with_auth(uri: Uri, provider: A) -> Result<Self, tonic::transport::Error>
+    async fn connect_with_auth(uri: Uri, provider: A) -> Result<Self, transport::Error>
     where
         A: AuthProvider + 'static;
 }
@@ -44,7 +44,7 @@ pub trait AuthClient<A>: Sized {
 /// Extension trait for connecting a client with a token
 #[async_trait]
 pub trait TokenClient: Sized {
-    async fn connect_with_token(uri: Uri, token: &str) -> Result<Self, tonic::transport::Error>;
+    async fn connect_with_token(uri: Uri, token: &str) -> Result<Self, transport::Error>;
 }
 
 macro_rules! service_client {

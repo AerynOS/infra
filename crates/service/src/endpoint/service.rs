@@ -61,7 +61,7 @@ impl EndpointService for Service {
     async fn enroll(
         &self,
         request: tonic::Request<EnrollmentRequest>,
-    ) -> std::result::Result<tonic::Response<EnrollmentRequest>, tonic::Status> {
+    ) -> Result<tonic::Response<EnrollmentRequest>, tonic::Status> {
         let state = self.state.clone();
 
         handle(request, async move |req| enroll(state, req).await).await
