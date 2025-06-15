@@ -30,3 +30,18 @@ This hostname should obviously be changed to whatever fully qualified domain or 
 - Start caddy and check that it serves summit and vessel routes correctly
 - Add aos-avalanche-rs services from the hosts you want to use as builders
 
+## How do I remove accounts from summit if I want to reset the associated service installs?
+
+ssh <the server>
+cd /srv/summit-rs/summit/state/db/
+sudo -u summit-rs sqlite3 service
+delete FROM account WHERE public_key IN ('<the public_key>',...);
+-- this will also autodelete the associated account_token and endpoint table entries
+   that match the rows with the removed account_id's.
+ssh <the server running the service you want to reset>
+sudo systemctl stop <the service>
+cd repos/aos/infra/deployment
+source source-me(...)
+cd ..
+reset-then-deploy <the service>
+sudo systemctl start <the service>
