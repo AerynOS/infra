@@ -130,8 +130,7 @@ impl Account {
             FROM account
             WHERE
               username = ?
-              AND public_key = ?
-              AND (type = 'admin' OR type = 'standard');
+              AND public_key = ?;
             ",
         )
         .bind(username)
