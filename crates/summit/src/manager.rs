@@ -142,7 +142,7 @@ impl Manager {
                     if force || repo_changed || profile_refreshed {
                         let mut tx = self.begin().await.context("begin db tx")?;
 
-                        task::create_missing(&mut tx, self, &project, &repo, &repo_db)
+                        task::fix_and_create(&mut tx, self, &project, &repo, &repo_db)
                             .await
                             .context("create missing tasks")?;
 
@@ -386,6 +386,10 @@ impl Manager {
         }
 
         Ok(false)
+    }
+
+    pub fn builder_status(&self, endpoint: &endpoint::Id) -> Option<builder::Status> {
+        self.builders.get(endpoint).map(Builder::status)
     }
 }
 
