@@ -72,10 +72,12 @@ impl Handle {
 }
 
 pub async fn run(state: State) -> Result<(), Infallible> {
+    let building = Arc::new(Mutex::new(None));
+
     loop {
         debug!("Attempting to connect to summit");
 
-        if let Err(e) = connect(&state).await {
+        if let Err(e) = connect(&state, building.clone()).await {
             let error = error::chain(&*e);
             error!(%error, "Stream error");
 
@@ -85,7 +87,7 @@ pub async fn run(state: State) -> Result<(), Infallible> {
     }
 }
 
-async fn connect(state: &State) -> Result<()> {
+async fn connect(state: &State, building: Arc<Mutex<Option<u64>>>) -> Result<()> {
     let endpoint = Endpoint::list(&mut *state.service_db.acquire().await.context("acquire db conn")?)
         .await
         .context("list endpoints")?
@@ -111,8 +113,6 @@ async fn connect(state: &State) -> Result<()> {
 
     let mut stream = resp.into_inner();
     let mut interval = time::interval(Duration::from_secs(60));
-
-    let building = Arc::new(Mutex::new(None));
 
     loop {
         select! {
