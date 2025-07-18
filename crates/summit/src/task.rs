@@ -14,7 +14,7 @@ use tokio::task::spawn_blocking;
 use tracing::{Instrument, debug, warn};
 use uuid::Uuid;
 
-use crate::{Manager, Profile, Project, Repository, profile, project, repository};
+use crate::{Manager, Profile, Project, Repository, builder, profile, project, repository};
 
 pub use self::query::query;
 
@@ -113,17 +113,155 @@ pub struct Queued {
     pub dependencies: Vec<Id>,
 }
 
-#[tracing::instrument(name = "create_missing_tasks", skip_all, fields(repository = %repo.name))]
-pub async fn create_missing(
+#[tracing::instrument(name = " fix_and_create_tasks", skip_all, fields(repository = %repo.name))]
+pub async fn fix_and_create(
     tx: &mut Transaction,
     manager: &Manager,
     project: &Project,
     repo: &Repository,
     repo_db: &meta::Database,
 ) -> Result<()> {
+    // Move tasks stuck in building back to new prior to
+    // adding new tasks so if they have been superseded, they
+    // can be marked as such
+    fix_stuck_building(tx, manager, project, repo)
+        .await
+        .context("fix stuck building tasks")?;
+
     for task in &collect_missing(manager, project, repo, repo_db).await? {
         // FIXME: do a batch insert?
         create(tx, project, repo, task).await.context("create task")?;
+    }
+
+    // Move tasks no longer in the recipe repo to failed after
+    // adding new tasks so that superseded tasks are marked as such
+    // and only truly orphaned tasks remain
+    fix_orphaned(tx, project, repo, repo_db)
+        .await
+        .context("fix orphaned tasks")?;
+
+    Ok(())
+}
+
+#[tracing::instrument(
+    name = "fix_stuck_building_tasks",
+    skip_all,
+    fields(repository = %repo.name, project = %project.name)
+)]
+async fn fix_stuck_building(
+    tx: &mut Transaction,
+    manager: &Manager,
+    project: &Project,
+    repo: &Repository,
+) -> Result<()> {
+    const DISCONNECTED_TIMEOUT: chrono::Duration = chrono::Duration::minutes(60);
+
+    let building_tasks = query(tx.as_mut(), query::Params::default().statuses(Some(Status::Building)))
+        .await
+        .context("list building tasks")?
+        .tasks;
+
+    for task in building_tasks {
+        let requeue = if let Some(endpoint) = task.allocated_builder {
+            match manager.builder_status(&endpoint) {
+                Some(builder::Status::Building { task: id }) => {
+                    if task.id == id {
+                        false
+                    } else {
+                        warn!(
+                            task = %task.id,
+                            build = task.build_id,
+                            builder = %endpoint,
+                            "Builder is building another task, requeuing stuck build"
+                        );
+
+                        true
+                    }
+                }
+                Some(builder::Status::Idle) => {
+                    warn!(
+                        task = %task.id,
+                        build = task.build_id,
+                        builder = %endpoint,
+                        "Builder is idle, requeuing stuck build"
+                    );
+
+                    true
+                }
+                Some(builder::Status::Disconnected) | None => {
+                    let build_duration = task.started.map(|started| Utc::now() - started).unwrap_or_default();
+
+                    if build_duration > DISCONNECTED_TIMEOUT {
+                        warn!(
+                            task = %task.id,
+                            build = task.build_id,
+                            builder = %endpoint,
+                            "Builder is disconnected & build is older than {} minutes, requeuing stuck build",
+                            DISCONNECTED_TIMEOUT.num_minutes()
+                        );
+
+                        true
+                    } else {
+                        false
+                    }
+                }
+            }
+        } else {
+            warn!(
+                task = %task.id,
+                build = task.build_id,
+                "Building task has no set allocated builder, requeuing"
+            );
+
+            true
+        };
+
+        if requeue {
+            set_status(tx, task.id, Status::New).await.context("set task status")?;
+        }
+    }
+
+    Ok(())
+}
+
+#[tracing::instrument(
+    name = "fix_orphaned_tasks",
+    skip_all,
+    fields(repository = %repo.name, project = %project.name)
+)]
+async fn fix_orphaned(
+    tx: &mut Transaction,
+    project: &Project,
+    repo: &Repository,
+    repo_db: &meta::Database,
+) -> Result<()> {
+    let pending_tasks = query(tx.as_mut(), query::Params::default().statuses(Some(Status::New)))
+        .await
+        .context("list new tasks")?
+        .tasks;
+
+    for task in pending_tasks {
+        let is_missing = spawn_blocking({
+            let repo_db = repo_db.clone();
+            let package_id = task.package_id.into();
+
+            move || repo_db.get(&package_id)
+        })
+        .await
+        .context("join handle")?
+        .is_err();
+
+        if is_missing {
+            warn!(
+                task = %task.id,
+                build = task.build_id,
+                "Task no longer exists in repository, marking as failed"
+            );
+
+            set_status(tx, task.id, Status::Failed)
+                .await
+                .context("set task status")?;
+        }
     }
 
     Ok(())

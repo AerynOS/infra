@@ -75,9 +75,9 @@ impl Builder {
                 ..
             }) => Status::Idle,
             Some(Connection {
-                status: Connected::Building { .. },
+                status: Connected::Building { task },
                 ..
-            }) => Status::Building,
+            }) => Status::Building { task },
             None => Status::Disconnected,
         }
     }
@@ -356,7 +356,7 @@ enum Connected {
 pub enum Status {
     Disconnected,
     Idle,
-    Building,
+    Building { task: task::Id },
 }
 
 async fn stash_log(tx: &mut Transaction, state: &State, task_id: task::Id, path: PathBuf) -> Result<()> {
