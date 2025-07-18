@@ -113,7 +113,7 @@ pub struct Queued {
     pub dependencies: Vec<Id>,
 }
 
-#[tracing::instrument(name = " fix_and_create_tasks", skip_all, fields(repository = %repo.name))]
+#[tracing::instrument(name = "fix_and_create_tasks", skip_all, fields(repository = %repo.name))]
 pub async fn fix_and_create(
     tx: &mut Transaction,
     manager: &Manager,
