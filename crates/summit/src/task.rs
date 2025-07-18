@@ -69,6 +69,8 @@ pub enum Status {
     New,
     /// Failed execution or evaluation
     Failed,
+    /// Cancelled execution
+    Cancelled,
     /// This task is now building
     Building,
     /// Now publishing to Vessel
@@ -90,7 +92,10 @@ pub enum Status {
 
 impl Status {
     pub fn is_open(&self) -> bool {
-        !matches!(self, Status::Completed | Status::Failed | Status::Superseded)
+        !matches!(
+            self,
+            Status::Completed | Status::Failed | Status::Cancelled | Status::Superseded
+        )
     }
 
     pub fn is_in_progress(&self) -> bool {

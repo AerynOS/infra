@@ -60,9 +60,12 @@ pub(super) async fn create(
                 Status::Blocked | Status::New => true,
                 // Tasks already building / publishing shouldn't get cancelled & should have their
                 // lifecycle finished since they're already in-flight
-                Status::Building | Status::Completed | Status::Failed | Status::Publishing | Status::Superseded => {
-                    false
-                }
+                Status::Building
+                | Status::Publishing
+                | Status::Completed
+                | Status::Failed
+                | Status::Cancelled
+                | Status::Superseded => false,
             }))
             .source_path(source_path.clone()),
     )

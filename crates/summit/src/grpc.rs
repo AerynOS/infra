@@ -8,7 +8,7 @@ use service::{
         self,
         summit::{
             BuilderBusy, BuilderFinished, BuilderLog, BuilderStatus, BuilderStreamIncoming, BuilderStreamOutgoing,
-            FailRequest, ImportRequest, RetryRequest, builder_stream_incoming,
+            CancelRequest, ImportRequest, RetryRequest, builder_stream_incoming,
             summit_service_server::{SummitService, SummitServiceServer},
         },
     },
@@ -73,10 +73,10 @@ impl SummitService for Service {
         grpc::handle(request, async move |request| retry(state, request).await).await
     }
 
-    async fn fail(&self, request: tonic::Request<FailRequest>) -> Result<tonic::Response<()>, tonic::Status> {
+    async fn cancel(&self, request: tonic::Request<CancelRequest>) -> Result<tonic::Response<()>, tonic::Status> {
         let state = self.state.clone();
 
-        grpc::handle(request, async move |request| fail(state, request).await).await
+        grpc::handle(request, async move |request| cancel(state, request).await).await
     }
 
     async fn refresh(&self, request: tonic::Request<()>) -> Result<tonic::Response<()>, tonic::Status> {
@@ -194,7 +194,7 @@ async fn retry(state: Arc<State>, request: tonic::Request<RetryRequest>) -> Resu
         task_id = %request.get_ref().task_id,
     )
 )]
-async fn fail(state: Arc<State>, request: tonic::Request<FailRequest>) -> Result<(), Error> {
+async fn cancel(state: Arc<State>, request: tonic::Request<CancelRequest>) -> Result<(), Error> {
     let token = request
         .extensions()
         .get::<VerifiedToken>()
@@ -205,10 +205,10 @@ async fn fail(state: Arc<State>, request: tonic::Request<FailRequest>) -> Result
 
     info!(
         account = %account_id,
-        "Fail task"
+        "Cancel task"
     );
 
-    let _ = state.worker.send(worker::Message::FailTask {
+    let _ = state.worker.send(worker::Message::CancelTask {
         task_id: (request.into_inner().task_id as i64).into(),
     });
 
@@ -284,6 +284,14 @@ async fn builder(
                     ));
                 }
                 builder_stream_incoming::Event::BuildStarted(task_id) => {
+                    let _ = state.worker.send(worker::Message::Builder(
+                        endpoint_id,
+                        builder::Message::Status {
+                            now: Instant::now(),
+                            building: Some((task_id as i64).into()),
+                        },
+                    ));
+
                     let parent = state.service.state_dir.join("logs").join(task_id.to_string());
 
                     let _ = fs::remove_dir_all(&parent).await;

@@ -10,14 +10,14 @@ use service::{
     grpc::{
         collectable::Collectable,
         summit::{
-            BuilderBusy, BuilderFinished, BuilderLog, BuilderStatus, BuilderStreamIncoming, BuilderUpload,
-            builder_stream_incoming, builder_stream_outgoing,
+            BuilderBuild, BuilderBusy, BuilderFinished, BuilderLog, BuilderStatus, BuilderStreamIncoming,
+            BuilderUpload, builder_stream_incoming, builder_stream_outgoing,
         },
     },
 };
 use tokio::{
     select,
-    sync::{Mutex, mpsc},
+    sync::{Mutex, broadcast, mpsc},
     time,
 };
 use tokio_stream::wrappers::ReceiverStream;
@@ -113,6 +113,7 @@ async fn connect(state: &State, building: Arc<Mutex<Option<u64>>>) -> Result<()>
 
     let mut stream = resp.into_inner();
     let mut interval = time::interval(Duration::from_secs(60));
+    let (cancel_sender, cancel_receiver) = broadcast::channel::<()>(1);
 
     loop {
         select! {
@@ -133,35 +134,7 @@ async fn connect(state: &State, building: Arc<Mutex<Option<u64>>>) -> Result<()>
 
                     match event {
                         builder_stream_outgoing::Event::Build(request) => {
-                            let mut build_guard = building.lock().await;
-
-                            if let Some(in_progress) = *build_guard {
-                                warn!("Build already in progress, ignoring");
-                                let _ = sender
-                                    .send(BuilderStreamIncoming {
-                                        event: Some(builder_stream_incoming::Event::Busy(BuilderBusy {
-                                            requested_task_id: request.task_id,
-                                            in_progress_task_id: in_progress,
-                                        })),
-                                    })
-                                    .await;
-                                continue;
-                            }
-
-                            *build_guard = Some(request.task_id);
-
-                            drop(build_guard);
-
-                            tokio::spawn({
-                                let state = state.clone();
-                                let handle = Handle { sender: sender.clone() };
-                                let building = building.clone();
-
-                                async move {
-                                    build(request, state, handle).await;
-                                    building.lock().await.take();
-                                }
-                            });
+                            build_requested(state, &building, &sender, request, &cancel_receiver).await;
                         }
                         builder_stream_outgoing::Event::Upload(BuilderUpload { build, token, uri }) => {
                             let build = build.ok_or_eyre("missing build message")?;
@@ -177,6 +150,9 @@ async fn connect(state: &State, building: Arc<Mutex<Option<u64>>>) -> Result<()>
                                 }
                             });
                         }
+                        builder_stream_outgoing::Event::CancelBuild(()) => {
+                            let _  = cancel_sender.send(());
+                        }
                     }
                 } else {
                     break;
@@ -187,4 +163,63 @@ async fn connect(state: &State, building: Arc<Mutex<Option<u64>>>) -> Result<()>
     }
 
     Ok(())
+}
+
+async fn build_requested(
+    state: &State,
+    building: &Arc<Mutex<Option<u64>>>,
+    sender: &mpsc::Sender<BuilderStreamIncoming>,
+    request: BuilderBuild,
+    cancel_receiver: &broadcast::Receiver<()>,
+) {
+    let mut build_guard = building.lock().await;
+
+    if let Some(in_progress) = *build_guard {
+        warn!("Build already in progress, ignoring");
+
+        let _ = sender
+            .send(BuilderStreamIncoming {
+                event: Some(builder_stream_incoming::Event::Busy(BuilderBusy {
+                    requested_task_id: request.task_id,
+                    in_progress_task_id: in_progress,
+                })),
+            })
+            .await;
+
+        return;
+    }
+
+    *build_guard = Some(request.task_id);
+
+    drop(build_guard);
+
+    tokio::spawn({
+        let state = state.clone();
+        let sender = sender.clone();
+        let handle = Handle { sender: sender.clone() };
+        let building = building.clone();
+        let mut cancel_receiver = cancel_receiver.resubscribe();
+
+        async move {
+            select! {
+                biased;
+
+                _ = cancel_receiver.recv() => {
+                    info!("Build cancelled");
+
+                    let _ = sender
+                        .send(BuilderStreamIncoming {
+                            event: Some(builder_stream_incoming::Event::Status(
+                                BuilderStatus { building: None })
+                            ),
+                        })
+                        .await;
+                }
+
+                _ = build(request, state, handle) => {}
+            }
+
+            building.lock().await.take();
+        }
+    });
 }

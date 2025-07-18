@@ -16,7 +16,7 @@ use service::{
 use tokio::{sync::mpsc, task::spawn_blocking, time::Instant};
 use tracing::{error, info, warn};
 
-use crate::task;
+use crate::{Task, task};
 
 #[derive(Debug)]
 pub enum Message {
@@ -80,6 +80,47 @@ impl Builder {
             }) => Status::Building { task },
             None => Status::Disconnected,
         }
+    }
+
+    #[tracing::instrument(
+        name = "cancel_build",
+        skip_all,
+        fields(
+            builder = %self.endpoint,
+            task = %task.id,
+            build = task.build_id
+        )
+    )]
+    pub async fn cancel_build(&mut self, task: &Task) -> Result<()> {
+        match self.connection.as_mut() {
+            None => warn!("Builder is disconnected, cannot cancel build"),
+            Some(Connection {
+                status: Connected::Idle,
+                ..
+            }) => warn!("Builder is idle, nothing to cancel"),
+            Some(Connection {
+                status: Connected::Building { task: id },
+                ..
+            }) if task.id != *id => warn!("Builder is building something else"),
+            Some(Connection { handle, .. }) => {
+                handle
+                    .sender
+                    .send(BuilderStreamOutgoing {
+                        event: Some(builder_stream_outgoing::Event::CancelBuild(())),
+                    })
+                    .await
+                    .context("send builder stream message")?;
+
+                // Don't update builder status here, status ping
+                // will update it once the builder has finished
+                // actually cancelling the task & is reporting
+                // as idle
+
+                info!("Cancel request submitted to builder");
+            }
+        }
+
+        Ok(())
     }
 
     #[tracing::instrument(

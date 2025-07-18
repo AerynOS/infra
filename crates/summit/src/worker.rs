@@ -21,7 +21,7 @@ pub enum Message {
     ImportSucceeded { task_id: task::Id },
     ImportFailed { task_id: task::Id },
     RetryTask { task_id: task::Id },
-    FailTask { task_id: task::Id },
+    CancelTask { task_id: task::Id },
     Timer(Instant),
     ForceRefresh,
     Builder(endpoint::Id, builder::Message),
@@ -71,7 +71,7 @@ async fn handle_message(sender: &Sender, manager: &mut Manager, message: Message
         Message::ImportSucceeded { task_id } => import_succeeded(sender, manager, task_id).await,
         Message::ImportFailed { task_id } => import_failed(sender, manager, task_id).await,
         Message::RetryTask { task_id } => retry_task(sender, manager, task_id).await,
-        Message::FailTask { task_id } => fail_task(sender, manager, task_id).await,
+        Message::CancelTask { task_id } => cancel_task(sender, manager, task_id).await,
         Message::Timer(_) => timer(sender, manager).await,
         Message::ForceRefresh => force_refresh(sender, manager).await,
         Message::Builder(endpoint, message) => {
@@ -132,10 +132,10 @@ async fn retry_task(sender: &Sender, manager: &mut Manager, task_id: task::Id) -
 }
 
 #[tracing::instrument(skip_all)]
-async fn fail_task(sender: &Sender, manager: &mut Manager, task_id: task::Id) -> Result<()> {
-    debug!("Fail task");
+async fn cancel_task(sender: &Sender, manager: &mut Manager, task_id: task::Id) -> Result<()> {
+    debug!("Cancel task");
 
-    manager.fail_task(task_id).await.context("manager fail task")?;
+    manager.cancel_task(task_id).await.context("manager cancel task")?;
 
     let _ = sender.send(Message::AllocateBuilds);
 

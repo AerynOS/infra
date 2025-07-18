@@ -261,7 +261,7 @@ impl Manager {
             .ok_or_eyre("task is missing")?;
 
         self.queue
-            .task_completed(&mut tx, task_id)
+            .remove_blockers(&mut tx, task_id)
             .await
             .context("remove queue blockers for task_id={task_id:?}")?;
 
@@ -291,7 +291,7 @@ impl Manager {
             .context("set task_id={task_id:?} as import failed")?;
 
         self.queue
-            .task_failed(&mut tx, task_id)
+            .add_blockers(&mut tx, task_id)
             .await
             .context("add queue blockers for task_id={task_id}")?;
 
@@ -319,6 +319,9 @@ impl Manager {
         task::set_status(&mut tx, task_id, task::Status::New)
             .await
             .context("set task as import failed")?;
+        task::set_allocated_builder(&mut tx, task_id, None)
+            .await
+            .context("set builder")?;
 
         tx.commit().await.context("commit db tx")?;
 
@@ -327,7 +330,7 @@ impl Manager {
         Ok(())
     }
 
-    pub async fn fail_task(&mut self, task_id: task::Id) -> Result<()> {
+    pub async fn cancel_task(&mut self, task_id: task::Id) -> Result<()> {
         let mut tx = self.begin().await.context("begin db tx")?;
 
         let task = task::query(tx.as_mut(), task::query::Params::default().id(task_id))
@@ -339,22 +342,35 @@ impl Manager {
             .ok_or_eyre("task is missing")?;
 
         if !task.status.is_in_progress() {
-            warn!(%task_id, status = %task.status, "Task isn't in progress and won't be failed");
+            warn!(%task_id, status = %task.status, "Task isn't in progress and won't be cancelled");
             return Ok(());
         }
 
-        task::set_status(&mut tx, task_id, task::Status::Failed)
+        if let Some(endpoint) = task.allocated_builder.filter(|_| task.status == task::Status::Building) {
+            if let Some(builder) = self.builders.get_mut(&endpoint) {
+                builder.cancel_build(&task).await.context("cancel build")?;
+            } else {
+                warn!(
+                    builder = %endpoint,
+                    task = %task.id,
+                    build = task.build_id,
+                    "Builder not connected while cancelling task"
+                );
+            }
+        }
+
+        task::set_status(&mut tx, task_id, task::Status::Cancelled)
             .await
-            .context("set task_id={task_id:?} as import failed")?;
+            .context("set task_id={task_id:?} as cancelled")?;
 
         self.queue
-            .task_failed(&mut tx, task_id)
+            .add_blockers(&mut tx, task_id)
             .await
             .context("add queue blockers for task_id={task_id:?}")?;
 
         tx.commit().await.context("commit db tx")?;
 
-        info!(%task_id, "task marked as failed");
+        info!(%task_id, "Task successfully cancelled");
 
         Ok(())
     }
@@ -371,7 +387,7 @@ impl Manager {
                     let mut tx = self.begin().await.context("begin db tx")?;
 
                     self.queue
-                        .task_failed(&mut tx, task_id)
+                        .add_blockers(&mut tx, task_id)
                         .await
                         .context("add queue blockers")?;
 

@@ -4,7 +4,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use color_eyre::eyre::Result;
 use service_client::{AuthClient, CredentialsAuth, SummitServiceClient};
 use service_core::crypto::KeyPair;
-use service_grpc::summit::{FailRequest, RetryRequest};
+use service_grpc::summit::{CancelRequest, RetryRequest};
 use tokio::{fs, io};
 use tonic::transport::Uri;
 
@@ -30,8 +30,8 @@ async fn main() -> Result<()> {
                 Summit::Retry { task } => {
                     client.retry(RetryRequest { task_id: task }).await?;
                 }
-                Summit::Fail { task } => {
-                    client.fail(FailRequest { task_id: task }).await?;
+                Summit::Cancel { task } => {
+                    client.cancel(CancelRequest { task_id: task }).await?;
                 }
                 Summit::Refresh {} => {
                     client.refresh(()).await?;
@@ -115,8 +115,8 @@ enum Summit {
         /// Task id
         task: u64,
     },
-    /// Fail an in progress task
-    Fail {
+    /// Cancel an in progress task
+    Cancel {
         /// Task id
         task: u64,
     },
