@@ -155,8 +155,8 @@ impl Queue {
         Ok(())
     }
 
-    #[tracing::instrument(name = "queue_task_failed", skip_all, fields(%task_id))]
-    pub async fn task_failed(&mut self, tx: &mut Transaction, task_id: task::Id) -> Result<()> {
+    #[tracing::instrument(name = "queue_add_blockers", skip_all, fields(%task_id))]
+    pub async fn add_blockers(&mut self, tx: &mut Transaction, task_id: task::Id) -> Result<()> {
         let idx = self
             .0
             .iter()
@@ -188,8 +188,8 @@ impl Queue {
         Ok(())
     }
 
-    #[tracing::instrument(name = "queue_task_completed", skip_all, fields(%task_id))]
-    pub async fn task_completed(&mut self, tx: &mut Transaction, task_id: task::Id) -> Result<()> {
+    #[tracing::instrument(name = "queue_remove_blockers", skip_all, fields(%task_id))]
+    pub async fn remove_blockers(&mut self, tx: &mut Transaction, task_id: task::Id) -> Result<()> {
         let idx = self
             .0
             .iter()

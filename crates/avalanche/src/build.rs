@@ -32,6 +32,8 @@ use crate::stream;
 pub async fn build(request: BuilderBuild, state: State, stream: stream::Handle) {
     info!("Starting build");
 
+    stream.build_started(request.task_id).await;
+
     let task_id = request.task_id;
 
     match run(request, &state, stream.clone()).await {
@@ -90,16 +92,9 @@ async fn run(request: BuilderBuild, state: &State, stream: stream::Handle) -> Re
         .await
         .context("create boulder config")?;
 
-    build_recipe(
-        request.task_id,
-        &work_dir,
-        &asset_dir,
-        &worktree_dir,
-        &request.relative_path,
-        stream,
-    )
-    .await
-    .context("build recipe")?;
+    build_recipe(&work_dir, &asset_dir, &worktree_dir, &request.relative_path, stream)
+        .await
+        .context("build recipe")?;
 
     let collectables = scan_collectables(&asset_dir).await.context("scan collectables")?;
 
@@ -162,7 +157,6 @@ avalanche:
 }
 
 async fn build_recipe(
-    task_id: u64,
     work_dir: &Path,
     asset_dir: &Path,
     worktree_dir: &Path,
@@ -174,8 +168,6 @@ async fn build_recipe(
     let write_logs = |stdout: ChildStdout, stderr: ChildStderr| async move {
         let mut stdout = ReaderStream::new(BufReader::new(stdout));
         let mut stderr = ReaderStream::new(BufReader::new(stderr));
-
-        stream.build_started(task_id).await;
 
         while let Ok(Some(bytes)) = select(&mut stdout, &mut stderr).try_next().await {
             stream.build_log(bytes.into()).await;
