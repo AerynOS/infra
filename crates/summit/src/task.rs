@@ -16,7 +16,7 @@ use uuid::Uuid;
 
 use crate::{Manager, Profile, Project, Repository, builder, profile, project, repository};
 
-pub use self::query::query;
+pub use self::query::{Query, query};
 
 pub mod create;
 pub mod query;
@@ -26,7 +26,7 @@ use self::create::create;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, From, Into, Display, FromRow)]
 pub struct Id(i64);
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Task {
     pub id: Id,
     pub project_id: project::Id,

@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
+use chrono::{DateTime, Utc};
 use color_eyre::eyre::{Context, OptionExt, Report, Result};
+use serde::{Deserialize, Serialize};
 use service::{
     Endpoint, State,
     client::{AuthClient, EndpointAuth, VesselServiceClient},
@@ -13,7 +15,7 @@ use service::{
         vessel::UploadTokenRequest,
     },
 };
-use tokio::{sync::mpsc, task::spawn_blocking, time::Instant};
+use tokio::{sync::mpsc, task::spawn_blocking};
 use tracing::{error, info, warn};
 
 use crate::{Task, task};
@@ -23,7 +25,7 @@ pub enum Message {
     Connected(Handle),
     Disconnected,
     Status {
-        now: Instant,
+        now: DateTime<Utc>,
         building: Option<task::Id>,
     },
     BuildSucceeded {
@@ -50,6 +52,25 @@ pub enum Event {
     BuildRequeued,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Info {
+    pub endpoint: endpoint::Id,
+    pub last_seen: Option<DateTime<Utc>>,
+    pub status: StatusKind,
+    pub building: Option<task::Id>,
+}
+
+impl Info {
+    pub fn disconnected(endpoint: endpoint::Id) -> Self {
+        Self {
+            endpoint,
+            last_seen: None,
+            status: StatusKind::Disconnected,
+            building: None,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Builder {
     pub endpoint: endpoint::Id,
@@ -61,6 +82,31 @@ impl Builder {
         Self {
             endpoint,
             connection: None,
+        }
+    }
+
+    pub fn info(&self) -> Info {
+        let status = StatusKind::from(self.status());
+
+        let (last_seen, building) = match self.connection {
+            Some(Connection {
+                last_seen,
+                status: Connected::Idle,
+                ..
+            }) => (Some(last_seen), None),
+            Some(Connection {
+                last_seen,
+                status: Connected::Building { task },
+                ..
+            }) => (Some(last_seen), Some(task)),
+            None => (None, None),
+        };
+
+        Info {
+            endpoint: self.endpoint,
+            last_seen,
+            status,
+            building,
         }
     }
 
@@ -191,7 +237,7 @@ impl Builder {
 
                 self.connection = Some(Connection {
                     handle,
-                    last_seen: Instant::now(),
+                    last_seen: Utc::now(),
                     status: Connected::Idle,
                 });
 
@@ -380,7 +426,7 @@ impl From<mpsc::Sender<BuilderStreamOutgoing>> for Handle {
 #[derive(Debug)]
 struct Connection {
     pub handle: Handle,
-    pub last_seen: Instant,
+    pub last_seen: DateTime<Utc>,
     pub status: Connected,
 }
 
@@ -393,7 +439,8 @@ enum Connected {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, strum::EnumDiscriminants)]
+#[strum_discriminants(name(StatusKind), derive(Serialize, Deserialize))]
 pub enum Status {
     Disconnected,
     Idle,

@@ -22,5 +22,25 @@
                 {% endfor %}
             </ul>
         </div>
+        <div class="overview-builders">
+            <h3>Builders</h3>
+            <ul class="overview-builders__list">
+                {% for endpoint in endpoints %}
+                    {% set builder = builders | builder(endpoint.id) %}
+                    {% if builder %}
+                        <li class="overview-builders__list__item overview-builders__list__item--{{ builder.status }}">
+                            <h4>{{ endpoint.description }}</h4>
+                            {% if builder.building %}
+                                {% set task = building_tasks | task(builder.building) %}
+                                <p>{{ task.description }}</p>
+                                <div>{{ task.duration | format_duration }}</div>
+                            {% else %}
+                                <p>{{ builder.status }}</p>
+                            {% endif %}
+                        </li>
+                    {% endif %}
+                {% endfor %}
+            </ul>
+        </div>
     </div>
 {% endblock %}

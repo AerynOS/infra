@@ -194,6 +194,64 @@ header h1 {
     color: var(--body-text-color);
 }
 
+.overview-builders {
+    flex: 1;
+}
+
+.overview-builders h3 {
+    margin-top: 0;
+}
+
+.overview-builders__list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.overview-builders__list__item {
+    margin: 0;
+    border: 1px solid var(--light-border-color);
+    border-radius: 3px;
+    padding: 24px;
+    background-color: var(--light-background-color);
+    font-size: 1em;
+    color: var(--muted-color);
+    position: relative;
+    margin-bottom: 24px;
+}
+
+.overview-builders__list__item::before {
+    width: 12px;
+    height: 12px;
+    background-color: gray;
+    content: " ";
+    position: absolute;
+    bottom: 24px;
+    right: 24px;
+    border-radius: 12px;
+}
+
+.overview-builders__list__item.overview-builders__list__item--Disconnected::before {
+    background-color: var(--status-failed-color);
+}
+
+.overview-builders__list__item.overview-builders__list__item--Idle::before {
+    background-color: var(--status-blocked-color);
+}
+
+.overview-builders__list__item.overview-builders__list__item--Building::before {
+    background-color: var(--status-building-color);
+}
+
+.overview-builders__list__item:last-child {
+    margin-bottom: 0;
+}
+
+.overview-builders__list__item h4 {
+    margin: 0;
+    color: var(--body-text-color);
+}
+
 .tasks-total-filter {
     padding: 24px 0;
     color: var(--body-text-color);

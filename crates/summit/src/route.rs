@@ -1,7 +1,7 @@
 use std::{iter, num::NonZeroU32};
 
 use axum::{
-    extract::{Query, State},
+    extract::{self, Query},
     response::{IntoResponse, Response},
 };
 use color_eyre::eyre::{self, Context};
@@ -10,18 +10,53 @@ use serde::Deserialize;
 use service::Endpoint;
 use snafu::Snafu;
 use strum::IntoEnumIterator;
+use tokio::sync::oneshot;
 
-use crate::{project, task, templates::render_html};
+use crate::{project, task, template, worker};
 
-pub async fn index(State(state): State<service::State>) -> Result<impl IntoResponse, Error> {
-    let mut conn = state.service_db.acquire().await.context("acquire db conn")?;
-    let params = task::query::Params::default().offset(0).limit(10);
-    let task_query = task::query(&mut conn, params).await.context("query tasks")?;
+pub fn state(service: service::State, worker: worker::Sender) -> State {
+    State { service, worker }
+}
 
-    Ok(render_html(
+#[derive(Debug, Clone)]
+pub struct State {
+    service: service::State,
+    worker: worker::Sender,
+}
+
+pub async fn index(extract::State(state): extract::State<State>) -> Result<impl IntoResponse, Error> {
+    let mut conn = state.service.service_db.acquire().await.context("acquire db conn")?;
+
+    let task::Query { tasks, .. } = task::query(&mut conn, task::query::Params::default().limit(10))
+        .await
+        .context("query tasks")?;
+
+    let task::Query {
+        tasks: building_tasks, ..
+    } = task::query(
+        &mut conn,
+        task::query::Params::default().statuses(Some(task::Status::Building)),
+    )
+    .await
+    .context("query tasks")?;
+
+    let endpoints = Endpoint::list(&mut *conn).await.context("list endpoints")?;
+
+    let builders = {
+        let (sender, receiver) = oneshot::channel();
+
+        let _ = state.worker.send(worker::Message::ListBuilders(sender));
+
+        receiver.await.context("list builders")?
+    };
+
+    Ok(template::render(
         "index.html.jinja",
         minijinja::context! {
-            tasks => task_query.tasks,
+            endpoints,
+            tasks,
+            building_tasks,
+            builders,
         },
     ))
 }
@@ -37,13 +72,13 @@ pub struct TasksQuery {
 }
 
 pub async fn tasks(
-    State(state): State<service::State>,
+    extract::State(state): extract::State<State>,
     Query(query): Query<TasksQuery>,
 ) -> Result<impl IntoResponse, Error> {
     const DEFAULT_LIMIT: u32 = 25;
     const MAX_LIMIT: u32 = 100;
 
-    let mut conn = state.service_db.acquire().await.context("acquire db conn")?;
+    let mut conn = state.service.service_db.acquire().await.context("acquire db conn")?;
 
     let page = query.page.map(u32::from).unwrap_or(1);
 
@@ -82,7 +117,7 @@ pub async fn tasks(
     let end = (page + side_window).min(total_pages);
     let pages_to_show = (start..=end).collect::<Vec<u32>>();
 
-    Ok(render_html(
+    Ok(template::render(
         "tasks.html.jinja",
         minijinja::context! {
             projects,
@@ -103,7 +138,7 @@ pub async fn tasks(
 }
 
 pub async fn fallback() -> impl IntoResponse {
-    render_html("404.html.jinja", ())
+    template::render("404.html.jinja", ())
 }
 
 #[derive(Debug, Snafu)]

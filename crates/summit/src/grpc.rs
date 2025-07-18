@@ -1,6 +1,7 @@
 use std::{io, sync::Arc};
 
 use async_trait::async_trait;
+use chrono::Utc;
 use http::Extensions;
 use service::{
     endpoint,
@@ -19,7 +20,6 @@ use tokio::{
     fs::{self, File},
     io::AsyncWriteExt,
     sync::mpsc,
-    time::Instant,
 };
 use tokio_stream::{StreamExt, wrappers::ReceiverStream};
 use tracing::{Instrument, Span, info, warn};
@@ -278,7 +278,7 @@ async fn builder(
                     let _ = state.worker.send(worker::Message::Builder(
                         endpoint_id,
                         builder::Message::Status {
-                            now: Instant::now(),
+                            now: Utc::now(),
                             building: building.map(|id| (id as i64).into()),
                         },
                     ));
@@ -287,7 +287,7 @@ async fn builder(
                     let _ = state.worker.send(worker::Message::Builder(
                         endpoint_id,
                         builder::Message::Status {
-                            now: Instant::now(),
+                            now: Utc::now(),
                             building: Some((task_id as i64).into()),
                         },
                     ));
@@ -359,15 +359,13 @@ async fn builder(
         Ok(())
     };
 
-    match inner().instrument(span).await {
-        Ok(()) => Ok(()),
-        Err(e) => {
-            let _ = state
-                .worker
-                .send(worker::Message::Builder(endpoint_id, builder::Message::Disconnected));
-            Err(e)
-        }
-    }
+    let result = inner().instrument(span).await;
+
+    let _ = state
+        .worker
+        .send(worker::Message::Builder(endpoint_id, builder::Message::Disconnected));
+
+    result
 }
 
 #[derive(Debug, Snafu)]

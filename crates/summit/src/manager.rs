@@ -2,7 +2,7 @@ use std::collections::{HashMap, VecDeque};
 
 use color_eyre::eyre::{self, Context, OptionExt, Report, Result};
 use moss::db::meta;
-use service::{State, database::Transaction, endpoint, error};
+use service::{Endpoint, State, database::Transaction, endpoint, error};
 use sqlx::{Sqlite, pool::PoolConnection};
 use tokio::task::spawn_blocking;
 use tracing::{Span, debug, error, info, warn};
@@ -406,6 +406,25 @@ impl Manager {
 
     pub fn builder_status(&self, endpoint: &endpoint::Id) -> Option<builder::Status> {
         self.builders.get(endpoint).map(Builder::status)
+    }
+
+    pub async fn builders(&self) -> Result<Vec<builder::Info>> {
+        let mut conn = self.acquire().await.context("acquire db conn")?;
+
+        let builders = Endpoint::list(conn.as_mut())
+            .await
+            .context("list endpoints")?
+            .into_iter()
+            .filter_map(|e| (e.role == endpoint::Role::Builder).then_some(e.id));
+
+        Ok(builders
+            .map(|id| {
+                self.builders
+                    .get(&id)
+                    .map(Builder::info)
+                    .unwrap_or_else(|| builder::Info::disconnected(id))
+            })
+            .collect())
     }
 }
 
