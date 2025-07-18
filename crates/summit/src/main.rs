@@ -30,10 +30,10 @@ mod profile;
 mod project;
 mod queue;
 mod repository;
-mod routes;
+mod route;
 mod seed;
 mod task;
-mod templates;
+mod template;
 mod worker;
 
 tokio::task_local! {
@@ -85,15 +85,15 @@ async fn main() -> Result<()> {
         .with_http((host, http_port))
         .merge_http(
             axum::Router::new()
-                .route("/", get(routes::index))
-                .route("/tasks", get(routes::tasks))
+                .route("/", get(route::index))
+                .route("/tasks", get(route::tasks))
                 .route_layer(middleware::from_fn(move |request: Request, next: Next| {
                     USE_MOCK_DATA.scope(use_mock_data, next.run(request))
                 }))
                 .nest_service("/static", serve_static)
                 .nest_service("/logs", serve_logs)
-                .fallback(get(routes::fallback))
-                .with_state(state.clone()),
+                .fallback(get(route::fallback))
+                .with_state(route::state(state.clone(), worker_sender.clone())),
         )
         .with_grpc((host, grpc_port))
         .merge_grpc(grpc::service(state.clone(), worker_sender.clone()))

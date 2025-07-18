@@ -3,7 +3,7 @@ use std::{convert::Infallible, future::Future, time::Duration};
 use color_eyre::{Result, eyre::Context};
 use service::endpoint;
 use tokio::{
-    sync::mpsc,
+    sync::{mpsc, oneshot},
     time::{self, Instant},
 };
 use tracing::{debug, error, info};
@@ -25,6 +25,7 @@ pub enum Message {
     Timer(Instant),
     ForceRefresh,
     Builder(endpoint::Id, builder::Message),
+    ListBuilders(oneshot::Sender<Vec<builder::Info>>),
 }
 
 pub async fn run(mut manager: Manager) -> Result<(Sender, impl Future<Output = Result<(), Infallible>> + use<>)> {
@@ -83,6 +84,13 @@ async fn handle_message(sender: &Sender, manager: &mut Manager, message: Message
             if allocate_builds {
                 let _ = sender.send(Message::AllocateBuilds);
             }
+
+            Ok(())
+        }
+        Message::ListBuilders(sender) => {
+            let builders = manager.builders().await.context("list builders")?;
+
+            let _ = sender.send(builders);
 
             Ok(())
         }

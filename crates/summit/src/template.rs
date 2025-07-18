@@ -3,30 +3,32 @@ use http::StatusCode;
 use minijinja::Environment;
 use serde::Serialize;
 
-mod filters;
-mod functions;
+mod filter;
+mod function;
 #[cfg_attr(
     all(feature = "templates-bundled", not(feature = "templates-autoreload")),
-    path = "templates/bundled.rs"
+    path = "template/bundled.rs"
 )]
-#[cfg_attr(feature = "templates-autoreload", path = "templates/autoreload.rs")]
+#[cfg_attr(feature = "templates-autoreload", path = "template/autoreload.rs")]
 mod implementation;
 
 pub type Response = axum::response::Result<Html<String>>;
 
 fn env() -> Environment<'static> {
     let mut env = Environment::new();
-    env.add_filter("repository", filters::repository);
-    env.add_filter("profile", filters::profile);
-    env.add_filter("endpoint", filters::endpoint);
-    env.add_filter("format_duration", filters::format_duration);
-    env.add_function("build_task_query_url", functions::build_task_query_url);
+    env.add_filter("repository", filter::repository);
+    env.add_filter("profile", filter::profile);
+    env.add_filter("endpoint", filter::endpoint);
+    env.add_filter("builder", filter::builder);
+    env.add_filter("task", filter::task);
+    env.add_filter("format_duration", filter::format_duration);
+    env.add_function("build_task_query_url", function::build_task_query_url);
 
     env
 }
 
 #[allow(clippy::result_large_err)]
-pub fn render_html<S>(name: &str, ctx: S) -> Response
+pub fn render<S>(name: &str, ctx: S) -> Response
 where
     S: Serialize,
 {

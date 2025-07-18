@@ -1,6 +1,6 @@
 use urlencoding::encode;
 
-pub(super) fn build_task_query_url(
+pub fn build_task_query_url(
     status: Option<&str>,
     sort: Option<&str>,
     order: Option<&str>,
