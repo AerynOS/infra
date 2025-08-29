@@ -7,17 +7,7 @@
             <input type="text" class="tasks-total-filter__search" id="searchTasksInput" placeholder="Search Tasks..." value="{{ search_tasks if search_tasks is not none else '' }}" {% if search_tasks %}autofocus{% endif %}>
         </div>
         <div class="tasks-total-filter__filter-sort">
-            <div class="tasks-total-filter__filter-sort__item">
-                <span>Filter by:</span>
-                <div class="custom-select-wrapper">
-                    <select class="custom-select" id="taskFilterSelect">
-                        <option value="{{ build_task_query_url('', selected_sort, selected_order, search_tasks) }}">All</option>
-                        {% for status in statuses %}
-                            <option {% if status == selected_status %}selected{% endif %} value="{{ build_task_query_url(status, selected_sort, selected_order, search_tasks) }}">{{ status }}</option>
-                        {% endfor %}
-                    </select>
-                </div>
-            </div>
+
             <div>
                 <span>Sort by:</span>
                 <div class="custom-select-wrapper">
@@ -27,6 +17,17 @@
                         <option {% if selected_sort == "ended" and selected_order == "asc" %}selected{% endif %} value="{{ build_task_query_url(selected_status, "ended", "asc", search_tasks) }}">Oldest Finished</option>
                         <option {% if selected_sort == "build" and selected_order == "asc" %}selected{% endif %} value="{{ build_task_query_url(selected_status, "build", "asc", search_tasks) }}">Shortest Build Time</option>
                         <option {% if selected_sort == "build" and selected_order == "desc" %}selected{% endif %} value="{{ build_task_query_url(selected_status, "build", "desc", search_tasks) }}">Longest Build Time</option>
+                    </select>
+                </div>
+            </div>
+            <div class="tasks-total-filter__filter-sort__item">
+                <span>Filter by:</span>
+                <div class="custom-select-wrapper">
+                    <select class="custom-select" id="taskFilterSelect">
+                        <option value="{{ build_task_query_url('', selected_sort, selected_order, search_tasks) }}">All</option>
+                        {% for status in statuses %}
+                            <option {% if status == selected_status %}selected{% endif %} value="{{ build_task_query_url(status, selected_sort, selected_order, search_tasks) }}">{{ status }}</option>
+                        {% endfor %}
                     </select>
                 </div>
             </div>
@@ -56,9 +57,11 @@
                 <li class="tasks__list__item">
                     <code style="display:none">{{ task }}</code>
 
-                    <div class="tasks__list__item__id"><span>#{{ task.id }}</span></div>
+                    <div class="tasks__list__item__id">
+                        <span><a href="/logs/{{ task.id }}/build.log">#{{ task.id }}</a></span>
+                    </div>
                     <div class="tasks__list__item__detail">
-                        <a href="/logs/{{ task.id }}/build.log">{{ task.build_id }}</a>
+                        {{ task.build_id }}
                         <div>{{ task.description }}</div>
                     </div>
                     <div class="tasks__list__item__timing">
