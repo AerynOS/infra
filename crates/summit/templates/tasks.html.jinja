@@ -58,7 +58,7 @@
                     <code style="display:none">{{ task }}</code>
 
                     <div class="tasks__list__item__id">
-                        <span><a href="/logs/{{ task.id }}/build.log">#{{ task.id }}</a></span>
+                        <span>#{{ task.id }}</span>
                     </div>
                     <div class="tasks__list__item__detail">
                         {{ task.build_id }}
@@ -66,10 +66,10 @@
                     </div>
                     <div class="tasks__list__item__timing">
                         {% if task.ended %}
-                            <span>Ended @ {{ task.ended }}</span>
+                            <span><a href="/logs/{{ task.id }}/build.log">Ended @ {{ task.ended }}</a></span>
                             <span title="{{ task.allocated_builder }}">{{ task.duration | format_duration }} on {{ builder_description }}</span>
                         {% elif task.started %}
-                            <span>Started @ {{ task.started }}</span>
+                            <span><a href="/logs/{{ task.id }}/build.log">Started @ {{ task.started }}</a></span>
                             <span title="{{ task.allocated_builder }}">on {{ builder_description }}</span>
                         {% else %}
                             <span>Added @ {{ task.added }}</span>
