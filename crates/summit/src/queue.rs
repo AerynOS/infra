@@ -100,7 +100,7 @@ impl Queue {
         let mut dag = Dag::<task::Id>::new();
 
         for current in mapped_tasks.values() {
-            let current_node = dag.add_node_or_get_index(current.task.id);
+            let current_node = dag.add_node_or_get_index(&current.task.id);
 
             // All other tasks which share the same arch & index
             let common_tasks = mapped_tasks
@@ -123,7 +123,7 @@ impl Queue {
                             .any(|p| p.kind == dep.kind && p.name == dep.name)
                     })
                     .for_each(|provider| {
-                        let provider_node = dag.add_node_or_get_index(provider.task.id);
+                        let provider_node = dag.add_node_or_get_index(&provider.task.id);
 
                         dag.add_edge(provider_node, current_node);
                     });
