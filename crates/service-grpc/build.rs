@@ -14,7 +14,7 @@ const PROTO_FILES: &[&str] = &[
 ];
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let tonic_generator = tonic_build::configure()
+    let tonic_generator = tonic_prost_build::configure()
         .build_client(true)
         .build_server(true)
         .include_file("proto.rs")
