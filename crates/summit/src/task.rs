@@ -274,11 +274,21 @@ async fn fix_orphaned(
 
 /// Set the status of a task_id in the db
 pub async fn set_status(tx: &mut Transaction, task_id: Id, status: Status) -> Result<()> {
-    let ended = if !status.is_open() { ", ended = unixepoch()" } else { "" };
+    let ended = if !status.is_open() {
+        ", ended = unixepoch()"
+    }
+    // Retry
+    else if status == Status::New {
+        ", ended = null"
+    } else {
+        ""
+    };
 
     let started = if status == Status::Building {
         ", started = unixepoch()"
-    } else if status == Status::New {
+    }
+    // Retry
+    else if status == Status::New {
         ", started = null"
     } else {
         ""
