@@ -10,6 +10,7 @@ use tracing::{debug, error, info};
 
 use crate::{Manager, builder, task};
 
+/// The interval at which a timer fires off an event to check the configured git recipe repo branch
 const TIMER_INTERVAL: Duration = Duration::from_secs(30);
 
 pub type Sender = mpsc::UnboundedSender<Message>;
