@@ -6,7 +6,7 @@ use tokio::{
     sync::{mpsc, oneshot},
     time::{self, Instant},
 };
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::{Manager, builder, task};
 
@@ -25,6 +25,8 @@ pub enum Message {
     CancelTask { task_id: task::Id },
     Timer(Instant),
     ForceRefresh,
+    Pause,
+    Resume,
     Builder(endpoint::Id, builder::Message),
     ListBuilders(oneshot::Sender<Vec<builder::Info>>),
 }
@@ -38,10 +40,12 @@ pub async fn run(mut manager: Manager) -> Result<(Sender, impl Future<Output = R
         tokio::spawn(timer_task(sender.clone()));
 
         async move {
+            let mut paused = false;
+
             while let Some(message) = receiver.recv().await {
                 let kind = message.to_string();
 
-                if let Err(e) = handle_message(&sender, &mut manager, message).await {
+                if let Err(e) = handle_message(&sender, &mut manager, &mut paused, message).await {
                     let error = service::error::chain(e.as_ref() as &dyn std::error::Error);
                     error!(message = kind, %error, "Error handling message");
                 }
@@ -67,15 +71,17 @@ async fn timer_task(sender: Sender) -> Result<(), Infallible> {
     }
 }
 
-async fn handle_message(sender: &Sender, manager: &mut Manager, message: Message) -> Result<()> {
+async fn handle_message(sender: &Sender, manager: &mut Manager, paused: &mut bool, message: Message) -> Result<()> {
     match message {
-        Message::AllocateBuilds => allocate_builds(manager).await,
+        Message::AllocateBuilds => allocate_builds(manager, *paused).await,
         Message::ImportSucceeded { task_id } => import_succeeded(sender, manager, task_id).await,
         Message::ImportFailed { task_id } => import_failed(sender, manager, task_id).await,
         Message::RetryTask { task_id } => retry_task(sender, manager, task_id).await,
         Message::CancelTask { task_id } => cancel_task(sender, manager, task_id).await,
-        Message::Timer(_) => timer(sender, manager).await,
-        Message::ForceRefresh => force_refresh(sender, manager).await,
+        Message::Timer(_) => timer(sender, manager, *paused).await,
+        Message::ForceRefresh => force_refresh(sender, manager, *paused).await,
+        Message::Pause => pause(paused).await,
+        Message::Resume => resume(sender, paused).await,
         Message::Builder(endpoint, message) => {
             let allocate_builds = manager
                 .update_builder(endpoint, message)
@@ -99,8 +105,14 @@ async fn handle_message(sender: &Sender, manager: &mut Manager, message: Message
 }
 
 #[tracing::instrument(skip_all)]
-async fn allocate_builds(manager: &mut Manager) -> Result<()> {
+async fn allocate_builds(manager: &mut Manager, paused: bool) -> Result<()> {
+    if paused {
+        warn!("Cannot allocate builds while paused");
+        return Ok(());
+    }
+
     debug!("Allocating builds");
+
     manager.allocate_builds().await.context("allocate builds")
 }
 
@@ -152,7 +164,12 @@ async fn cancel_task(sender: &Sender, manager: &mut Manager, task_id: task::Id) 
 }
 
 #[tracing::instrument(skip_all, fields(project))]
-async fn timer(sender: &Sender, manager: &Manager) -> Result<()> {
+async fn timer(sender: &Sender, manager: &Manager, paused: bool) -> Result<()> {
+    if paused {
+        info!("Paused");
+        return Ok(());
+    }
+
     debug!("Timer triggered");
 
     let have_changes = manager.refresh(false).await.context("refresh")?;
@@ -165,7 +182,12 @@ async fn timer(sender: &Sender, manager: &Manager) -> Result<()> {
 }
 
 #[tracing::instrument(skip_all, fields(project))]
-async fn force_refresh(sender: &Sender, manager: &Manager) -> Result<()> {
+async fn force_refresh(sender: &Sender, manager: &Manager, paused: bool) -> Result<()> {
+    if paused {
+        warn!("Cannot force refresh while paused");
+        return Ok(());
+    }
+
     info!("Force refresh");
 
     let have_changes = manager.refresh(true).await.context("refresh")?;
@@ -173,6 +195,27 @@ async fn force_refresh(sender: &Sender, manager: &Manager) -> Result<()> {
     if have_changes {
         let _ = sender.send(Message::AllocateBuilds);
     }
+
+    Ok(())
+}
+
+#[tracing::instrument(skip_all, fields(project))]
+async fn pause(paused: &mut bool) -> Result<()> {
+    info!("Pause");
+
+    *paused = true;
+
+    Ok(())
+}
+
+#[tracing::instrument(skip_all, fields(project))]
+async fn resume(sender: &Sender, paused: &mut bool) -> Result<()> {
+    info!("Resume");
+
+    *paused = false;
+
+    // Always allocate builds after resuming
+    let _ = sender.send(Message::AllocateBuilds);
 
     Ok(())
 }

@@ -36,6 +36,12 @@ async fn main() -> Result<()> {
                 Summit::Refresh {} => {
                     client.refresh(()).await?;
                 }
+                Summit::Pause {} => {
+                    client.pause(()).await?;
+                }
+                Summit::Resume {} => {
+                    client.resume(()).await?;
+                }
             }
         }
         Command::Key { command } => match command {
@@ -122,6 +128,10 @@ enum Summit {
     },
     /// Refresh all projects
     Refresh {},
+    /// Pause all projects
+    Pause {},
+    /// Resume all projects
+    Resume {},
 }
 
 #[derive(Debug, Subcommand)]

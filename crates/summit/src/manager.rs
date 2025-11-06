@@ -11,6 +11,7 @@ use crate::{Builder, Project, Queue, builder, profile, project, repository, task
 
 pub struct Manager {
     pub state: State,
+    pub paused: bool,
     queue: Queue,
     builders: HashMap<endpoint::Id, Builder>,
     profile_dbs: HashMap<profile::Id, meta::Database>,
@@ -57,6 +58,7 @@ impl Manager {
 
         let manager = Self {
             state,
+            paused: false,
             queue: Queue::default(),
             builders: HashMap::default(),
             profile_dbs,
