@@ -184,6 +184,10 @@ async fn import_packages(state: &State, packages: Vec<Package>, destructive_move
 
     reindex(state).await.context("reindex")?;
 
+    prune_orphaned_packages(state)
+        .await
+        .context("prune orphaned packages")?;
+
     Ok(())
 }
 
@@ -397,6 +401,65 @@ pub async fn reindex(state: &State) -> Result<()> {
     let elapsed = format!("{}ms", now.elapsed().as_millis());
 
     info!(elapsed, "Index complete");
+
+    Ok(())
+}
+
+#[tracing::instrument(skip_all)]
+async fn prune_orphaned_packages(state: &State) -> Result<()> {
+    use tokio::fs;
+
+    let pool_dir = state.state_dir.join("public/pool");
+
+    // All stones on the filesystem
+    let stones = tokio::task::spawn_blocking({
+        let pool_dir = pool_dir.clone();
+        move || enumerate_stones(&pool_dir)
+    })
+    .await
+    .context("spawn blocking")?
+    .context("enumerate stones")?;
+
+    // Packages in the current index
+    let indexed_packages = collection::list(
+        state
+            .service_db
+            .acquire()
+            .await
+            .context("acquire database connection")?
+            .as_mut(),
+    )
+    .await
+    .context("list entries from collection db")?;
+
+    // Package id is the sha256 of the file on disk. We use this to detect
+    // orphaned packages that aren't part of the existing index
+    let index_hashes = indexed_packages
+        .into_iter()
+        .map(|entry| entry.package_id)
+        .collect::<Vec<_>>();
+
+    let orphaned_stones = stones
+        .into_iter()
+        .filter(|stone| !index_hashes.contains(&stone.sha256sum))
+        .collect::<Vec<_>>();
+
+    if orphaned_stones.is_empty() {
+        info!("No orphaned stones on disk");
+        return Ok(());
+    }
+
+    for stone in &orphaned_stones {
+        let relative_path = stone.path.strip_prefix(&pool_dir).expect("lives in pool dir");
+
+        fs::remove_file(&stone.path)
+            .await
+            .context(format!("remove orphaned stone {:?}", stone.path))?;
+
+        info!(path = ?relative_path, "Orphaned stone removed");
+    }
+
+    info!("num_stones" = orphaned_stones.len(), "All orphaned stones removed");
 
     Ok(())
 }
