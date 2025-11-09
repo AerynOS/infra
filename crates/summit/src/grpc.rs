@@ -85,6 +85,18 @@ impl SummitService for Service {
         grpc::handle(request, async move |request| refresh(state, request).await).await
     }
 
+    async fn pause(&self, request: tonic::Request<()>) -> Result<tonic::Response<()>, tonic::Status> {
+        let state = self.state.clone();
+
+        grpc::handle(request, async move |request| pause(state, request).await).await
+    }
+
+    async fn resume(&self, request: tonic::Request<()>) -> Result<tonic::Response<()>, tonic::Status> {
+        let state = self.state.clone();
+
+        grpc::handle(request, async move |request| resume(state, request).await).await
+    }
+
     async fn builder(
         &self,
         request: tonic::Request<tonic::Streaming<BuilderStreamIncoming>>,
@@ -231,6 +243,43 @@ async fn refresh(state: Arc<State>, request: tonic::Request<()>) -> Result<(), E
     );
 
     let _ = state.worker.send(worker::Message::ForceRefresh);
+
+    Ok(())
+}
+
+#[tracing::instrument(skip_all)]
+async fn pause(state: Arc<State>, request: tonic::Request<()>) -> Result<(), Error> {
+    let token = request
+        .extensions()
+        .get::<VerifiedToken>()
+        .cloned()
+        .ok_or(Error::MissingRequestToken)?;
+
+    let account_id = token.decoded.payload.account_id;
+
+    info!(
+        account = %account_id,
+        "Pause"
+    );
+
+    let _ = state.worker.send(worker::Message::Pause);
+
+    Ok(())
+}
+
+#[tracing::instrument(skip_all)]
+async fn resume(state: Arc<State>, request: tonic::Request<()>) -> Result<(), Error> {
+    let token = request
+        .extensions()
+        .get::<VerifiedToken>()
+        .cloned()
+        .ok_or(Error::MissingRequestToken)?;
+
+    let account_id = token.decoded.payload.account_id;
+
+    info!(%account_id, "Resume");
+
+    let _ = state.worker.send(worker::Message::Resume);
 
     Ok(())
 }
