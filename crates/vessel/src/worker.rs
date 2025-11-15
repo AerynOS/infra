@@ -4,6 +4,7 @@ use std::{
     future::Future,
     os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 use color_eyre::eyre::{self, Context, OptionExt, Result, eyre};
@@ -17,21 +18,29 @@ use service::{
     grpc::summit::ImportRequest,
 };
 use sha2::{Digest, Sha256};
-use tokio::{sync::mpsc, time::Instant};
+use tokio::{
+    sync::mpsc,
+    time::{self, Instant},
+};
 use tracing::{Instrument, debug, error, info, info_span, warn};
 
 use crate::collection;
 
 pub type Sender = mpsc::UnboundedSender<Message>;
 
+/// Prune 1x per day
+const PRUNE_INTERVAL: Duration = Duration::from_secs(60 * 60 * 24);
+
 #[derive(Debug, strum::Display)]
 #[strum(serialize_all = "kebab-case")]
+#[allow(clippy::large_enum_variant)]
 pub enum Message {
     PackagesUploaded {
         task_id: u64,
         endpoint: Endpoint,
         packages: Vec<Package>,
     },
+    Prune(Instant),
 }
 
 #[derive(Debug)]
@@ -43,6 +52,8 @@ pub struct Package {
 
 pub async fn run(state: State) -> Result<(Sender, impl Future<Output = Result<(), Infallible>> + use<>)> {
     let (sender, mut receiver) = mpsc::unbounded_channel::<Message>();
+
+    tokio::spawn(prune_interval_task(sender.clone()));
 
     let task = async move {
         while let Some(message) = receiver.recv().await {
@@ -81,6 +92,16 @@ impl State {
             meta_db,
             key_pair: service_state.key_pair.clone(),
         })
+    }
+}
+
+/// Fires off [`Message::Prune`] every [`PRUNE_INTERVAL`]
+async fn prune_interval_task(sender: Sender) -> Result<(), Infallible> {
+    // Will fire immediately on launch & then every interval defined
+    let mut interval = time::interval(PRUNE_INTERVAL);
+
+    loop {
+        let _ = sender.send(Message::Prune(interval.tick().await));
     }
 }
 
@@ -131,6 +152,7 @@ async fn handle_message(state: &State, message: Message) -> Result<()> {
             .instrument(span)
             .await
         }
+        Message::Prune(_) => prune_orphaned_packages(state).await,
     }
 }
 
@@ -183,10 +205,6 @@ async fn import_packages(state: &State, packages: Vec<Package>, destructive_move
     tx.commit().await.context("commit collection db tx")?;
 
     reindex(state).await.context("reindex")?;
-
-    prune_orphaned_packages(state)
-        .await
-        .context("prune orphaned packages")?;
 
     Ok(())
 }
@@ -408,6 +426,8 @@ pub async fn reindex(state: &State) -> Result<()> {
 #[tracing::instrument(skip_all)]
 async fn prune_orphaned_packages(state: &State) -> Result<()> {
     use tokio::fs;
+
+    info!("Checking for orphaned stones");
 
     let pool_dir = state.state_dir.join("public/pool");
 
