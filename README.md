@@ -44,3 +44,8 @@ wanting to use those configs.
 For testing only the summit frontend, use this command:
 
     just summit-dev
+
+
+## License
+
+The AerynOS infra project is licensed under the MPL-2.0 license.
