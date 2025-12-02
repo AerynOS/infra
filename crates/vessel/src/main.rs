@@ -9,6 +9,7 @@ pub type Config = service::Config;
 
 mod channel;
 mod grpc;
+mod migration;
 mod worker;
 
 #[tokio::main]
@@ -29,6 +30,8 @@ async fn main() -> Result<()> {
         .await?
         .with_migrations(sqlx::migrate!("./migrations"))
         .await?;
+
+    migration::run_all(&state).await.context("run migrations")?;
 
     let worker_state = worker::State::new(&state).await.context("build worker state")?;
 
