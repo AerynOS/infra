@@ -7,7 +7,7 @@ use service::{Server, State, endpoint::Role};
 pub type Result<T, E = color_eyre::eyre::Error> = std::result::Result<T, E>;
 pub type Config = service::Config;
 
-mod collection;
+mod channel;
 mod grpc;
 mod worker;
 
@@ -37,7 +37,7 @@ async fn main() -> Result<()> {
             .await
             .context("import")?;
     } else {
-        worker::reindex(&worker_state).await.context("reindex")?;
+        worker::reindex_latest(&worker_state).await.context("reindex")?;
     }
 
     let (worker_sender, worker_task) = worker::run(worker_state).await?;

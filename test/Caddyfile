@@ -1,7 +1,11 @@
 :80 {
-	handle_path /dev* {
-		root * /vessel/public
-		file_server browse
+	handle_path /vessel* {
+		root * /vessel/public/main
+		file_server {
+			browse {
+				reveal_symlinks
+			}
+		}
 	}
 	reverse_proxy summit:5000 {
 	}

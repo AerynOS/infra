@@ -1,13 +1,15 @@
 use std::{
+    collections::{HashMap, HashSet},
     convert::Infallible,
     ffi::OsStr,
     future::Future,
-    os::unix::fs::MetadataExt,
+    os::unix::fs::{self, MetadataExt},
     path::{Path, PathBuf},
     time::Duration,
 };
 
 use color_eyre::eyre::{self, Context, OptionExt, Result, eyre};
+use itertools::Itertools;
 use moss::db::meta;
 use natural_sort_rs::NaturalSortable;
 use service::{
@@ -24,7 +26,7 @@ use tokio::{
 };
 use tracing::{Instrument, debug, error, info, info_span, warn};
 
-use crate::collection;
+use crate::channel::{self, DEFAULT_CHANNEL};
 
 pub type Sender = mpsc::UnboundedSender<Message>;
 
@@ -112,11 +114,14 @@ async fn handle_message(state: &State, message: Message) -> Result<()> {
             endpoint,
             packages,
         } => {
+            let channel = DEFAULT_CHANNEL;
+
             let span = info_span!(
                 "import_packages",
                 task_id,
                 endpoint = %endpoint.id,
                 num_packages = packages.len(),
+                %channel,
             );
 
             async move {
@@ -127,7 +132,7 @@ async fn handle_message(state: &State, message: Message) -> Result<()> {
                 .await
                 .context("connect summit client")?;
 
-                match import_packages(state, packages, true).await {
+                match import_packages(state, packages, true, channel).await {
                     Ok(()) => {
                         info!("All packages imported");
 
@@ -152,11 +157,11 @@ async fn handle_message(state: &State, message: Message) -> Result<()> {
             .instrument(span)
             .await
         }
-        Message::Prune(_) => prune_orphaned_packages(state).await,
+        Message::Prune(_) => prune_orphaned_packages(state, DEFAULT_CHANNEL).await,
     }
 }
 
-#[tracing::instrument(skip_all, fields(?directory))]
+#[tracing::instrument(skip_all, fields(?directory, channel = DEFAULT_CHANNEL))]
 pub async fn import_directory(state: &State, directory: PathBuf) -> Result<()> {
     info!("Import started");
 
@@ -168,7 +173,9 @@ pub async fn import_directory(state: &State, directory: PathBuf) -> Result<()> {
     let num_stones = stones.len();
 
     if num_stones > 0 {
-        import_packages(state, stones, false).await.context("import packages")?;
+        import_packages(state, stones, false, DEFAULT_CHANNEL)
+            .await
+            .context("import packages")?;
 
         info!(num_stones, "All stones imported");
     } else {
@@ -178,22 +185,30 @@ pub async fn import_directory(state: &State, directory: PathBuf) -> Result<()> {
     Ok(())
 }
 
-async fn import_packages(state: &State, packages: Vec<Package>, destructive_move: bool) -> Result<()> {
+async fn import_packages(state: &State, packages: Vec<Package>, destructive_move: bool, channel: &str) -> Result<()> {
     // Stone is read in blocking manner
-    let tx = tokio::task::spawn_blocking({
+    let (mut tx, mut entries) = tokio::task::spawn_blocking({
         let span = tracing::Span::current();
         let state = state.clone();
+        let channel = channel.to_owned();
 
         // Rollback any collection DB inserts if we encounter any failures
         let mut tx = state.service_db.begin().await.context("start db tx")?;
 
         move || {
             span.in_scope(|| {
-                for package in packages {
-                    import_package(&state, &mut tx, &package, destructive_move)?;
-                }
+                let entries = packages
+                    .iter()
+                    .map(|package| {
+                        import_package(&state, &mut tx, package, destructive_move, &channel)
+                            .context(format!("import package {}", package.name))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>();
 
-                Result::<_, eyre::Report>::Ok(tx)
+                Result::<_, eyre::Report>::Ok((tx, entries))
             })
         }
     })
@@ -201,10 +216,20 @@ async fn import_packages(state: &State, packages: Vec<Package>, destructive_move
     .context("spawn blocking")?
     .context("import package")?;
 
+    entries.sort_by(|a, b| {
+        a.name
+            .cmp(&b.name)
+            .then_with(|| a.source_release.cmp(&b.source_release))
+    });
+
+    // Record entries as new version
+    let new_version = channel::record(&mut tx, channel, &entries).await?;
+
     // No failures, commit it all to collection DB
     tx.commit().await.context("commit collection db tx")?;
 
-    reindex(state).await.context("reindex")?;
+    // Reindex the new history version
+    reindex(state, channel, &new_version).await.context("reindex history")?;
 
     Ok(())
 }
@@ -214,7 +239,8 @@ fn import_package(
     tx: &mut database::Transaction,
     package: &Package,
     destructive_move: bool,
-) -> Result<()> {
+    channel: &str,
+) -> Result<Option<channel::Entry>> {
     use std::fs::{self, File};
 
     debug!("Attempting to open {:?}", &package.path);
@@ -247,24 +273,30 @@ fn import_package(
     let name = meta.name.clone();
     let source_id = meta.source_id.clone();
 
+    if source_id.is_empty() {
+        return Err(eyre!("Invalid archive, source id is empty"));
+    }
+
     meta.hash = Some(package.sha256sum.clone());
     meta.download_size = Some(file_size);
 
     let id = moss::package::Id::from(package.sha256sum.clone());
+    let entry = channel::Entry::new(&id, &meta);
 
-    let pool_dir = relative_pool_dir(&source_id)?;
-    let file_name = &package.name;
-    let target_path = pool_dir.join(file_name);
-    let full_path = state.state_dir.join("public").join(&target_path);
-
-    meta.uri = Some(target_path.to_string_lossy().to_string());
+    let filename = entry.filename();
+    let full_path = state.state_dir.join("public").join(channel).join(entry.relative_path());
 
     if let Some(parent) = full_path.parent() {
         fs::create_dir_all(parent).context("create pool directory")?;
     }
 
     let existing = tokio::runtime::Handle::current()
-        .block_on(collection::lookup(tx.as_mut(), name.as_ref()))
+        .block_on(channel::lookup(
+            tx.as_mut(),
+            channel,
+            &channel::Version::Volatile,
+            name.as_ref(),
+        ))
         .context("lookup existing collection entry")?;
 
     match existing {
@@ -280,7 +312,7 @@ fn import_package(
         }
         Some(e) if e.source_release as u64 == meta.source_release => {
             warn!("{:?}: Cannot include build with identical release field", &file);
-            return Ok(());
+            return Ok(None);
         }
         _ => {}
     }
@@ -299,31 +331,9 @@ fn import_package(
         .add(id.clone(), meta.clone())
         .context("add package to meta db")?;
 
-    // Will only be added once TX is committed / all packages
-    // are succsefully handled
-    tokio::runtime::Handle::current()
-        .block_on(collection::record(tx, collection::Entry::new(id, meta)))
-        .context("record collection entry")?;
+    info!(filename, source_id, "Package imported");
 
-    info!(file_name, source_id, "Package imported");
-
-    Ok(())
-}
-
-fn relative_pool_dir(source_id: &str) -> Result<PathBuf> {
-    let lower = source_id.to_lowercase();
-
-    if lower.is_empty() {
-        return Err(eyre!("Invalid archive, package name is empty"));
-    }
-
-    let mut portion = &lower[0..1];
-
-    if lower.len() > 4 && lower.starts_with("lib") {
-        portion = &lower[0..4];
-    }
-
-    Ok(Path::new("pool").join(portion).join(lower))
+    Ok(Some(entry))
 }
 
 fn hardlink_or_copy(from: &Path, to: &Path) -> Result<()> {
@@ -340,15 +350,40 @@ fn hardlink_or_copy(from: &Path, to: &Path) -> Result<()> {
     Ok(())
 }
 
-#[tracing::instrument(skip_all)]
-pub async fn reindex(state: &State) -> Result<()> {
-    let mut entries = collection::list(
+#[tracing::instrument(skip_all, fields(channel = DEFAULT_CHANNEL))]
+pub async fn reindex_latest(state: &State) -> Result<()> {
+    let channel = DEFAULT_CHANNEL;
+
+    match channel::find_related_history_for_version(
+        state.service_db.acquire().await.context("acquire db conn")?.as_mut(),
+        channel,
+        &channel::Version::Volatile,
+    )
+    .await
+    .context("find latest volatile history")?
+    {
+        Some(history) => {
+            reindex(state, channel, &history.version).await?;
+        }
+        None => {
+            import_packages(state, vec![], false, channel).await?;
+        }
+    }
+
+    Ok(())
+}
+
+#[tracing::instrument(skip_all, fields(%version))]
+async fn reindex(state: &State, channel: &str, version: &channel::Version) -> Result<()> {
+    let mut entries = channel::list(
         state
             .service_db
             .acquire()
             .await
             .context("acquire database connection")?
             .as_mut(),
+        channel,
+        version,
     )
     .await
     .context("list entries from collection db")?;
@@ -360,61 +395,98 @@ pub async fn reindex(state: &State) -> Result<()> {
     tokio::task::spawn_blocking({
         let span = tracing::Span::current();
         let state = state.clone();
+        let version = version.clone();
+        let channel = channel.to_owned();
 
         move || {
-            span.in_scope(|| {
-                use std::fs::{self, File};
+            let index_arch = |arch: &str, entries: &[&channel::Entry]| {
+                let span = info_span!(parent: &span, "index", %arch);
 
-                let temp_dir = state.state_dir.join("work/volatile/x86_64");
-                let temp_path = temp_dir.join("stone.index");
+                span.in_scope(|| {
+                    use std::fs::{self, File};
 
-                // TODO: Replace w/ configurable index path
-                let dir = state.state_dir.join("public/volatile/x86_64");
-                let path = dir.join("stone.index");
+                    let temp_path = state
+                        .state_dir
+                        .join("work")
+                        .join(&channel)
+                        .join(version.relative_index_path("x86_64"));
+                    let temp_dir = temp_path.parent().unwrap();
 
-                if !temp_dir.exists() {
-                    fs::create_dir_all(&temp_dir).context("create volatile directory")?;
-                }
+                    // TODO: Replace w/ configurable index path
+                    let path = state
+                        .state_dir
+                        .join("public")
+                        .join(&channel)
+                        .join(version.relative_index_path("x86_64"));
+                    let dir = path.parent().unwrap();
 
-                if !dir.exists() {
-                    fs::create_dir_all(&dir).context("create volatile directory")?;
-                }
+                    if !temp_dir.exists() {
+                        fs::create_dir_all(temp_dir).context("create volatile directory")?;
+                    }
 
-                info!(?temp_path, ?path, "Indexing");
+                    if !dir.exists() {
+                        fs::create_dir_all(dir).context("create volatile directory")?;
+                    }
 
-                let mut file = File::create(&temp_path).context("create index file")?;
-                let mut writer = stone::Writer::new(&mut file, stone::header::v1::FileType::Repository)
-                    .context("create stone writer")?;
+                    info!(?temp_path, ?path, "Indexing");
 
-                for entry in entries {
-                    let mut meta = state
-                        .meta_db
-                        .get(&entry.package_id.clone().into())
-                        .context("get package from meta db")?;
+                    let mut file = File::create(&temp_path).context("create index file")?;
+                    let mut writer = stone::Writer::new(&mut file, stone::header::v1::FileType::Repository)
+                        .context("create stone writer")?;
 
-                    // TODO: Replace hardcoded relative path
-                    // once we have non-hardcoded index path
-                    meta.uri = Some(format!(
-                        "../../{}",
-                        meta.uri
-                            .ok_or(eyre!("Package {} is missing URI in metadata", &entry.package_id))?,
-                    ));
+                    for entry in entries {
+                        let mut meta = state
+                            .meta_db
+                            .get(&entry.package_id.clone().into())
+                            .context("get package from meta db")?;
 
-                    writer
-                        .add_payload(meta.to_stone_payload().as_slice())
-                        .context("add meta payload")?;
-                }
+                        meta.uri = Some(version.relative_index_to_entry_path(entry));
 
-                writer.finalize().context("finalize stone index")?;
+                        writer
+                            .add_payload(meta.to_stone_payload().as_slice())
+                            .context("add meta payload")?;
+                    }
 
-                fs::rename(&temp_path, &path).context(format!("rename {temp_path:?} to {path:?}"))?;
+                    writer.finalize().context("finalize stone index")?;
 
-                Result::<_, eyre::Report>::Ok(())
-            })
+                    fs::rename(&temp_path, &path).context(format!("rename {temp_path:?} to {path:?}"))?;
+
+                    Result::<_, eyre::Report>::Ok(())
+                })
+            };
+
+            // Ensure x86_64 is always created, even if empty
+            let mut entries_by_arch = HashMap::<&str, Vec<&channel::Entry>>::from_iter([("x86_64", vec![])]);
+
+            entries_by_arch.extend(
+                entries
+                    .iter()
+                    .map(|entry| (entry.arch.as_str(), entry))
+                    .into_group_map(),
+            );
+
+            for (arch, entries) in entries_by_arch {
+                index_arch(arch, &entries)?;
+            }
+
+            Result::<_, eyre::Report>::Ok(())
         }
     })
     .await
     .context("spawn blocking")??;
+
+    // Symlink volatile to new version
+    tokio::task::spawn_blocking({
+        let span = tracing::Span::current();
+        let state = state.clone();
+        let channel = channel.to_owned();
+        let version = version.clone();
+
+        move || span.in_scope(|| symlink_volatile(&state, &channel, &version))
+    })
+    .await
+    .context("spawn blocking")?
+    .context("symlink volatile")?;
 
     let elapsed = format!("{}ms", now.elapsed().as_millis());
 
@@ -423,13 +495,34 @@ pub async fn reindex(state: &State) -> Result<()> {
     Ok(())
 }
 
-#[tracing::instrument(skip_all)]
-async fn prune_orphaned_packages(state: &State) -> Result<()> {
+fn symlink_volatile(state: &State, channel: &str, version: &channel::Version) -> Result<()> {
+    let source = Path::new("..").join(version.relative_base_dir());
+
+    let dest = state
+        .state_dir
+        .join("public")
+        .join(channel)
+        .join(channel::Version::Volatile.relative_base_dir());
+    let dest_parent = dest.parent().unwrap();
+
+    if !dest_parent.exists() {
+        let _ = std::fs::create_dir_all(dest_parent);
+    } else {
+        let _ = std::fs::remove_file(&dest);
+    }
+
+    fs::symlink(source, dest).context("link from {source:?} to {dest:?}")?;
+
+    Ok(())
+}
+
+#[tracing::instrument(skip_all, fields(%channel))]
+async fn prune_orphaned_packages(state: &State, channel: &str) -> Result<()> {
     use tokio::fs;
 
     info!("Checking for orphaned stones");
 
-    let pool_dir = state.state_dir.join("public/pool");
+    let pool_dir = state.state_dir.join("public").join(channel).join("pool");
 
     // All stones on the filesystem
     let stones = tokio::task::spawn_blocking({
@@ -440,14 +533,15 @@ async fn prune_orphaned_packages(state: &State) -> Result<()> {
     .context("spawn blocking")?
     .context("enumerate stones")?;
 
-    // Packages in the current index
-    let indexed_packages = collection::list(
+    // Packages in any version
+    let indexed_packages = channel::list_all(
         state
             .service_db
             .acquire()
             .await
             .context("acquire database connection")?
             .as_mut(),
+        channel,
     )
     .await
     .context("list entries from collection db")?;
@@ -457,7 +551,7 @@ async fn prune_orphaned_packages(state: &State) -> Result<()> {
     let index_hashes = indexed_packages
         .into_iter()
         .map(|entry| entry.package_id)
-        .collect::<Vec<_>>();
+        .collect::<HashSet<_>>();
 
     let orphaned_stones = stones
         .into_iter()
@@ -475,6 +569,11 @@ async fn prune_orphaned_packages(state: &State) -> Result<()> {
         fs::remove_file(&stone.path)
             .await
             .context(format!("remove orphaned stone {:?}", stone.path))?;
+
+        state
+            .meta_db
+            .remove(&stone.sha256sum.clone().into())
+            .context("remove stone from metadb")?;
 
         info!(path = ?relative_path, "Orphaned stone removed");
     }
