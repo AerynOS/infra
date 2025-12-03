@@ -35,9 +35,9 @@ impl Database {
     }
 
     /// Runs the provided migrations on the database
-    pub async fn with_migrations(self, mut migrator: Migrator) -> Result<Self, Error> {
+    pub async fn migrate(&self, mut migrator: Migrator) -> Result<(), Error> {
         migrator.set_ignore_missing(true).run(&self.pool).await?;
-        Ok(self)
+        Ok(())
     }
 
     /// Acquire a database connection

@@ -79,8 +79,8 @@ impl State {
     }
 
     /// Run the provided migrations against the service database
-    pub async fn with_migrations(mut self, migrator: database::Migrator) -> Result<Self, Error> {
-        self.service_db = self.service_db.with_migrations(migrator).await?;
+    pub async fn with_migrations(self, migrator: database::Migrator) -> Result<Self, Error> {
+        self.service_db.migrate(migrator).await?;
         Ok(self)
     }
 }

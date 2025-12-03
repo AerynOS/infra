@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use futures_util::TryStreamExt;
 use prost::Message;
 use service::{
-    Database, Endpoint, Token,
+    Endpoint, Token,
     auth::Permission,
     database, endpoint,
     grpc::{
@@ -30,17 +30,13 @@ use tokio::{
 };
 use tracing::{Span, debug, info, warn};
 
-use crate::worker;
+use crate::{Package, worker};
 
 pub type Server = VesselServiceServer<Service>;
 
-pub fn service(db: Database, state: service::State, worker: worker::Sender) -> Server {
+pub fn service(state: service::State, worker: worker::Sender) -> Server {
     Server::new(Service {
-        state: Arc::new(State {
-            db,
-            service: state,
-            worker,
-        }),
+        state: Arc::new(State { service: state, worker }),
     })
 }
 
@@ -51,7 +47,6 @@ pub struct Service {
 
 #[derive(Clone)]
 struct State {
-    db: Database,
     service: service::State,
     worker: worker::Sender,
 }
@@ -126,9 +121,18 @@ async fn upload(state: Arc<State>, request: tonic::Request<tonic::Streaming<Uplo
         .sub
         .parse::<endpoint::Id>()
         .context(InvalidEndpointSnafu)?;
-    let endpoint = Endpoint::get(state.db.acquire().await.context(DatabaseSnafu)?.as_mut(), endpoint_id)
-        .await
-        .context(LoadEndpointSnafu)?;
+    let endpoint = Endpoint::get(
+        state
+            .service
+            .service_db
+            .acquire()
+            .await
+            .context(DatabaseSnafu)?
+            .as_mut(),
+        endpoint_id,
+    )
+    .await
+    .context(LoadEndpointSnafu)?;
 
     let mut stream = request.into_inner().into_stream();
 
@@ -199,7 +203,7 @@ async fn upload(state: Arc<State>, request: tonic::Request<tonic::Streaming<Uplo
 
         debug!(name = collectable.name, "Package saved");
 
-        packages.push(worker::Package {
+        packages.push(Package {
             name: collectable.name,
             path,
             sha256sum: hash,

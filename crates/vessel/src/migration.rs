@@ -2,30 +2,33 @@ use std::collections::HashSet;
 
 use color_eyre::eyre::{self, Context, Result};
 use moss::{db::meta, package};
-use service::{State, database::Transaction};
 use tokio::fs;
 use tracing::info;
 
-use crate::channel::{self, DEFAULT_CHANNEL};
+use crate::{
+    State,
+    channel::{self, DEFAULT_CHANNEL},
+};
 
 #[tracing::instrument(name = "migrations", skip_all)]
 pub async fn run_all(state: &State) -> Result<()> {
-    let mut tx = state.service_db.begin().await.context("begin db tx")?;
+    state
+        .service_db()
+        .migrate(sqlx::migrate!("./migrations"))
+        .await
+        .context("apply database migrations")?;
 
-    let meta_db = meta::Database::new(state.db_dir.join("meta").to_string_lossy().as_ref())
-        .context("failed to open meta database")?;
-
-    migrate_collection_model(state, &meta_db, &mut tx)
+    migrate_collection_model(state, &state.meta_db)
         .await
         .context("migrate channel versions")?;
-
-    tx.commit().await.context("commit db tx")?;
 
     Ok(())
 }
 
 #[tracing::instrument(name = "", skip_all, fields(migration = "collection-model-to-channel-version-model"))]
-async fn migrate_collection_model(state: &State, meta_db: &meta::Database, tx: &mut Transaction) -> Result<()> {
+async fn migrate_collection_model(state: &State, meta_db: &meta::Database) -> Result<()> {
+    let mut tx = state.service_db().begin().await.context("begin db tx")?;
+
     let (count,) = sqlx::query_as::<_, (i64,)>(
         "
         SELECT COUNT(*)
@@ -65,7 +68,7 @@ async fn migrate_collection_model(state: &State, meta_db: &meta::Database, tx: &
                     .get(&id)
                     .with_context(|| format!("lookup metadata for package {id}"))?;
 
-                entries.push(channel::Entry::new(&id, &meta));
+                entries.push(channel::version::Entry::new(&id, &meta));
             }
 
             eyre::Ok(entries)
@@ -75,7 +78,7 @@ async fn migrate_collection_model(state: &State, meta_db: &meta::Database, tx: &
     .context("spawn blocking")?
     .context("lookup package metadata")?;
 
-    channel::record(tx, DEFAULT_CHANNEL, &entries)
+    channel::version::record(&mut tx, DEFAULT_CHANNEL, &entries)
         .await
         .context("record entries")?;
 
@@ -87,18 +90,20 @@ async fn migrate_collection_model(state: &State, meta_db: &meta::Database, tx: &
     .execute(tx.as_mut())
     .await?;
 
-    fs::remove_dir_all(state.state_dir.join("public/volatile"))
+    fs::remove_dir_all(state.public_dir().join("volatile"))
         .await
         .context("remove old volatile index directory")?;
 
-    let _ = fs::create_dir_all(state.state_dir.join("public").join(DEFAULT_CHANNEL)).await;
+    let _ = fs::create_dir_all(state.public_dir().join(DEFAULT_CHANNEL)).await;
 
     fs::rename(
-        state.state_dir.join("public/pool"),
-        state.state_dir.join("public").join(DEFAULT_CHANNEL).join("pool"),
+        state.public_dir().join("pool"),
+        state.public_dir().join(DEFAULT_CHANNEL).join("pool"),
     )
     .await
     .context("move pool under default channel")?;
+
+    tx.commit().await.context("commit db tx")?;
 
     info!("Migration complete");
 
