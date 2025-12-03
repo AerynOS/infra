@@ -90,18 +90,18 @@ async fn migrate_collection_model(state: &State, meta_db: &meta::Database) -> Re
     .execute(tx.as_mut())
     .await?;
 
-    fs::remove_dir_all(state.public_dir().join("volatile"))
-        .await
-        .context("remove old volatile index directory")?;
+    // Remove old volatile folder
+    let _ = fs::remove_dir_all(state.public_dir().join("volatile")).await;
 
+    // Create new `main` folder
     let _ = fs::create_dir_all(state.public_dir().join(DEFAULT_CHANNEL)).await;
 
-    fs::rename(
+    // Move `pool` under `main`
+    let _ = fs::rename(
         state.public_dir().join("pool"),
         state.public_dir().join(DEFAULT_CHANNEL).join("pool"),
     )
-    .await
-    .context("move pool under default channel")?;
+    .await;
 
     tx.commit().await.context("commit db tx")?;
 

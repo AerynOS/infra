@@ -1,10 +1,11 @@
-use std::{collections::HashSet, fmt};
+use std::{collections::HashSet, fmt, time::Duration};
 
 use chrono::Utc;
 use futures_util::TryStreamExt;
 use service::database::Transaction;
 use snafu::Snafu;
 use sqlx::{FromRow, SqliteConnection};
+use tokio::time;
 use tracing::debug;
 
 /// A specific version of packages within a channel
@@ -302,9 +303,25 @@ pub async fn record(tx: &mut Transaction, channel: &str, entries: &[Entry]) -> s
     let prev_history = find_related_history(tx.as_mut(), channel, &Version::Volatile).await?;
     let prev_version = prev_history.as_ref().map(|h| h.version.to_string()).unwrap_or_default();
 
-    let now = Utc::now().timestamp();
-    let identifier = Identifier::new(now).expect("numeric identifier");
-    let new_version = Version::History { identifier };
+    let new_version = loop {
+        let now = Utc::now().timestamp();
+        let identifier = Identifier::new(now).expect("numeric identifier");
+        let new_version = Version::History { identifier };
+
+        // Record can only be called every 1s per channel
+        // since we use unix timestamp seconds as the history
+        // identifier
+        //
+        // This will go away when we require caller to provide
+        // a unique history reference to record
+        if prev_version == new_version.slug() {
+            time::sleep(Duration::from_secs(1)).await;
+
+            continue;
+        }
+
+        break new_version;
+    };
 
     debug!(
         %channel,
