@@ -71,3 +71,12 @@ struct Args {
     #[arg(long)]
     import: Option<PathBuf>,
 }
+
+#[cfg(test)]
+pub mod test {
+    pub async fn database() -> service::Database {
+        let db = service::Database::in_memory().await.unwrap();
+        db.migrate(sqlx::migrate!("./migrations")).await.unwrap();
+        db
+    }
+}

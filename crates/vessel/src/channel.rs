@@ -223,7 +223,7 @@ pub async fn reindex_latest(state: &State, channel: &str) -> Result<()> {
 
 #[tracing::instrument(skip_all, fields(%channel, %version))]
 async fn reindex(state: &State, channel: &str, version: &Version) -> Result<()> {
-    let mut entries = version::list(
+    let mut entries = version::entries(
         state
             .service_db()
             .acquire()

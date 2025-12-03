@@ -1,6 +1,8 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, time::Duration};
 
+use chrono::Utc;
 use color_eyre::eyre::{Context, Result};
+use tokio::fs;
 use tracing::info;
 
 use crate::{State, channel::version, package};
@@ -9,9 +11,44 @@ use crate::{State, channel::version, package};
 pub async fn prune(state: &State, channel: &str) -> Result<()> {
     info!("Prune started");
 
+    prune_stale_versions(state, channel).await?;
     prune_orphaned_packages(state, channel).await?;
 
     info!("Prune finished");
+
+    Ok(())
+}
+
+#[tracing::instrument(skip_all)]
+async fn prune_stale_versions(state: &State, channel: &str) -> Result<()> {
+    // TODO: Configurable
+    const STALE_AFTER: Duration = Duration::from_secs(60 * 60 * 24 * 14);
+
+    let mut tx = state.service_db().begin().await.context("begin db tx")?;
+
+    let created_before = Utc::now() - chrono::Duration::from_std(STALE_AFTER).expect("within i64");
+
+    info!(%created_before, "Checking for stale history");
+
+    let deleted = version::delete_stale_history(&mut tx, channel, created_before)
+        .await
+        .context("delete stale history")?;
+
+    if deleted.is_empty() {
+        info!("No stale history");
+        return Ok(());
+    }
+
+    for version in &deleted {
+        // Remove from filesystem
+        let _ = fs::remove_dir_all(state.public_dir().join(channel).join(version.relative_base_dir())).await;
+
+        info!(%version, "History deleted");
+    }
+
+    info!("num_deleted" = deleted.len(), "Stale history deleted");
+
+    tx.commit().await.context("commit db tx")?;
 
     Ok(())
 }
@@ -26,7 +63,7 @@ async fn prune_orphaned_packages(state: &State, channel: &str) -> Result<()> {
     let stones = package::async_enumerate(&pool_dir).await.context("enumerate stones")?;
 
     // Packages in any version
-    let indexed_packages = version::list_all(
+    let indexed_packages = version::all_entries(
         state
             .service_db()
             .acquire()

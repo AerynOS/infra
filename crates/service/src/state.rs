@@ -15,7 +15,7 @@ use crate::{
 };
 
 /// Service state
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct State {
     /// Root directory
     pub root: PathBuf,

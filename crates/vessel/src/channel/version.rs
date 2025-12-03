@@ -1,6 +1,6 @@
 use std::{collections::HashSet, fmt, time::Duration};
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use futures_util::TryStreamExt;
 use service::database::Transaction;
 use snafu::Snafu;
@@ -197,7 +197,7 @@ pub async fn lookup(
 }
 
 /// List entries for the provided channel version
-pub async fn list(conn: &mut SqliteConnection, channel: &str, version: &Version) -> sqlx::Result<Vec<Entry>> {
+pub async fn entries(conn: &mut SqliteConnection, channel: &str, version: &Version) -> sqlx::Result<Vec<Entry>> {
     let Some(history) = find_related_history(conn, channel, version).await? else {
         return Ok(vec![]);
     };
@@ -224,7 +224,7 @@ pub async fn list(conn: &mut SqliteConnection, channel: &str, version: &Version)
 }
 
 /// List all entries for the provided channel across all versions
-pub async fn list_all(conn: &mut SqliteConnection, channel: &str) -> sqlx::Result<HashSet<Entry>> {
+pub async fn all_entries(conn: &mut SqliteConnection, channel: &str) -> sqlx::Result<HashSet<Entry>> {
     sqlx::query_as(
         "
         SELECT
@@ -456,6 +456,50 @@ pub async fn record(tx: &mut Transaction, channel: &str, entries: &[Entry]) -> s
     Ok(new_version)
 }
 
+/// Delete all history versions that aren't currently linked against
+/// and are created before the provided time
+pub async fn delete_stale_history(
+    tx: &mut Transaction,
+    channel: &str,
+    created_before: DateTime<Utc>,
+) -> sqlx::Result<HashSet<Version>> {
+    #[derive(FromRow)]
+    struct Row {
+        #[sqlx(try_from = "String")]
+        version: Version,
+    }
+
+    Ok(sqlx::query_as::<_, Row>(
+        "
+        WITH referenced_history AS (
+          SELECT DISTINCT
+            history_id
+          FROM
+            channel_version
+          WHERE
+            channel = ?
+            AND history_id IS NOT NULL
+        )
+        DELETE FROM
+          channel_version
+        WHERE
+          channel = ?
+          AND version LIKE 'history/%'
+          AND channel_version_id NOT IN (SELECT * FROM referenced_history)
+          AND created < ?
+        RETURNING version
+        ",
+    )
+    .bind(channel)
+    .bind(channel)
+    .bind(created_before.timestamp())
+    .fetch_all(tx.as_mut())
+    .await?
+    .into_iter()
+    .map(|row| row.version)
+    .collect())
+}
+
 #[cfg(test)]
 mod test {
     #![allow(clippy::too_many_arguments)]
@@ -580,5 +624,34 @@ mod test {
             source_version: source_version.to_owned(),
             build_release,
         }
+    }
+
+    #[tokio::test]
+    async fn test_delete_stale_history() {
+        const CHANNEL: &str = "test";
+
+        let db = crate::test::database().await;
+
+        let mut tx = db.begin().await.unwrap();
+        let mut deletable = HashSet::new();
+
+        // Record before cutoff
+        deletable.insert(record(&mut tx, CHANNEL, &[]).await.unwrap());
+
+        // Wait 1 second
+        time::sleep(Duration::from_secs(1)).await;
+
+        let cutoff = Utc::now();
+
+        // Record after cutoff
+        record(&mut tx, CHANNEL, &[]).await.unwrap();
+
+        // Record new state, links volatile to this
+        record(&mut tx, CHANNEL, &[]).await.unwrap();
+
+        // Previous 3 states should be removable
+        let deleted = delete_stale_history(&mut tx, CHANNEL, cutoff).await.unwrap();
+
+        assert_eq!(deleted, deletable);
     }
 }

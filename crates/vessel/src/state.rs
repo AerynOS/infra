@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use color_eyre::eyre::{Context, Result};
 use moss::db::meta;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct State {
     pub meta_db: meta::Database,
     pub service: service::State,

@@ -49,6 +49,26 @@ impl Database {
     pub async fn begin(&self) -> Result<Transaction, Error> {
         Ok(Transaction(self.pool.begin().await?))
     }
+
+    /// Creates a new in-memory database for testing
+    pub async fn in_memory() -> Result<Self, Error> {
+        let pool = sqlx::SqlitePool::connect_with(
+            sqlx::sqlite::SqliteConnectOptions::new()
+                .filename("file:test")
+                .shared_cache(true)
+                .in_memory(true)
+                .read_only(false)
+                .foreign_keys(true),
+        )
+        .await?;
+
+        sqlx::migrate!("./migrations")
+            .set_ignore_missing(true)
+            .run(&pool)
+            .await?;
+
+        Ok(Self { pool })
+    }
 }
 
 /// A database transaction
