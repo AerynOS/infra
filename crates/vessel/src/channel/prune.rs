@@ -5,7 +5,7 @@ use color_eyre::eyre::{Context, Result};
 use tokio::fs;
 use tracing::info;
 
-use crate::{State, channel::version, package};
+use crate::{State, channel::db, package};
 
 #[tracing::instrument(skip_all, fields(%channel))]
 pub async fn prune(state: &State, channel: &str) -> Result<()> {
@@ -30,7 +30,7 @@ async fn prune_stale_versions(state: &State, channel: &str) -> Result<()> {
 
     info!(%created_before, "Checking for stale history");
 
-    let deleted = version::delete_stale_history(&mut tx, channel, created_before)
+    let deleted = db::delete_stale_history(&mut tx, channel, created_before)
         .await
         .context("delete stale history")?;
 
@@ -63,7 +63,7 @@ async fn prune_orphaned_packages(state: &State, channel: &str) -> Result<()> {
     let stones = package::async_enumerate(&pool_dir).await.context("enumerate stones")?;
 
     // Packages in any version
-    let indexed_packages = version::all_entries(
+    let indexed_packages = db::all_entries(
         state
             .service_db()
             .acquire()

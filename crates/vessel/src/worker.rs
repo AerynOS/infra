@@ -7,7 +7,7 @@ use service::{
     grpc::summit::ImportRequest,
 };
 use tokio::{
-    sync::mpsc,
+    sync::{mpsc, oneshot},
     time::{self, Instant},
 };
 use tracing::{Instrument, error, info, info_span};
@@ -32,6 +32,12 @@ pub enum Message {
         packages: Vec<Package>,
     },
     Prune(Instant),
+    #[strum(serialize = "channel-command-{command}")]
+    ChannelCommand {
+        channel: String,
+        command: channel::Command,
+        response: oneshot::Sender<Result<()>>,
+    },
 }
 
 pub async fn run(state: State) -> Result<(Sender, impl Future<Output = Result<(), Infallible>> + use<>)> {
@@ -118,5 +124,21 @@ async fn handle_message(state: &State, message: Message) -> Result<()> {
             .await
         }
         Message::Prune(_) => channel::prune(state, DEFAULT_CHANNEL).await,
+        Message::ChannelCommand {
+            channel,
+            command,
+            response,
+        } => {
+            let result = channel::handle_command(state, &channel, command).await;
+
+            if let Err(error) = &result {
+                let error = service::error::chain(error.as_ref() as &dyn std::error::Error);
+                error!(%error, "Failed to handle command");
+            }
+
+            let _ = response.send(result);
+
+            Ok(())
+        }
     }
 }

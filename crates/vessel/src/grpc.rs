@@ -5,6 +5,7 @@ use std::{
 };
 
 use async_trait::async_trait;
+use color_eyre::eyre::{Report, bail, eyre};
 use futures_util::TryStreamExt;
 use prost::Message;
 use service::{
@@ -14,7 +15,8 @@ use service::{
     grpc::{
         self, collectable,
         vessel::{
-            UploadRequest, UploadTokenRequest, UploadTokenResponse,
+            AddTagRequest, CommandResponse, RemoveTagRequest, UpdateStreamRequest, UploadRequest, UploadTokenRequest,
+            UploadTokenResponse,
             vessel_service_server::{VesselService, VesselServiceServer},
         },
     },
@@ -26,11 +28,11 @@ use sqlx::types::chrono::Utc;
 use tokio::{
     fs::{self, File},
     io::AsyncWriteExt,
-    sync::mpsc,
+    sync::{mpsc, oneshot},
 };
 use tracing::{Span, debug, info, warn};
 
-use crate::{Package, worker};
+use crate::{Package, channel, worker};
 
 pub type Server = VesselServiceServer<Service>;
 
@@ -69,6 +71,33 @@ impl VesselService for Service {
         let state = self.state.clone();
 
         grpc::handle(request, async move |request| upload(state, request).await).await
+    }
+
+    async fn update_stream(
+        &self,
+        request: tonic::Request<UpdateStreamRequest>,
+    ) -> Result<tonic::Response<CommandResponse>, tonic::Status> {
+        let state = self.state.clone();
+
+        grpc::handle(request, async move |request| update_stream(state, request).await).await
+    }
+
+    async fn add_tag(
+        &self,
+        request: tonic::Request<AddTagRequest>,
+    ) -> Result<tonic::Response<CommandResponse>, tonic::Status> {
+        let state = self.state.clone();
+
+        grpc::handle(request, async move |request| add_tag(state, request).await).await
+    }
+
+    async fn remove_tag(
+        &self,
+        request: tonic::Request<RemoveTagRequest>,
+    ) -> Result<tonic::Response<CommandResponse>, tonic::Status> {
+        let state = self.state.clone();
+
+        grpc::handle(request, async move |request| remove_tag(state, request).await).await
     }
 }
 
@@ -229,6 +258,195 @@ async fn upload(state: Arc<State>, request: tonic::Request<tonic::Streaming<Uplo
     Ok(())
 }
 
+#[tracing::instrument(
+    skip_all,
+    fields(
+        channel = %request.get_ref().channel,
+        stream = ?request.get_ref().stream(),
+        version = %request.get_ref().version,
+    )
+)]
+async fn update_stream(
+    state: Arc<State>,
+    request: tonic::Request<UpdateStreamRequest>,
+) -> Result<CommandResponse, Error> {
+    let token = request
+        .extensions()
+        .get::<VerifiedToken>()
+        .cloned()
+        .ok_or(Error::MissingRequestToken)?;
+
+    let account_id = token.decoded.payload.account_id;
+
+    info!(
+        account = %account_id,
+        "Update stream request received"
+    );
+
+    let body = request.into_inner();
+
+    let (sender, receiver) = oneshot::channel();
+
+    let validate = || -> Result<_, Report> {
+        let stream = match body.stream() {
+            grpc::vessel::Stream::Unknown => bail!("unknown stream"),
+            grpc::vessel::Stream::Volatile => channel::version::Stream::Volatile,
+            grpc::vessel::Stream::Unstable => channel::version::Stream::Unstable,
+        };
+        let version =
+            channel::Version::try_from(body.version).map_err(|err| eyre!("failed to parse version: {err}"))?;
+
+        Ok(worker::Message::ChannelCommand {
+            channel: body.channel,
+            command: channel::Command::UpdateStream { stream, version },
+            response: sender,
+        })
+    };
+
+    match validate() {
+        Ok(command) => {
+            let _ = state.worker.send(command);
+        }
+        Err(error) => {
+            return Ok(CommandResponse {
+                success: false,
+                error: Some(format!("{error:#}")),
+            });
+        }
+    }
+
+    match receiver.await? {
+        Ok(_) => Ok(CommandResponse {
+            success: true,
+            error: None,
+        }),
+        Err(error) => Ok(CommandResponse {
+            success: false,
+            error: Some(format!("{error:#}")),
+        }),
+    }
+}
+
+#[tracing::instrument(
+    skip_all,
+    fields(
+        channel = %request.get_ref().channel,
+        tag = ?request.get_ref().tag,
+        history = %request.get_ref().history,
+    )
+)]
+async fn add_tag(state: Arc<State>, request: tonic::Request<AddTagRequest>) -> Result<CommandResponse, Error> {
+    let token = request
+        .extensions()
+        .get::<VerifiedToken>()
+        .cloned()
+        .ok_or(Error::MissingRequestToken)?;
+
+    let account_id = token.decoded.payload.account_id;
+
+    info!(
+        account = %account_id,
+        "Add tag request received"
+    );
+
+    let body = request.into_inner();
+
+    let (sender, receiver) = oneshot::channel();
+
+    let validate = || -> Result<_, Report> {
+        let tag = channel::version::Identifier::new(body.tag)?.into();
+        let history = channel::version::Identifier::new(body.history)?.into();
+
+        Ok(worker::Message::ChannelCommand {
+            channel: body.channel,
+            command: channel::Command::AddTag { tag, history },
+            response: sender,
+        })
+    };
+
+    match validate() {
+        Ok(command) => {
+            let _ = state.worker.send(command);
+        }
+        Err(error) => {
+            return Ok(CommandResponse {
+                success: false,
+                error: Some(format!("{error:#}")),
+            });
+        }
+    }
+
+    match receiver.await? {
+        Ok(_) => Ok(CommandResponse {
+            success: true,
+            error: None,
+        }),
+        Err(error) => Ok(CommandResponse {
+            success: false,
+            error: Some(format!("{error:#}")),
+        }),
+    }
+}
+
+#[tracing::instrument(
+    skip_all,
+    fields(
+        channel = %request.get_ref().channel,
+        tag = ?request.get_ref().tag,
+    )
+)]
+async fn remove_tag(state: Arc<State>, request: tonic::Request<RemoveTagRequest>) -> Result<CommandResponse, Error> {
+    let token = request
+        .extensions()
+        .get::<VerifiedToken>()
+        .cloned()
+        .ok_or(Error::MissingRequestToken)?;
+
+    let account_id = token.decoded.payload.account_id;
+
+    info!(
+        account = %account_id,
+        "Remove tag request received"
+    );
+
+    let body = request.into_inner();
+
+    let (sender, receiver) = oneshot::channel();
+
+    let validate = || -> Result<_, Report> {
+        let tag = channel::version::Identifier::new(body.tag)?.into();
+
+        Ok(worker::Message::ChannelCommand {
+            channel: body.channel,
+            command: channel::Command::RemoveTag { tag },
+            response: sender,
+        })
+    };
+
+    match validate() {
+        Ok(command) => {
+            let _ = state.worker.send(command);
+        }
+        Err(error) => {
+            return Ok(CommandResponse {
+                success: false,
+                error: Some(format!("{error:#}")),
+            });
+        }
+    }
+
+    match receiver.await? {
+        Ok(_) => Ok(CommandResponse {
+            success: true,
+            error: None,
+        }),
+        Err(error) => Ok(CommandResponse {
+            success: false,
+            error: Some(format!("{error:#}")),
+        }),
+    }
+}
+
 #[derive(Debug, Snafu)]
 enum Error {
     #[snafu(display("Token missing from request"))]
@@ -267,6 +485,8 @@ enum Error {
     UnexpectedEndOfUpload,
     #[snafu(display("Sha256 mismatch of uploaded package, expected {expected} got {actual}"))]
     Sha256Mismatch { expected: String, actual: String },
+    #[snafu(transparent)]
+    OneshotRecv { source: oneshot::error::RecvError },
 }
 
 impl From<Error> for tonic::Status {
@@ -287,7 +507,8 @@ impl From<Error> for tonic::Status {
             | Error::SignUploadToken { .. }
             | Error::CreateDownloadDir { .. }
             | Error::CreateDownloadFile { .. }
-            | Error::WriteDownloadFile { .. } => tonic::Status::internal(""),
+            | Error::WriteDownloadFile { .. }
+            | Error::OneshotRecv { .. } => tonic::Status::internal(""),
             Error::GrpcRequest { source } => source,
         }
     }

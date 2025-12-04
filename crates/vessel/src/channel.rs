@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
-use color_eyre::eyre::{Context, Report, Result, eyre};
+use color_eyre::eyre::{self, Context, OptionExt, Result, bail, ensure, eyre};
 use itertools::Itertools;
 use service::database::Transaction;
 use tokio::time::Instant;
@@ -13,6 +13,7 @@ use crate::{Package, State, package};
 pub use self::prune::prune;
 pub use self::version::Version;
 
+pub mod db;
 mod prune;
 pub mod version;
 
@@ -20,6 +21,110 @@ pub mod version;
 // be provided by summit & vessel can handle many
 // channels
 pub const DEFAULT_CHANNEL: &str = "main";
+
+#[derive(Debug, strum::Display)]
+#[strum(serialize_all = "kebab-case")]
+pub enum Command {
+    UpdateStream {
+        stream: version::Stream,
+        version: Version,
+    },
+    AddTag {
+        tag: version::TagIdentifier,
+        history: version::HistoryIdentifier,
+    },
+    RemoveTag {
+        tag: version::TagIdentifier,
+    },
+}
+
+#[tracing::instrument(skip_all, fields(%channel, %command))]
+pub async fn handle_command(state: &State, channel: &str, command: Command) -> Result<()> {
+    let mut tx = state.service_db().begin().await.context("begin db tx")?;
+
+    match command {
+        Command::UpdateStream { stream, version } => {
+            let stream_version = stream.version();
+
+            ensure!(version != stream_version, "cannot update stream to itself");
+
+            // Resolve the provided version to it's underlying history so we
+            // can link against that
+            let history = if let Version::History { identifier } = version {
+                identifier
+            } else {
+                let version = db::find_related_history(tx.as_mut(), channel, &version)
+                    .await
+                    .context("find related history")?
+                    .ok_or_eyre(format!("{version} doesn't exist"))?
+                    .version;
+
+                let Version::History { identifier } = version else {
+                    bail!("non-history version returned from `db::find_related_history`");
+                };
+
+                identifier
+            };
+
+            // Update database
+            db::link_version_to_history(&mut tx, channel, &stream_version, &history)
+                .await
+                .context("link version to history in db")?;
+
+            // Update filesystem
+            symlink_version_to_history(state, channel, &stream_version, &history)
+                .await
+                .context("symlink stream to history folder")?;
+
+            info!(%stream, %history, "Stream updated");
+        }
+        Command::AddTag { tag, history } => {
+            let tag = Version::Tag { identifier: tag };
+
+            // Ensure tag doesn't already exist
+            if db::find_related_history(tx.as_mut(), channel, &tag)
+                .await
+                .context("find related history")?
+                .is_some()
+            {
+                bail!("{tag} already exists");
+            }
+
+            // Update database
+            db::link_version_to_history(&mut tx, channel, &tag, &history)
+                .await
+                .context("link version to history in db")?;
+
+            // Update filesystem
+            symlink_version_to_history(state, channel, &tag, &history)
+                .await
+                .context("symlink stream to history folder")?;
+
+            info!(%tag, %history, "Tag added");
+        }
+        Command::RemoveTag { tag: tag_identifier } => {
+            let tag = Version::Tag {
+                identifier: tag_identifier.clone(),
+            };
+
+            // Update database
+            db::delete_tag(&mut tx, channel, &tag_identifier)
+                .await
+                .context("delete tag in db")?;
+
+            // Update filesystem
+            remove_version_symlink(state, channel, &tag)
+                .await
+                .context("remove symlink to history folder")?;
+
+            info!(%tag, "Tag removed");
+        }
+    }
+
+    tx.commit().await.context("commit db tx")?;
+
+    Ok(())
+}
 
 /// Enumerates an external directory of stones & calls [`import_packages`] on them
 /// without `destructive_move`
@@ -96,7 +201,7 @@ pub async fn import_packages(
     });
 
     // Record entries as new version
-    let new_version = version::record(&mut tx, channel, &entries).await?;
+    let new_version = db::record_history(&mut tx, channel, &entries).await?;
 
     // No failures, commit it all to collection DB
     tx.commit().await.context("commit collection db tx")?;
@@ -163,7 +268,12 @@ fn import_package(
     }
 
     let existing = tokio::runtime::Handle::current()
-        .block_on(version::lookup(tx.as_mut(), channel, &Version::Volatile, name.as_ref()))
+        .block_on(db::lookup_entry(
+            tx.as_mut(),
+            channel,
+            &Version::Volatile,
+            name.as_ref(),
+        ))
         .context("lookup existing collection entry")?;
 
     match existing {
@@ -202,7 +312,7 @@ fn import_package(
 /// Reindex the latest `history` version & relink `volatile` to it
 #[tracing::instrument(skip_all, fields(%channel))]
 pub async fn reindex_latest(state: &State, channel: &str) -> Result<()> {
-    match version::find_related_history(
+    match db::find_related_history(
         state.service_db().acquire().await.context("acquire db conn")?.as_mut(),
         channel,
         &Version::Volatile,
@@ -223,7 +333,11 @@ pub async fn reindex_latest(state: &State, channel: &str) -> Result<()> {
 
 #[tracing::instrument(skip_all, fields(%channel, %version))]
 async fn reindex(state: &State, channel: &str, version: &Version) -> Result<()> {
-    let mut entries = version::entries(
+    let Version::History { identifier } = version else {
+        bail!("reindex called on non-history version");
+    };
+
+    let mut entries = db::entries(
         state
             .service_db()
             .acquire()
@@ -321,8 +435,8 @@ async fn reindex(state: &State, channel: &str, version: &Version) -> Result<()> 
     .await
     .context("spawn blocking")??;
 
-    // Symlink volatile to new version
-    symlink_volatile(state, channel, version)
+    // Symlink volatile to new history version
+    symlink_version_to_history(state, channel, &Version::Volatile, identifier)
         .await
         .context("symlink volatile")?;
 
@@ -347,15 +461,21 @@ fn hardlink_or_copy(from: &Path, to: &Path) -> Result<()> {
     Ok(())
 }
 
-async fn symlink_volatile(state: &State, channel: &str, version: &Version) -> Result<()> {
+async fn symlink_version_to_history(
+    state: &State,
+    channel: &str,
+    version: &Version,
+    history: &version::HistoryIdentifier,
+) -> Result<()> {
     use tokio::fs;
 
-    let source = Path::new("..").join(version.relative_base_dir());
+    let history = Version::History {
+        identifier: history.clone(),
+    };
 
-    let dest = state
-        .public_dir()
-        .join(channel)
-        .join(Version::Volatile.relative_base_dir());
+    let source = Path::new("..").join(history.relative_base_dir());
+
+    let dest = state.public_dir().join(channel).join(version.relative_base_dir());
     let dest_parent = dest.parent().unwrap();
 
     if !dest_parent.exists() {
@@ -367,6 +487,16 @@ async fn symlink_volatile(state: &State, channel: &str, version: &Version) -> Re
     fs::symlink(source, dest)
         .await
         .context("link from {source:?} to {dest:?}")?;
+
+    Ok(())
+}
+
+async fn remove_version_symlink(state: &State, channel: &str, version: &Version) -> Result<()> {
+    use tokio::fs;
+
+    let path = state.public_dir().join(channel).join(version.relative_base_dir());
+
+    fs::remove_file(&path).await?;
 
     Ok(())
 }

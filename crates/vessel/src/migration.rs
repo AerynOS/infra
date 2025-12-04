@@ -78,7 +78,7 @@ async fn migrate_collection_model(state: &State, meta_db: &meta::Database) -> Re
     .context("spawn blocking")?
     .context("lookup package metadata")?;
 
-    channel::version::record(&mut tx, DEFAULT_CHANNEL, &entries)
+    channel::db::record_history(&mut tx, DEFAULT_CHANNEL, &entries)
         .await
         .context("record entries")?;
 

@@ -36,6 +36,8 @@ services:
       - ./vessel/.privkey:/app/state/.privkey
       - ./vessel/config.toml:/app/config.toml
       - ./import:/import
+    ports:
+      - "5002:5001"
     depends_on:
       caddy:
         condition: service_started
