@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS channel_version_entry (
   source_version TEXT NOT NULL,
   source_release BIGINT NOT NULL,
   build_release BIGINT NOT NULL,
-  UNIQUE (channel_version_id, name),
+  UNIQUE (channel_version_id, name, arch),
   FOREIGN KEY (channel_version_id) REFERENCES channel_version (channel_version_id) ON DELETE CASCADE
 );
 

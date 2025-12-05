@@ -16,6 +16,7 @@ pub async fn lookup_entry(
     channel: &str,
     version: &Version,
     name: &str,
+    arch: &str,
 ) -> sqlx::Result<Option<Entry>> {
     let Some(history) = find_related_history(conn, channel, version).await? else {
         return Ok(None);
@@ -35,11 +36,13 @@ pub async fn lookup_entry(
           channel_version_entry
         WHERE
           channel_version_id = ?
-          AND name = ?;
+          AND name = ?
+          AND arch = ?;
         ",
     )
     .bind(history.channel_version_id)
     .bind(name)
+    .bind(arch)
     .fetch_optional(conn)
     .await
 }
@@ -253,9 +256,8 @@ pub async fn record_history(tx: &mut Transaction, channel: &str, entries: &[Entr
               build_release
             )
             VALUES {values_binds}
-            ON CONFLICT(channel_version_id, name) DO UPDATE SET
+            ON CONFLICT(channel_version_id, name, arch) DO UPDATE SET
               package_id=excluded.package_id,
-              arch=excluded.arch,
               source_id=excluded.source_id,
               source_version=excluded.source_version,
               source_release=excluded.source_release,

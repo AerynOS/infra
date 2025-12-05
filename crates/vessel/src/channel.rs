@@ -273,6 +273,7 @@ fn import_package(
             channel,
             &Version::Volatile,
             name.as_ref(),
+            &meta.architecture,
         ))
         .context("lookup existing collection entry")?;
 
