@@ -19,6 +19,34 @@ message UploadTokenResponse {
   string token = 1;
 }
 
+message UpdateStreamRequest {
+  string channel = 1;
+  Stream stream = 2;
+  string version = 3;
+}
+
+message AddTagRequest {
+  string channel = 1;
+  string tag = 2;
+  string history = 3;
+}
+
+message RemoveTagRequest {
+  string channel = 1;
+  string tag = 2;
+}
+
+enum Stream {
+  STREAM_UNKNOWN = 0;
+  STREAM_VOLATILE = 1;
+  STREAM_UNSTABLE = 2;
+}
+
+message CommandResponse {
+  bool success = 1;
+  optional string error = 2;
+}
+
 service VesselService {
   rpc UploadToken(UploadTokenRequest) returns (UploadTokenResponse) {
     option (options.flags) = "ACCESS_TOKEN | SERVICE_ACCOUNT | NOT_EXPIRED";
@@ -27,5 +55,19 @@ service VesselService {
   rpc Upload(stream UploadRequest) returns (google.protobuf.Empty) {
     option (options.flags) = "ACCESS_TOKEN | SERVICE_ACCOUNT | NOT_EXPIRED";
     option (options.perm) = "UploadPackage";
+  }
+
+  
+  rpc UpdateStream(UpdateStreamRequest) returns (CommandResponse) {
+    option (options.flags) = "ACCESS_TOKEN | NOT_EXPIRED";
+    option (options.perm) = "UpdateStream";
+  }
+  rpc AddTag(AddTagRequest) returns (CommandResponse) {
+    option (options.flags) = "ACCESS_TOKEN | NOT_EXPIRED";
+    option (options.perm) = "AddTag";
+  }
+  rpc RemoveTag(RemoveTagRequest) returns (CommandResponse) {
+    option (options.flags) = "ACCESS_TOKEN | NOT_EXPIRED";
+    option (options.perm) = "RemoveTag";
   }
 }

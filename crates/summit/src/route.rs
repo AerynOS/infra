@@ -18,7 +18,7 @@ pub fn state(service: service::State, worker: worker::Sender) -> State {
     State { service, worker }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct State {
     service: service::State,
     worker: worker::Sender,

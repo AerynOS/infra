@@ -1,11 +1,14 @@
 //! Enroll with remote services to provision authorization
 
+use std::time::Duration;
+
 use http::Uri;
 use serde::{Deserialize, Serialize};
 use service_client::EndpointServiceClient;
 use service_core::Token;
 use service_grpc::endpoint::{EnrollmentRequest, Issuer as ProtoIssuer, Role as ProtoRole};
 use thiserror::Error;
+use tokio::time;
 use tracing::{debug, error, info, info_span};
 
 use crate::{
@@ -125,8 +128,16 @@ pub(crate) async fn auto_enroll(target: &Target, ourself: Issuer, state: &State)
     if !enrolled {
         debug!("Enrolling with target service");
 
-        if let Err(e) = enroll(state, target.clone(), ourself.clone()).await {
-            error!(error = %error::chain(e), "Enrollment request failed");
+        loop {
+            if let Err(e) = enroll(state, target.clone(), ourself.clone()).await {
+                error!(error = %error::chain(e), "Enrollment request failed, retrying in 30s...");
+
+                time::sleep(Duration::from_secs(30)).await;
+
+                continue;
+            }
+
+            break;
         }
     }
 

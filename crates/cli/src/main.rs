@@ -1,10 +1,13 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, process};
 
 use clap::{Parser, Subcommand, ValueEnum};
 use color_eyre::eyre::Result;
-use service_client::{AuthClient, CredentialsAuth, SummitServiceClient};
+use service_client::{AuthClient, CredentialsAuth, SummitServiceClient, VesselServiceClient};
 use service_core::crypto::KeyPair;
-use service_grpc::summit::{CancelRequest, RetryRequest};
+use service_grpc::{
+    summit::{CancelRequest, RetryRequest},
+    vessel::{AddTagRequest, RemoveTagRequest, Stream as ProtoStream, UpdateStreamRequest},
+};
 use tokio::{fs, io};
 use tonic::transport::Uri;
 
@@ -42,6 +45,50 @@ async fn main() -> Result<()> {
                 Summit::Resume {} => {
                     client.resume(()).await?;
                 }
+            }
+        }
+        Command::Vessel {
+            uri,
+            username,
+            private_key,
+            command,
+        } => {
+            let key_pair = KeyPair::load(private_key)?;
+
+            println!("Using key_pair {}", key_pair.public_key().encode());
+
+            let mut client =
+                VesselServiceClient::connect_with_auth(uri, CredentialsAuth::new(username, key_pair)).await?;
+
+            let response = match command {
+                Vessel::UpdateStream {
+                    channel,
+                    stream,
+                    version,
+                } => {
+                    client
+                        .update_stream(UpdateStreamRequest {
+                            channel,
+                            stream: match stream {
+                                ChannelStream::Volatile => ProtoStream::Volatile,
+                                ChannelStream::Unstable => ProtoStream::Unstable,
+                            } as i32,
+                            version,
+                        })
+                        .await?
+                }
+                Vessel::AddTag { channel, tag, history } => {
+                    client.add_tag(AddTagRequest { channel, tag, history }).await?
+                }
+                Vessel::RemoveTag { channel, tag } => client.remove_tag(RemoveTagRequest { channel, tag }).await?,
+            }
+            .into_inner();
+
+            if !response.success
+                && let Some(error) = response.error
+            {
+                eprintln!("Command failed: {error}");
+                process::exit(1);
             }
         }
         Command::Key { command } => match command {
@@ -107,6 +154,20 @@ enum Command {
         #[command(subcommand)]
         command: Summit,
     },
+    /// Vessel commands
+    Vessel {
+        /// Uri to connect to
+        #[arg(long = "uri", default_value = "http://127.0.0.1:5002")]
+        uri: Uri,
+        /// Admin username
+        #[arg(long = "user")]
+        username: String,
+        /// Path to admin private key
+        #[arg(long = "key")]
+        private_key: PathBuf,
+        #[command(subcommand)]
+        command: Vessel,
+    },
     /// Work with ed25519 keys
     Key {
         #[command(subcommand)]
@@ -132,6 +193,43 @@ enum Summit {
     Pause {},
     /// Resume all projects
     Resume {},
+}
+
+#[derive(Debug, Subcommand)]
+enum Vessel {
+    /// Update a stream to link to a new version
+    UpdateStream {
+        /// Channel name
+        channel: String,
+        /// Stream name
+        stream: ChannelStream,
+        /// Version slug
+        ///
+        /// Examples: ["history/<identifier>", "tag/<identifier>"]
+        version: String,
+    },
+    /// Add a tag linked to history
+    AddTag {
+        /// Channel name
+        channel: String,
+        /// Tag identifier
+        tag: String,
+        /// History identifier
+        history: String,
+    },
+    /// Remove a tag
+    RemoveTag {
+        /// Channel name
+        channel: String,
+        /// Tag identifier
+        tag: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum ChannelStream {
+    Volatile,
+    Unstable,
 }
 
 #[derive(Debug, Subcommand)]

@@ -18,7 +18,7 @@ up *ARGS: (_up "dev" ARGS)
 up-release *ARGS: (_up "release" ARGS)
 
 _up profile *ARGS: (build profile)
-	RUST_PROFILE={{profile}} docker compose up --wait {{ARGS}}
+	RUST_PROFILE={{profile}} docker compose up -d {{ARGS}}
 
 # Follow logs of docker containers
 logs *ARGS:

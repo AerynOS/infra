@@ -6,11 +6,11 @@ summary = "Test recipes"
 [[project.profile]]
 name = "test-x86_64"
 arch = "x86_64"
-index_uri = "http://caddy/dev/volatile/x86_64/stone.index"
+index_uri = "http://caddy/vessel/stream/volatile/x86_64/stone.index"
 
 [[project.profile.remote]]
-name = "volatile"
-uri = "https://packages.aerynos.com/volatile/x86_64/stone.index"
+name = "unstable"
+uri = "https://cdn.aerynos.dev/unstable/x86_64/stone.index"
 priority = 10
 
 [[project.profile.remote]]
@@ -22,3 +22,4 @@ priority = 20
 name = "recipes"
 summary = "Test recipes"
 uri = "https://github.com/AerynOS/recipes.git"
+branch = "2025-05-repo-rebuild"

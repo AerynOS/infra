@@ -24,7 +24,7 @@ EOT
 
 FROM docker.io/alpine:3.20 AS summit
 WORKDIR /app
-RUN apk add --no-cache sudo git curl
+RUN apk add --no-cache sudo git
 COPY --from=rust-builder /summit .
 COPY ./crates/summit/static /app/static
 VOLUME /app/state

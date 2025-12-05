@@ -1,15 +1,22 @@
 use std::{net::IpAddr, path::PathBuf};
 
+use channel::DEFAULT_CHANNEL;
 use clap::Parser;
 use color_eyre::eyre::Context;
-use service::{Server, State, endpoint::Role};
+use service::{Server, endpoint::Role};
+
+pub use self::package::Package;
+pub use self::state::State;
+
+mod channel;
+mod grpc;
+mod migration;
+mod package;
+mod state;
+mod worker;
 
 pub type Result<T, E = color_eyre::eyre::Error> = std::result::Result<T, E>;
 pub type Config = service::Config;
-
-mod collection;
-mod grpc;
-mod worker;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -25,26 +32,25 @@ async fn main() -> Result<()> {
 
     service::tracing::init(&config.tracing);
 
-    let state = State::load(root)
-        .await?
-        .with_migrations(sqlx::migrate!("./migrations"))
-        .await?;
+    let state = State::load(root).await.context("load state")?;
 
-    let worker_state = worker::State::new(&state).await.context("build worker state")?;
+    migration::run_all(&state).await.context("run migrations")?;
 
     if let Some(directory) = import {
-        worker::import_directory(&worker_state, directory)
+        channel::import_directory(&state, DEFAULT_CHANNEL, directory)
             .await
             .context("import")?;
     } else {
-        worker::reindex(&worker_state).await.context("reindex")?;
+        channel::reindex_latest(&state, DEFAULT_CHANNEL)
+            .await
+            .context("reindex")?;
     }
 
-    let (worker_sender, worker_task) = worker::run(worker_state).await?;
+    let (worker_sender, worker_task) = worker::run(state.clone()).await?;
 
-    Server::new(Role::RepositoryManager, &config, &state)
+    Server::new(Role::RepositoryManager, &config, &state.service)
         .with_grpc((host, grpc_port))
-        .merge_grpc(grpc::service(state.service_db.clone(), state.clone(), worker_sender))
+        .merge_grpc(grpc::service(state.service.clone(), worker_sender))
         .with_task("worker", worker_task)
         .start()
         .await?;
@@ -64,4 +70,13 @@ struct Args {
     root: PathBuf,
     #[arg(long)]
     import: Option<PathBuf>,
+}
+
+#[cfg(test)]
+pub mod test {
+    pub async fn database() -> service::Database {
+        let db = service::Database::in_memory().await.unwrap();
+        db.migrate(sqlx::migrate!("./migrations")).await.unwrap();
+        db
+    }
 }
