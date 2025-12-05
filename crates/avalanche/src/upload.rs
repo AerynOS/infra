@@ -30,7 +30,7 @@ pub async fn upload(state: State, build: BuilderFinished, token: String, uri: &s
     let mut header = BytesMut::new();
     build.encode(&mut header).context("encode header")?;
 
-    let mut client = VesselServiceClient::connect_with_token(uri.parse().context("invalid vessel uri")?, &token)
+    let mut client = VesselServiceClient::connect_with_token(uri.parse().context("invalid vessel uri")?, None, &token)
         .await
         .context("connect vessel client")?;
 

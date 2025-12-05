@@ -97,6 +97,7 @@ async fn connect(state: &State, building: Arc<Mutex<Option<u64>>>) -> Result<()>
 
     let mut client = SummitServiceClient::connect_with_auth(
         endpoint.host_address.clone(),
+        None,
         EndpointAuth::new(&endpoint, state.service_db.clone(), state.key_pair.clone()),
     )
     .await

@@ -298,6 +298,7 @@ impl Builder {
 
                 let mut client = VesselServiceClient::connect_with_auth(
                     vessel.host_address.clone(),
+                    None,
                     EndpointAuth::new(&vessel, state.service_db.clone(), state.key_pair.clone()),
                 )
                 .await

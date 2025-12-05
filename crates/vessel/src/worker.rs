@@ -93,6 +93,7 @@ async fn handle_message(state: &State, message: Message) -> Result<()> {
             async move {
                 let mut client = SummitServiceClient::connect_with_auth(
                     endpoint.host_address.clone(),
+                    None,
                     EndpointAuth::new(&endpoint, state.service_db().clone(), state.service.key_pair.clone()),
                 )
                 .await

@@ -2,7 +2,7 @@ use std::{path::PathBuf, process};
 
 use clap::{Parser, Subcommand, ValueEnum};
 use color_eyre::eyre::Result;
-use service_client::{AuthClient, CredentialsAuth, SummitServiceClient, VesselServiceClient};
+use service_client::{AuthClient, CredentialsAuth, SummitServiceClient, TlsConfig, VesselServiceClient};
 use service_core::crypto::KeyPair;
 use service_grpc::{
     summit::{CancelRequest, RetryRequest},
@@ -20,14 +20,24 @@ async fn main() -> Result<()> {
             uri,
             username,
             private_key,
+            ca_cert,
             command,
         } => {
             let key_pair = KeyPair::load(private_key)?;
 
             println!("Using key_pair {}", key_pair.public_key().encode());
 
+            let tls = if let Some(ca_cert) = ca_cert {
+                Some(TlsConfig {
+                    ca: Some(ca_cert),
+                    ..Default::default()
+                })
+            } else {
+                None
+            };
+
             let mut client =
-                SummitServiceClient::connect_with_auth(uri, CredentialsAuth::new(username, key_pair)).await?;
+                SummitServiceClient::connect_with_auth(uri, tls, CredentialsAuth::new(username, key_pair)).await?;
 
             match command {
                 Summit::Retry { task } => {
@@ -51,14 +61,24 @@ async fn main() -> Result<()> {
             uri,
             username,
             private_key,
+            ca_cert,
             command,
         } => {
             let key_pair = KeyPair::load(private_key)?;
 
             println!("Using key_pair {}", key_pair.public_key().encode());
 
+            let tls = if let Some(ca_cert) = ca_cert {
+                Some(TlsConfig {
+                    ca: Some(ca_cert),
+                    ..Default::default()
+                })
+            } else {
+                None
+            };
+
             let mut client =
-                VesselServiceClient::connect_with_auth(uri, CredentialsAuth::new(username, key_pair)).await?;
+                VesselServiceClient::connect_with_auth(uri, tls, CredentialsAuth::new(username, key_pair)).await?;
 
             let response = match command {
                 Vessel::UpdateStream {
@@ -151,6 +171,9 @@ enum Command {
         /// Path to admin private key
         #[arg(long = "key")]
         private_key: PathBuf,
+        /// Path to a PEM ca cert
+        #[arg(long)]
+        ca_cert: Option<PathBuf>,
         #[command(subcommand)]
         command: Summit,
     },
@@ -165,6 +188,9 @@ enum Command {
         /// Path to admin private key
         #[arg(long = "key")]
         private_key: PathBuf,
+        /// Path to a PEM ca cert
+        #[arg(long)]
+        ca_cert: Option<PathBuf>,
         #[command(subcommand)]
         command: Vessel,
     },
