@@ -215,12 +215,11 @@ pub enum Error {
 }
 
 async fn auto_enroll(role: Role, config: Config, state: State) -> Result<(), Infallible> {
-    if role != Role::Hub {
-        if let Some(target) = &config.upstream {
-            if let Err(e) = enrollment::auto_enroll(target, config.issuer(role, state.key_pair.clone()), &state).await {
-                error!(error = %error::chain(e), "Auto enrollment failed");
-            }
-        }
+    if role != Role::Hub
+        && let Some(target) = &config.upstream
+        && let Err(e) = enrollment::auto_enroll(target, config.issuer(role, state.key_pair.clone()), &state).await
+    {
+        error!(error = %error::chain(e), "Auto enrollment failed");
     }
 
     future::pending::<Result<(), Infallible>>().await

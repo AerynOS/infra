@@ -1,13 +1,15 @@
 use std::convert::Infallible;
-use std::mem;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::time::Duration;
+use std::{io, mem};
 
 use async_trait::async_trait;
 use base64::Engine;
 use futures_util::future::BoxFuture;
 use futures_util::{FutureExt, StreamExt};
 use http::{HeaderValue, Request, Response, Uri};
+use serde::Deserialize;
 use service_core::auth;
 use service_core::crypto::KeyPair;
 use service_core::token::VerifiedToken;
@@ -16,12 +18,13 @@ use service_grpc::account::{
     AuthenticateRequest, Credentials as GrpcCredentials, authenticate_request, authenticate_response,
 };
 use thiserror::Error;
+use tokio::fs;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::body::Body;
 use tonic::metadata::MetadataValue;
 use tonic::service::Interceptor;
-use tonic::transport::{self, Channel};
+use tonic::transport::{self, Certificate, Channel, ClientTlsConfig, Identity};
 use tower::Service;
 use tracing::error;
 
@@ -32,11 +35,51 @@ pub use service_grpc::vessel::vessel_service_client::VesselServiceClient;
 
 const TOKEN_VALIDITY: Duration = Duration::from_secs(15 * 60);
 
+/// Tls configuration
+#[derive(Debug, Deserialize, Default)]
+pub struct TlsConfig {
+    /// Path to PEM encoded CA certificate
+    pub ca: Option<PathBuf>,
+    /// Path to PEM encoded identity certificate
+    pub certificate: Option<PathBuf>,
+    /// Path to PEM encoded identity key
+    pub key: Option<PathBuf>,
+}
+
+impl TlsConfig {
+    async fn load(&self) -> Result<ClientTlsConfig, ConnectError> {
+        let mut config = ClientTlsConfig::new().with_enabled_roots();
+
+        let load = async |path: &Path| {
+            fs::read(path)
+                .await
+                .map_err(|err| ConnectError::LoadFile(err, path.to_owned()))
+        };
+
+        if let Some(ca) = &self.ca {
+            config = config.ca_certificate(Certificate::from_pem(load(ca).await?));
+        }
+        if let Some(cert) = &self.certificate {
+            let key = if let Some(key) = &self.key {
+                load(key).await?
+            } else {
+                vec![]
+            };
+
+            let identity = Identity::from_pem(Certificate::from_pem(load(cert).await?), key);
+
+            config = config.identity(identity);
+        }
+
+        Ok(config)
+    }
+}
+
 /// Extension trait for connecting a client
 /// with an [`AuthProvider`]
 #[async_trait]
 pub trait AuthClient<A>: Sized {
-    async fn connect_with_auth(uri: Uri, provider: A) -> Result<Self, transport::Error>
+    async fn connect_with_auth(uri: Uri, tls_config: Option<TlsConfig>, provider: A) -> Result<Self, ConnectError>
     where
         A: AuthProvider + 'static;
 }
@@ -44,22 +87,31 @@ pub trait AuthClient<A>: Sized {
 /// Extension trait for connecting a client with a token
 #[async_trait]
 pub trait TokenClient: Sized {
-    async fn connect_with_token(uri: Uri, token: &str) -> Result<Self, transport::Error>;
+    async fn connect_with_token(uri: Uri, tls_config: Option<TlsConfig>, token: &str) -> Result<Self, ConnectError>;
 }
 
 macro_rules! service_client {
     ($name:ident) => {
         #[async_trait::async_trait]
         impl<A> AuthClient<A> for $name<AuthService<A>> {
-            async fn connect_with_auth(uri: Uri, provider: A) -> Result<$name<AuthService<A>>, tonic::transport::Error>
+            async fn connect_with_auth(
+                uri: Uri,
+                tls_config: Option<TlsConfig>,
+                provider: A,
+            ) -> Result<$name<AuthService<A>>, ConnectError>
             where
                 A: AuthProvider + 'static,
             {
-                let channel = ::tonic::transport::Endpoint::new(uri)?
+                let mut endpoint = ::tonic::transport::Endpoint::new(uri)?
                     .http2_keep_alive_interval(Duration::from_secs(60))
-                    .keep_alive_timeout(Duration::from_secs(20))
-                    .connect()
-                    .await?;
+                    .keep_alive_timeout(Duration::from_secs(20));
+
+                if let Some(config) = tls_config {
+                    endpoint = endpoint.tls_config(config.load().await?)?;
+                }
+
+                let channel = endpoint.connect().await?;
+
                 Ok(Self::new(AuthService { channel, provider }))
             }
         }
@@ -70,16 +122,22 @@ macro_rules! service_client {
         {
             async fn connect_with_token(
                 uri: Uri,
+                tls_config: Option<TlsConfig>,
                 token: &str,
             ) -> Result<
                 $name<::tonic::service::interceptor::InterceptedService<::tonic::transport::Channel, TokenInterceptor>>,
-                tonic::transport::Error,
+                ConnectError,
             > {
-                let channel = ::tonic::transport::Endpoint::new(uri)?
+                let mut endpoint = ::tonic::transport::Endpoint::new(uri)?
                     .http2_keep_alive_interval(Duration::from_secs(60))
-                    .keep_alive_timeout(Duration::from_secs(20))
-                    .connect()
-                    .await?;
+                    .keep_alive_timeout(Duration::from_secs(20));
+
+                if let Some(config) = tls_config {
+                    endpoint = endpoint.tls_config(config.load().await?)?;
+                }
+
+                let channel = endpoint.connect().await?;
+
                 Ok($name::with_interceptor(
                     channel,
                     TokenInterceptor {
@@ -155,23 +213,21 @@ where
                                     .map_err(Error::AuthProvider)?,
                             }
                         }
-                    } else if refresh_access {
-                        if let Some(bearer) = &tokens.bearer_token {
-                            match refresh_tokens(channel.clone(), &bearer.encoded).await {
-                                Ok(refreshed) => {
-                                    provider
-                                        .tokens_refreshed(&refreshed)
-                                        .await
-                                        .map_err(Error::AuthProvider)?;
-
-                                    encoded_bearer = Some(refreshed.bearer_token);
-                                    encoded_access = Some(refreshed.access_token);
-                                }
-                                Err(error) => provider
-                                    .token_refresh_failed(&error)
+                    } else if refresh_access && let Some(bearer) = &tokens.bearer_token {
+                        match refresh_tokens(channel.clone(), &bearer.encoded).await {
+                            Ok(refreshed) => {
+                                provider
+                                    .tokens_refreshed(&refreshed)
                                     .await
-                                    .map_err(Error::AuthProvider)?,
+                                    .map_err(Error::AuthProvider)?;
+
+                                encoded_bearer = Some(refreshed.bearer_token);
+                                encoded_access = Some(refreshed.access_token);
                             }
+                            Err(error) => provider
+                                .token_refresh_failed(&error)
+                                .await
+                                .map_err(Error::AuthProvider)?,
                         }
                     }
                 }
@@ -284,6 +340,14 @@ impl AuthProvider for CredentialsAuth {
     async fn tokens(&self) -> Result<VerifiedTokens, Self::Error> {
         Ok(VerifiedTokens::default())
     }
+}
+
+#[derive(Debug, Error)]
+pub enum ConnectError {
+    #[error("failed to load {1:?}")]
+    LoadFile(#[source] io::Error, PathBuf),
+    #[error(transparent)]
+    Transport(#[from] transport::Error),
 }
 
 /// A client error

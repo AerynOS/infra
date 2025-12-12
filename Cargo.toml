@@ -46,7 +46,6 @@ thiserror = "2.0.3"
 tokio-stream = "0.1.14"
 tokio-util = "0.7"
 toml = "0.9.5"
-tonic = "0.14.1"
 tonic-prost = "0.14.1"
 tonic-prost-build = "0.14.1"
 tracing = "0.1.40"
@@ -60,6 +59,7 @@ serde = { version = "1.0", features = ["derive"] }
 sqlx = { version = "=0.8.6", features = ["sqlite", "chrono", "uuid", "runtime-tokio"] }
 strum = { version = "0.27.1", features = ["derive"] }
 tokio = { version = "1.35.1", features = ["full"] }
+tonic = { version = "0.14.1", features = ["tls-native-roots", "tls-aws-lc"] }
 tower = { version = "0.5.1", features = ["util"] }
 tower-http = { version = "0.6.2", features = ["fs", "set-header"] }
 tracing-futures = { version = "0.2.5", features = ["futures-03"] }
