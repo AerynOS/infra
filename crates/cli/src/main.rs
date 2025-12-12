@@ -27,14 +27,10 @@ async fn main() -> Result<()> {
 
             println!("Using key_pair {}", key_pair.public_key().encode());
 
-            let tls = if let Some(ca_cert) = ca_cert {
-                Some(TlsConfig {
-                    ca: Some(ca_cert),
-                    ..Default::default()
-                })
-            } else {
-                None
-            };
+            let tls = ca_cert.map(|ca_cert| TlsConfig {
+                ca: Some(ca_cert),
+                ..Default::default()
+            });
 
             let mut client =
                 SummitServiceClient::connect_with_auth(uri, tls, CredentialsAuth::new(username, key_pair)).await?;
@@ -68,14 +64,10 @@ async fn main() -> Result<()> {
 
             println!("Using key_pair {}", key_pair.public_key().encode());
 
-            let tls = if let Some(ca_cert) = ca_cert {
-                Some(TlsConfig {
-                    ca: Some(ca_cert),
-                    ..Default::default()
-                })
-            } else {
-                None
-            };
+            let tls = ca_cert.map(|ca_cert| TlsConfig {
+                ca: Some(ca_cert),
+                ..Default::default()
+            });
 
             let mut client =
                 VesselServiceClient::connect_with_auth(uri, tls, CredentialsAuth::new(username, key_pair)).await?;

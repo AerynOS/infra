@@ -8,25 +8,25 @@ pub fn build_task_query_url(
 ) -> String {
     let mut parts = vec![];
 
-    if let Some(s) = status {
-        if !s.is_empty() {
-            parts.push(format!("status={}", encode(s)));
-        }
+    if let Some(s) = status
+        && !s.is_empty()
+    {
+        parts.push(format!("status={}", encode(s)));
     }
-    if let Some(s) = sort {
-        if !s.is_empty() {
-            parts.push(format!("sort={}", encode(s)));
-        }
+    if let Some(s) = sort
+        && !s.is_empty()
+    {
+        parts.push(format!("sort={}", encode(s)));
     }
-    if let Some(s) = order {
-        if !s.is_empty() {
-            parts.push(format!("order={}", encode(s)));
-        }
+    if let Some(s) = order
+        && !s.is_empty()
+    {
+        parts.push(format!("order={}", encode(s)));
     }
-    if let Some(s) = search_tasks {
-        if !s.is_empty() {
-            parts.push(format!("search_tasks={}", encode(s)));
-        }
+    if let Some(s) = search_tasks
+        && !s.is_empty()
+    {
+        parts.push(format!("search_tasks={}", encode(s)));
     }
 
     if parts.is_empty() {

@@ -213,23 +213,21 @@ where
                                     .map_err(Error::AuthProvider)?,
                             }
                         }
-                    } else if refresh_access {
-                        if let Some(bearer) = &tokens.bearer_token {
-                            match refresh_tokens(channel.clone(), &bearer.encoded).await {
-                                Ok(refreshed) => {
-                                    provider
-                                        .tokens_refreshed(&refreshed)
-                                        .await
-                                        .map_err(Error::AuthProvider)?;
-
-                                    encoded_bearer = Some(refreshed.bearer_token);
-                                    encoded_access = Some(refreshed.access_token);
-                                }
-                                Err(error) => provider
-                                    .token_refresh_failed(&error)
+                    } else if refresh_access && let Some(bearer) = &tokens.bearer_token {
+                        match refresh_tokens(channel.clone(), &bearer.encoded).await {
+                            Ok(refreshed) => {
+                                provider
+                                    .tokens_refreshed(&refreshed)
                                     .await
-                                    .map_err(Error::AuthProvider)?,
+                                    .map_err(Error::AuthProvider)?;
+
+                                encoded_bearer = Some(refreshed.bearer_token);
+                                encoded_access = Some(refreshed.access_token);
                             }
+                            Err(error) => provider
+                                .token_refresh_failed(&error)
+                                .await
+                                .map_err(Error::AuthProvider)?,
                         }
                     }
                 }
