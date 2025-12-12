@@ -110,7 +110,7 @@ debug = true
 # used for goldilocks zone build times vs. runtime perf
 [profile.infratest]
 inherits = "dev"
-opt-level = 1
+opt-level = 2
 
 # Clean infratest dev-based profile build times on a 5950X system
 #
