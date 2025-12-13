@@ -183,7 +183,16 @@ async fn build_recipe(
         "nice",
         |process| {
             process
-                .args(["-n19", "boulder", "build", "-p", "avalanche", "--update", "-o"])
+                .args([
+                    "-n19",
+                    "boulder",
+                    "build",
+                    "-p",
+                    "avalanche",
+                    "--update",
+                    "--cleanup",
+                    "-o",
+                ])
                 .arg(asset_dir)
                 .arg("--config-dir")
                 .arg(work_dir.join("etc/boulder"))
