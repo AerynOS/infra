@@ -4,7 +4,6 @@
 pub use service_core::{Token, auth, crypto, token};
 
 pub use self::account::Account;
-pub use self::config::Config;
 pub use self::database::Database;
 pub use self::endpoint::Endpoint;
 pub use self::server::Server;
@@ -15,7 +14,6 @@ mod task;
 
 pub mod account;
 pub mod client;
-pub mod config;
 pub mod database;
 pub mod endpoint;
 pub mod error;

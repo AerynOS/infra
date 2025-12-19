@@ -8,10 +8,12 @@ use axum::{
 };
 use clap::Parser;
 use color_eyre::eyre::Context;
+use service::endpoint;
 use service::{Server, State, endpoint::Role};
 use tower_http::{services::ServeDir, set_header::SetResponseHeader};
 
 pub use self::builder::Builder;
+pub use self::config::Config;
 pub use self::manager::Manager;
 pub use self::profile::Profile;
 pub use self::project::Project;
@@ -21,9 +23,9 @@ pub use self::seed::seed;
 pub use self::task::Task;
 
 pub type Result<T, E = color_eyre::eyre::Error> = std::result::Result<T, E>;
-pub type Config = service::Config;
 
 mod builder;
+mod config;
 mod grpc;
 mod manager;
 mod profile;
@@ -57,7 +59,8 @@ async fn main() -> Result<()> {
         use_mock_data,
     } = Args::parse();
 
-    let config = Config::load(config.unwrap_or_else(|| root.join("config.toml"))).await?;
+    let config_path = config.unwrap_or_else(|| root.join("config.toml"));
+    let config = Config::load(&config_path).await?;
 
     service::tracing::init(&config.tracing);
 
@@ -65,14 +68,18 @@ async fn main() -> Result<()> {
         .await?
         .with_migrations(sqlx::migrate!("./migrations"))
         .await?;
+    let issuer = config.issuer(state.key_pair.clone());
+    let downstreams = config.downstreams();
 
     if let Some(from_path) = seed_from {
         seed(&state, from_path).await.context("seeding")?;
     }
 
-    let manager = Manager::load(state.clone()).await.context("load manager")?;
+    let manager = Manager::load(config.clone(), state.clone())
+        .await
+        .context("load manager")?;
 
-    let (worker_sender, worker_task) = worker::run(manager).await?;
+    let (worker_sender, worker_task) = worker::run(manager, config_path).await?;
 
     let serve_static = ServeDir::new(static_dir.as_deref().unwrap_or(Path::new("static")));
     let serve_logs = SetResponseHeader::overriding(
@@ -81,9 +88,16 @@ async fn main() -> Result<()> {
         const { http::HeaderValue::from_static("text/plain; charset=utf-8") },
     );
 
-    Server::new(Role::Hub, &config, &state)
-        .with_http((host, http_port))
-        .merge_http(
+    Server::new(Role::Hub, &state, config.admin.clone())
+        .with_task("worker", worker_task)
+        .with_grpc((host, grpc_port), |routes| {
+            routes
+                // Allow other services to enroll w/ summit
+                .add_service(endpoint::service(issuer, state.service_db.clone(), downstreams))
+                .add_service(grpc::service(state.clone(), worker_sender.clone()));
+        })
+        .with_http(
+            (host, http_port),
             axum::Router::new()
                 .route("/", get(route::index))
                 .route("/tasks", get(route::tasks))
@@ -95,9 +109,6 @@ async fn main() -> Result<()> {
                 .fallback(get(route::fallback))
                 .with_state(route::state(state.clone(), worker_sender.clone())),
         )
-        .with_grpc((host, grpc_port))
-        .merge_grpc(grpc::service(state.clone(), worker_sender.clone()))
-        .with_task("worker", worker_task)
         .start()
         .await?;
 

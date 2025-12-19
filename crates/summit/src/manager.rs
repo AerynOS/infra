@@ -1,27 +1,31 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 
-use color_eyre::eyre::{self, Context, OptionExt, Report, Result};
+use color_eyre::eyre::{self, Context, OptionExt, Report, Result, bail};
+use itertools::Itertools;
 use moss::db::meta;
-use service::{Endpoint, State, database::Transaction, endpoint, error};
+use service::{Account, Endpoint, State, database::Transaction, endpoint, error};
 use sqlx::{Sqlite, pool::PoolConnection};
 use tokio::task::spawn_blocking;
 use tracing::{Span, debug, error, info, warn};
 
-use crate::{Builder, Project, Queue, builder, profile, project, repository, task};
+use crate::{Builder, Config, Project, Queue, builder, config::Size, profile, project, repository, task};
 
 pub struct Manager {
     pub state: State,
     pub paused: bool,
     queue: Queue,
-    builders: HashMap<endpoint::Id, Builder>,
+    builders: BTreeMap<builder::Key, Builder>,
     profile_dbs: HashMap<profile::Id, meta::Database>,
     repository_dbs: HashMap<repository::Id, meta::Database>,
+    config: Config,
 }
 
 impl Manager {
     #[tracing::instrument(name = "load_manager", skip_all)]
-    pub async fn load(state: State) -> Result<Self> {
-        let projects = project::list(&mut *state.service_db.acquire().await?).await?;
+    pub async fn load(config: Config, state: State) -> Result<Self> {
+        let mut conn = state.service_db.acquire().await?;
+
+        let projects = project::list(conn.as_mut()).await?;
 
         let span = Span::current();
 
@@ -56,13 +60,39 @@ impl Manager {
         .await
         .context("join handle")??;
 
+        let mut builders = BTreeMap::default();
+
+        for endpoint in Endpoint::list(conn.as_mut()).await.context("list endpoints")? {
+            if endpoint.role == endpoint::Role::Builder {
+                let account = Account::get(conn.as_mut(), endpoint.account)
+                    .await
+                    .context(format!("lookup account: {}", endpoint.account))?;
+
+                if let Some((index, config)) = config
+                    .builders
+                    .iter()
+                    .enumerate()
+                    .find(|(_, config)| config.public_key.encode() == account.public_key)
+                {
+                    builders.insert(
+                        builder::Key {
+                            index,
+                            endpoint: endpoint.id,
+                        },
+                        Builder::new(endpoint.id, config),
+                    );
+                }
+            }
+        }
+
         let manager = Self {
             state,
             paused: false,
             queue: Queue::default(),
-            builders: HashMap::default(),
+            builders,
             profile_dbs,
             repository_dbs,
+            config,
         };
 
         manager.refresh(true).await.context("refresh")?;
@@ -198,25 +228,37 @@ impl Manager {
         let projects = project::list(&mut conn).await.context("list projects")?;
 
         self.queue
-            .recompute(&mut conn, &projects, &self.repository_dbs)
+            .recompute(&mut conn, &projects, &self.repository_dbs, &self.config.build_sizes)
             .await
             .context("recompute queue")?;
 
-        let mut available = self.queue.available().collect::<VecDeque<_>>();
-        let mut next_task = available.pop_front();
+        let mut available_tasks = self
+            .queue
+            .available()
+            // Sort by largest to smallest
+            .sorted_by(|a, b| a.size.cmp(&b.size).reverse())
+            .collect::<VecDeque<_>>();
 
-        if next_task.is_none() {
+        if available_tasks.is_empty() {
             debug!("No tasks available");
             return Ok(());
         }
 
-        let builders = self
+        let max_connected_builder_size = self
+            .builders
+            .values()
+            .filter(|builder| builder.is_connected())
+            .map(|builder| builder.size)
+            .max()
+            .unwrap_or(Size::Small);
+
+        let mut idle_builders = self
             .builders
             .values_mut()
             .filter(|builder| builder.is_idle())
             .collect::<Vec<_>>();
 
-        if builders.is_empty() {
+        if idle_builders.is_empty() {
             debug!("No builders available");
             return Ok(());
         }
@@ -226,19 +268,72 @@ impl Manager {
         // this connection anymore
         drop(conn);
 
-        for builder in builders {
-            if let Some(task) = next_task {
-                match builder.build(&self.state, task).await {
-                    Ok(_) => {
-                        next_task = available.pop_front();
-                    }
-                    Err(_) => {
-                        warn!(builder = %builder.endpoint, "Failed to send build, trying next builder");
-                    }
+        // Tasks are processed from highest to lowest build size, so
+        // we just need to ensure we queue up against the largest available
+        // builder or wait for it if its not available. If no builder is connected
+        // at that size, we allow larger builds to queue on the next smaller connected builder.
+        'tasks: while let Some(task) = available_tasks.pop_front() {
+            loop {
+                if idle_builders.is_empty() {
+                    break 'tasks;
                 }
-            } else {
-                // Nothing else to build
-                break;
+
+                let available_sizes = idle_builders.iter().map(|b| b.size).collect::<BTreeSet<_>>();
+
+                // Attempt to find the smallest builder that fits (>=) this task,
+                // otherwise find the largest builder that is smaller (<) than the task
+                let best_fit_builder_size = available_sizes
+                    .iter()
+                    .find(|size| **size >= task.size)
+                    .or_else(|| available_sizes.iter().rev().find(|size| **size < task.size))
+                    .copied()
+                    .expect("non empty");
+
+                // Builder can build this size
+                // OR no builder is connected for this size but this is the next biggest size available
+                //
+                // This allows us to "wait" for an applicable sized builder, if available, instead of queuing
+                // it onto a builder too small
+                if best_fit_builder_size >= task.size
+                    || (max_connected_builder_size < task.size && best_fit_builder_size == max_connected_builder_size)
+                {
+                    let builder_idx = idle_builders
+                        .iter()
+                        .position(|b| b.size == best_fit_builder_size)
+                        .expect("non empty");
+                    let builder = idle_builders.remove(builder_idx);
+
+                    if task.size > best_fit_builder_size {
+                        debug!(
+                            builder = %builder.endpoint,
+                            task = %task.task.id,
+                            build = %task.task.build_id,
+                            task_size = %task.size,
+                            builder_size = %best_fit_builder_size,
+                            %max_connected_builder_size,
+                            "No builder is connected to handle this task size. Queueing it on the next largest builder."
+                        );
+                    }
+
+                    match builder.build(&self.state, task).await {
+                        Ok(_) => {
+                            continue 'tasks;
+                        }
+                        Err(_) => {
+                            warn!(builder = %builder.endpoint, "Failed to send build, trying next builder");
+                        }
+                    }
+                } else {
+                    debug!(
+                        task = %task.task.id,
+                        build = %task.task.build_id,
+                        task_size = %task.size,
+                        %max_connected_builder_size,
+                        "Waiting on a builder large enough to queue up this task"
+                    );
+
+                    continue 'tasks;
+                }
             }
         }
 
@@ -349,7 +444,11 @@ impl Manager {
         }
 
         if let Some(endpoint) = task.allocated_builder.filter(|_| task.status == task::Status::Building) {
-            if let Some(builder) = self.builders.get_mut(&endpoint) {
+            if let Some(builder) = self
+                .builders
+                .iter_mut()
+                .find_map(|(key, value)| (key.endpoint == endpoint).then_some(value))
+            {
                 builder.cancel_build(&task).await.context("cancel build")?;
             } else {
                 warn!(
@@ -378,7 +477,37 @@ impl Manager {
     }
 
     pub async fn update_builder(&mut self, endpoint: endpoint::Id, message: builder::Message) -> Result<bool> {
-        let builder = self.builders.entry(endpoint).or_insert_with(|| Builder::new(endpoint));
+        let builder = if let Some(builder) = self
+            .builders
+            .iter_mut()
+            .find_map(|(key, value)| (key.endpoint == endpoint).then_some(value))
+        {
+            builder
+        }
+        // First time connecting after enrollment
+        else {
+            let mut conn = self.state.service_db.acquire().await?;
+            let endpoint = Endpoint::get(conn.as_mut(), endpoint).await?;
+            let account = Account::get(conn.as_mut(), endpoint.account).await?;
+
+            if let Some((index, config)) = self
+                .config
+                .builders
+                .iter()
+                .enumerate()
+                .find(|(_, config)| config.public_key.encode() == account.public_key)
+            {
+                let key = builder::Key {
+                    index,
+                    endpoint: endpoint.id,
+                };
+
+                self.builders.insert(key, Builder::new(endpoint.id, config));
+                self.builders.get_mut(&key).unwrap()
+            } else {
+                bail!("builder not defined in config: {}", endpoint.id);
+            }
+        };
 
         if let Some(event) = builder.update(&self.state, message).await? {
             match event {
@@ -407,26 +536,24 @@ impl Manager {
     }
 
     pub fn builder_status(&self, endpoint: &endpoint::Id) -> Option<builder::Status> {
-        self.builders.get(endpoint).map(Builder::status)
+        self.builders
+            .iter()
+            .find_map(|(key, value)| (key.endpoint == *endpoint).then_some(value))
+            .map(Builder::status)
     }
 
     pub async fn builders(&self) -> Result<Vec<builder::Info>> {
-        let mut conn = self.acquire().await.context("acquire db conn")?;
+        Ok(self.builders.values().map(Builder::info).collect())
+    }
 
-        let builders = Endpoint::list(conn.as_mut())
-            .await
-            .context("list endpoints")?
-            .into_iter()
-            .filter_map(|e| (e.role == endpoint::Role::Builder).then_some(e.id));
+    #[tracing::instrument(skip_all)]
+    pub fn config_reloaded(&mut self, config: Config) {
+        // TODO: Do we want to refresh other stuff at runtime, like
+        // allowed builders / etc? If so we will need to ensure we
+        // can invalidate active connections / etc.
+        self.config.build_sizes = config.build_sizes;
 
-        Ok(builders
-            .map(|id| {
-                self.builders
-                    .get(&id)
-                    .map(Builder::info)
-                    .unwrap_or_else(|| builder::Info::disconnected(id))
-            })
-            .collect())
+        info!("`build_sizes` reloaded");
     }
 }
 

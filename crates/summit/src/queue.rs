@@ -10,7 +10,7 @@ use sqlx::SqliteConnection;
 use tokio::task::spawn_blocking;
 use tracing::{debug, info, warn};
 
-use crate::{Project, repository, task};
+use crate::{Project, config::BuildSizesConfig, repository, task};
 
 #[derive(Default)]
 pub struct Queue(Vec<task::Queued>);
@@ -22,6 +22,7 @@ impl Queue {
         conn: &mut SqliteConnection,
         projects: &[Project],
         repo_dbs: &HashMap<repository::Id, meta::Database>,
+        build_sizes: &BuildSizesConfig,
     ) -> Result<()> {
         let open_tasks = task::query(conn, task::query::Params::default().statuses(task::Status::open()))
             .await
@@ -69,6 +70,8 @@ impl Queue {
                     }
                 };
 
+                let size = build_sizes.get(&meta.source_id);
+
                 let remotes = profile
                     .remotes
                     .iter()
@@ -88,6 +91,7 @@ impl Queue {
                         index_uri: profile.index_uri.clone(),
                         remotes,
                         dependencies: vec![],
+                        size,
                     },
                 )))
             })
