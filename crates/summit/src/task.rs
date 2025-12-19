@@ -14,7 +14,7 @@ use tokio::task::spawn_blocking;
 use tracing::{Instrument, debug, warn};
 use uuid::Uuid;
 
-use crate::{Manager, Profile, Project, Repository, builder, profile, project, repository};
+use crate::{Manager, Profile, Project, Repository, builder, config::Size, profile, project, repository};
 
 pub use self::query::{Query, query};
 
@@ -116,6 +116,7 @@ pub struct Queued {
     pub index_uri: Uri,
     pub remotes: Vec<Uri>,
     pub dependencies: Vec<Id>,
+    pub size: Size,
 }
 
 #[tracing::instrument(name = "fix_and_create_tasks", skip_all, fields(repository = %repo.name))]

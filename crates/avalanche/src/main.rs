@@ -3,13 +3,14 @@ use std::path::PathBuf;
 use clap::Parser;
 use service::{Server, State, endpoint::Role};
 
-pub type Result<T, E = color_eyre::eyre::Error> = std::result::Result<T, E>;
-pub type Config = service::Config;
-
 use self::build::build;
+use self::config::Config;
 use self::upload::upload;
 
+pub type Result<T, E = color_eyre::eyre::Error> = std::result::Result<T, E>;
+
 mod build;
+mod config;
 mod stream;
 mod upload;
 
@@ -22,9 +23,11 @@ async fn main() -> Result<()> {
     service::tracing::init(&config.tracing);
 
     let state = State::load(root).await?;
+    let issuer = config.issuer(state.key_pair.clone());
 
-    Server::new(Role::Builder, &config, &state)
+    Server::new(Role::Builder, &state, config.admin.clone())
         .with_task("stream", stream::run(state.clone()))
+        .with_auto_enroll(issuer, config.upstream)
         .start()
         .await?;
 

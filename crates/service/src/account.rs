@@ -259,7 +259,7 @@ pub struct Admin {
         public_key = %admin.public_key
     )
 )]
-pub(crate) async fn sync_admin(db: &Database, admin: Admin) -> Result<(), Error> {
+pub async fn sync_admin(db: &Database, admin: &Admin) -> Result<(), Error> {
     let mut tx = db.begin().await?;
 
     let account: Option<Uuid> = sqlx::query_scalar(

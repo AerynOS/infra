@@ -1,13 +1,6 @@
 description = "Summit (test)"
 grpc_address = "http://summit:5001"
 
-downstreams = [
-  # Vessel
-  "uxV-S0soSdALp8G-IVbjJMmATzTCfA-8abkNbJ7PKt8",
-  # Avalanche
-  "ZZFERyM1phMGH1PQ0AeoQ0KNE7-cS-O7oEYtPVqr36M"
-]
-
 [tracing]
 level_filter = "info,summit=debug,service=trace,service_core=trace"
 # compact or json
@@ -18,3 +11,17 @@ username = "admin"
 name = "Admin"
 email = "admin@serpentos.com"
 public_key = "9eBMCOKXlF16-yCNqHhBdg7S3CY9gOu8qqH_zPX1yp0"
+
+[repository_manager]
+public_key = "uxV-S0soSdALp8G-IVbjJMmATzTCfA-8abkNbJ7PKt8"
+
+[[builder]]
+public_key = "ZZFERyM1phMGH1PQ0AeoQ0KNE7-cS-O7oEYtPVqr36M"
+size = "medium"
+
+[build_sizes]
+large = [
+  "llvm",
+  "linux-desktop",
+]
+medium = []

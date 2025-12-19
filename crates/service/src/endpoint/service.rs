@@ -1,3 +1,4 @@
+//! GRPC service allowing endpoint enrollment
 use std::sync::Arc;
 
 use http::Uri;
@@ -12,7 +13,7 @@ use service_grpc::endpoint::{
 };
 use thiserror::Error;
 use tonic::async_trait;
-use tracing::{debug, error, info};
+use tracing::{debug, info};
 
 use crate::{
     Database, account,
@@ -23,18 +24,21 @@ use crate::{
     grpc::handle,
 };
 
+/// Server capable of routing GRPC requests to this [`Service`]
 pub type Server = EndpointServiceServer<Service>;
 
+/// Endpoint GRPC service
 pub struct Service {
     state: Arc<State>,
 }
 
-pub fn service(role: Role, config: &crate::Config, state: &crate::State) -> Server {
+/// Create a new endpoint service [`Server`]
+pub fn service(issuer: Issuer, db: Database, downstreams: Vec<PublicKey>) -> Server {
     Server::new(Service {
         state: Arc::new(State {
-            issuer: config.issuer(role, state.key_pair.clone()),
-            db: state.service_db.clone(),
-            downstreams: config.downstreams.clone(),
+            issuer,
+            db,
+            downstreams,
         }),
     })
 }

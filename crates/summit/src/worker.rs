@@ -1,14 +1,14 @@
-use std::{convert::Infallible, future::Future, time::Duration};
+use std::{convert::Infallible, future::Future, path::PathBuf, time::Duration};
 
 use color_eyre::{Result, eyre::Context};
-use service::endpoint;
+use service::{endpoint, signal};
 use tokio::{
     sync::{mpsc, oneshot},
     time::{self, Instant},
 };
 use tracing::{debug, error, info, warn};
 
-use crate::{Manager, builder, task};
+use crate::{Config, Manager, builder, task};
 
 /// The interval at which a timer fires off an event to check the configured git recipe repo branch
 const TIMER_INTERVAL: Duration = Duration::from_secs(30);
@@ -29,15 +29,20 @@ pub enum Message {
     Resume,
     Builder(endpoint::Id, builder::Message),
     ListBuilders(oneshot::Sender<Vec<builder::Info>>),
+    ConfigReloaded(Config),
 }
 
-pub async fn run(mut manager: Manager) -> Result<(Sender, impl Future<Output = Result<(), Infallible>> + use<>)> {
+pub async fn run(
+    mut manager: Manager,
+    config_path: PathBuf,
+) -> Result<(Sender, impl Future<Output = Result<(), Infallible>> + use<>)> {
     let (sender, mut receiver) = mpsc::unbounded_channel::<Message>();
 
     let task = {
         let sender = sender.clone();
 
         tokio::spawn(timer_task(sender.clone()));
+        tokio::spawn(reload_config_on_sighup_task(sender.clone(), config_path));
 
         async move {
             let mut paused = false;
@@ -62,12 +67,34 @@ pub async fn run(mut manager: Manager) -> Result<(Sender, impl Future<Output = R
     Ok((sender, task))
 }
 
-async fn timer_task(sender: Sender) -> Result<(), Infallible> {
+async fn timer_task(sender: Sender) {
     let mut interval = time::interval(TIMER_INTERVAL);
     interval.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
 
     loop {
         let _ = sender.send(Message::Timer(interval.tick().await));
+    }
+}
+
+async fn reload_config_on_sighup_task(sender: Sender, config_path: PathBuf) {
+    loop {
+        if let Err(err) = signal::capture(Some(signal::Kind::hangup())).await {
+            let error = service::error::chain(&err);
+            error!(%error, "Error during SIGHUP capture");
+            break;
+        };
+
+        info!("SIGHUP received, reloading config...");
+
+        match Config::load(&config_path).await {
+            Ok(config) => {
+                let _ = sender.send(Message::ConfigReloaded(config));
+            }
+            Err(err) => {
+                let error = service::error::chain(&*err);
+                error!(%error, "Failed to reload config");
+            }
+        }
     }
 }
 
@@ -98,6 +125,11 @@ async fn handle_message(sender: &Sender, manager: &mut Manager, paused: &mut boo
             let builders = manager.builders().await.context("list builders")?;
 
             let _ = sender.send(builders);
+
+            Ok(())
+        }
+        Message::ConfigReloaded(config) => {
+            manager.config_reloaded(config);
 
             Ok(())
         }

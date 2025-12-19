@@ -12,7 +12,7 @@ use tokio::time;
 use tracing::{debug, error, info, info_span};
 
 use crate::{
-    Account, Database, Endpoint, State, account, client,
+    Account, Database, Endpoint, account, client,
     crypto::{EncodedPublicKey, KeyPair, PublicKey},
     database,
     endpoint::{self, Role},
@@ -98,8 +98,8 @@ pub struct Target {
 }
 
 /// Send auto-enrollment to the list of targets if the endpoint isn't already configured
-pub(crate) async fn auto_enroll(target: &Target, ourself: Issuer, state: &State) -> Result<(), Error> {
-    let mut conn = state.service_db.acquire().await?;
+pub(crate) async fn auto_enroll(db: &Database, ourself: Issuer, target: &Target) -> Result<(), Error> {
+    let mut conn = db.acquire().await?;
 
     let endpoints = Endpoint::list(conn.as_mut()).await.map_err(Error::ListEndpoints)?;
 
@@ -125,11 +125,13 @@ pub(crate) async fn auto_enroll(target: &Target, ourself: Issuer, state: &State)
         }
     }
 
+    drop(conn);
+
     if !enrolled {
         debug!("Enrolling with target service");
 
         loop {
-            if let Err(e) = enroll(state, target.clone(), ourself.clone()).await {
+            if let Err(e) = enroll(db, target.clone(), ourself.clone()).await {
                 error!(error = %error::chain(e), "Enrollment request failed, retrying in 30s...");
 
                 time::sleep(Duration::from_secs(30)).await;
@@ -154,7 +156,7 @@ pub(crate) async fn auto_enroll(target: &Target, ourself: Issuer, state: &State)
     )
 )]
 /// Enroll with the [`Target`]
-async fn enroll(state: &State, target: Target, ourself: Issuer) -> Result<(), Error> {
+async fn enroll(db: &Database, target: Target, ourself: Issuer) -> Result<(), Error> {
     let endpoint = endpoint::Id::generate();
     let account = account::Id::generate();
 
@@ -209,7 +211,7 @@ async fn enroll(state: &State, target: Target, ourself: Issuer) -> Result<(), Er
 
     let username = format!("@{account}");
 
-    let mut tx = state.service_db.begin().await?;
+    let mut tx = db.begin().await?;
 
     Account {
         id: account,
