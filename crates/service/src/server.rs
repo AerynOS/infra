@@ -8,14 +8,13 @@ use std::{
     time::Duration,
 };
 
-use axum::response::IntoResponse;
 use thiserror::Error;
-use tonic::server::NamedService;
 use tracing::{error, info};
 
 use crate::{
-    Config, State, account,
-    endpoint::{self, Role, enrollment},
+    State,
+    account::{self, Admin},
+    endpoint::{Role, enrollment},
     error, middleware, signal, task, token,
 };
 
@@ -28,37 +27,31 @@ pub struct Server<'a> {
     http_addr: Option<(IpAddr, u16)>,
     grpc_router: tonic::service::Routes,
     grpc_addr: Option<(IpAddr, u16)>,
-    config: &'a Config,
     state: &'a State,
     role: Role,
+    admin: Admin,
     extract_token: middleware::ExtractToken,
     signals: Vec<signal::Kind>,
     runner: task::Runner,
 }
 
 impl<'a> Server<'a> {
-    /// Create a new [`Server`]
-    pub fn new(role: Role, config: &'a Config, state: &'a State) -> Self {
-        let http_router = axum::Router::new();
-
-        let mut grpc_router = tonic::service::Routes::default().add_service(account::service(role, state));
-
-        if matches!(role, Role::Hub) {
-            grpc_router = grpc_router.add_service(endpoint::service(role, config, state));
-        }
+    /// Create a new [`Server`] with the configured [`Role`]
+    pub fn new(role: Role, state: &'a State, admin: Admin) -> Self {
+        let extract_token = middleware::ExtractToken {
+            public_key: state.key_pair.public_key(),
+            validation: token::Validation::new().iss(role.service_name()),
+        };
 
         Self {
-            http_router,
+            http_router: axum::Router::new(),
             http_addr: None,
-            grpc_router,
+            grpc_router: tonic::service::Routes::default(),
             grpc_addr: None,
-            config,
-            state,
             role,
-            extract_token: middleware::ExtractToken {
-                pub_key: state.key_pair.public_key(),
-                validation: token::Validation::new().iss(role.service_name()),
-            },
+            state,
+            admin,
+            extract_token,
             signals: vec![signal::Kind::terminate(), signal::Kind::interrupt()],
             runner: task::Runner::new(),
         }
@@ -66,20 +59,43 @@ impl<'a> Server<'a> {
 }
 
 impl Server<'_> {
-    /// Enable & specify the http binding address
-    pub fn with_http(self, addr: (IpAddr, u16)) -> Self {
+    /// Enable http with the provided binding address & routes
+    pub fn with_http(self, addr: (IpAddr, u16), router: axum::Router) -> Self {
         Self {
             http_addr: Some(addr),
+            http_router: router,
             ..self
         }
     }
 
-    /// Enable & specify the grpc binding address
-    pub fn with_grpc(self, addr: (IpAddr, u16)) -> Self {
+    /// Enable grpc with the provided binding address & routes
+    ///
+    /// Account service is always added, allowing authentication w/ the service
+    pub fn with_grpc(self, addr: (IpAddr, u16), f: impl FnOnce(&mut tonic::service::RoutesBuilder)) -> Self {
+        let mut routes = tonic::service::Routes::builder();
+
+        f(&mut routes);
+
         Self {
             grpc_addr: Some(addr),
+            grpc_router: routes.routes(),
             ..self
         }
+    }
+
+    /// Add task to auto-enroll
+    pub fn with_auto_enroll(self, issuer: enrollment::Issuer, target: enrollment::Target) -> Self {
+        debug_assert!(!matches!(self.role, Role::Hub));
+
+        let db = self.state.service_db.clone();
+
+        self.with_task("auto enroll", async move {
+            if let Err(e) = enrollment::auto_enroll(&db, issuer, &target).await {
+                error!(error = %error::chain(e), "Auto enrollment failed");
+            }
+
+            future::pending::<Result<(), Infallible>>().await
+        })
     }
 
     /// Override the default graceful shutdown duration (5s)
@@ -118,51 +134,17 @@ impl Server<'_> {
         }
     }
 
-    /// Merges a tonic grpc service with the server
-    pub fn merge_grpc<S>(self, service: S) -> Self
-    where
-        S: tower::Service<http::Request<tonic::body::Body>, Error = Infallible>
-            + NamedService
-            + Clone
-            + Send
-            + Sync
-            + 'static,
-        S::Response: IntoResponse,
-        S::Future: Send + 'static,
-    {
-        Self {
-            grpc_router: self.grpc_router.add_service(service),
-            ..self
-        }
-    }
-
-    /// Merges an http [`axum::Router`] with the server
-    pub fn merge_http(self, router: impl Into<axum::Router>) -> Self {
-        Self {
-            http_router: self.http_router.merge(router),
-            ..self
-        }
-    }
-
     /// Start the server and perform the following:
     ///
-    /// - Sync the defined [`Config::admin`] to the service [`Database`] to ensure
+    /// - Sync the defined [`Admin`] to the service [`Database`] to ensure
     ///   it's credentials can authenticate and hit all admin endpoints.
     /// - Start the underlying http & grpc servers, if configured & any configured tasks
-    /// - Send auto-enrollment for [`Config::upstream`] target defined when not [`Role::Hub`]
     ///
     /// [`Database`]: crate::Database
     pub async fn start(self) -> Result<(), Error> {
-        account::sync_admin(&self.state.service_db, self.config.admin.clone()).await?;
+        account::sync_admin(&self.state.service_db, &self.admin).await?;
 
         let mut runner = self.runner.with_task("signal capture", signal::capture(self.signals));
-
-        if self.role != Role::Hub {
-            runner = runner.with_task(
-                "auto enroll",
-                auto_enroll(self.role, self.config.clone(), self.state.clone()),
-            );
-        }
 
         if let Some(addr) = self.http_addr {
             let router = self
@@ -189,7 +171,11 @@ impl Server<'_> {
                 .layer(middleware::Log)
                 .layer(middleware::GrpcMethod)
                 .layer(self.extract_token)
-                .add_routes(self.grpc_router);
+                .add_routes(self.grpc_router.add_service(account::service(
+                    self.role,
+                    self.state.service_db.clone(),
+                    self.state.key_pair.clone(),
+                )));
 
             runner = runner.with_task("grpc server", async move {
                 let (host, port) = addr;
@@ -212,15 +198,4 @@ pub enum Error {
     /// Syncing admin account failed
     #[error("sync admin account")]
     SyncAdmin(#[from] account::Error),
-}
-
-async fn auto_enroll(role: Role, config: Config, state: State) -> Result<(), Infallible> {
-    if role != Role::Hub
-        && let Some(target) = &config.upstream
-        && let Err(e) = enrollment::auto_enroll(target, config.issuer(role, state.key_pair.clone()), &state).await
-    {
-        error!(error = %error::chain(e), "Auto enrollment failed");
-    }
-
-    future::pending::<Result<(), Infallible>>().await
 }

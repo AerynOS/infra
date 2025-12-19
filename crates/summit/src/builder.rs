@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use service::{
     Endpoint, State,
     client::{AuthClient, EndpointAuth, VesselServiceClient},
+    crypto::PublicKey,
     database::Transaction,
     endpoint, error,
     grpc::{
@@ -18,7 +19,7 @@ use service::{
 use tokio::{sync::mpsc, task::spawn_blocking};
 use tracing::{error, info, warn};
 
-use crate::{Task, task};
+use crate::{Task, config::Size, task};
 
 #[derive(Debug)]
 pub enum Message {
@@ -58,29 +59,33 @@ pub struct Info {
     pub last_seen: Option<DateTime<Utc>>,
     pub status: StatusKind,
     pub building: Option<task::Id>,
+    pub size: Size,
 }
 
-impl Info {
-    pub fn disconnected(endpoint: endpoint::Id) -> Self {
-        Self {
-            endpoint,
-            last_seen: None,
-            status: StatusKind::Disconnected,
-            building: None,
-        }
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Key {
+    pub index: usize,
+    pub endpoint: endpoint::Id,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Config {
+    pub public_key: PublicKey,
+    pub size: Size,
 }
 
 #[derive(Debug)]
 pub struct Builder {
     pub endpoint: endpoint::Id,
+    pub size: Size,
     connection: Option<Connection>,
 }
 
 impl Builder {
-    pub fn new(endpoint: endpoint::Id) -> Self {
+    pub fn new(endpoint: endpoint::Id, config: &Config) -> Self {
         Self {
             endpoint,
+            size: config.size,
             connection: None,
         }
     }
@@ -104,6 +109,7 @@ impl Builder {
 
         Info {
             endpoint: self.endpoint,
+            size: self.size,
             last_seen,
             status,
             building,
@@ -112,6 +118,10 @@ impl Builder {
 
     pub fn is_idle(&self) -> bool {
         matches!(self.status(), Status::Idle)
+    }
+
+    pub fn is_connected(&self) -> bool {
+        self.connection.is_some()
     }
 
     pub fn status(&self) -> Status {
@@ -175,7 +185,9 @@ impl Builder {
         fields(
             builder = %self.endpoint,
             task = %queued.task.id,
-            build = %queued.task.build_id
+            build = %queued.task.build_id,
+            task_size = %queued.size,
+            builder_size = %self.size,
         )
     )]
     pub async fn build(&mut self, state: &State, queued: &task::Queued) -> Result<()> {

@@ -17,14 +17,13 @@ use crate::{
     token::{self, VerifiedToken},
 };
 
-pub(crate) use self::service::service;
+pub use self::service::service;
 
 pub mod enrollment;
-
-pub(crate) mod service;
+pub mod service;
 
 /// Unique identifier of an [`Endpoint`]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, From, Into)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, From, Into)]
 pub struct Id(Uuid);
 
 impl Id {

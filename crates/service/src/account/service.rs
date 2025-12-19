@@ -19,7 +19,7 @@ use service_grpc::account::{
 };
 use thiserror::Error;
 use tonic::async_trait;
-use tracing::{debug, error, info_span};
+use tracing::{debug, info_span};
 use tracing_futures::Instrument;
 
 use crate::{Account, Database, Endpoint, account, database, endpoint::Role, grpc};
@@ -30,13 +30,9 @@ pub struct Service {
     state: Arc<State>,
 }
 
-pub fn service(role: Role, state: &crate::State) -> Server {
+pub fn service(role: Role, db: Database, key_pair: KeyPair) -> Server {
     Server::new(Service {
-        state: Arc::new(State {
-            role,
-            db: state.service_db.clone(),
-            key_pair: state.key_pair.clone(),
-        }),
+        state: Arc::new(State { role, db, key_pair }),
     })
 }
 

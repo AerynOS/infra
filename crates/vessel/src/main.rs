@@ -5,10 +5,12 @@ use clap::Parser;
 use color_eyre::eyre::Context;
 use service::{Server, endpoint::Role};
 
+pub use self::config::Config;
 pub use self::package::Package;
 pub use self::state::State;
 
 mod channel;
+mod config;
 mod grpc;
 mod migration;
 mod package;
@@ -16,7 +18,6 @@ mod state;
 mod worker;
 
 pub type Result<T, E = color_eyre::eyre::Error> = std::result::Result<T, E>;
-pub type Config = service::Config;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -33,6 +34,7 @@ async fn main() -> Result<()> {
     service::tracing::init(&config.tracing);
 
     let state = State::load(root).await.context("load state")?;
+    let issuer = config.issuer(state.service.key_pair.clone());
 
     migration::run_all(&state).await.context("run migrations")?;
 
@@ -48,10 +50,12 @@ async fn main() -> Result<()> {
 
     let (worker_sender, worker_task) = worker::run(state.clone()).await?;
 
-    Server::new(Role::RepositoryManager, &config, &state.service)
-        .with_grpc((host, grpc_port))
-        .merge_grpc(grpc::service(state.service.clone(), worker_sender))
+    Server::new(Role::RepositoryManager, &state.service, config.admin.clone())
         .with_task("worker", worker_task)
+        .with_auto_enroll(issuer, config.upstream)
+        .with_grpc((host, grpc_port), |routes| {
+            routes.add_service(grpc::service(state.service.clone(), worker_sender));
+        })
         .start()
         .await?;
 

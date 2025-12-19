@@ -20,7 +20,7 @@ use crate::{
 #[derive(Debug, Clone)]
 pub struct ExtractToken {
     /// Public key used to verify the [`Token`] signature
-    pub pub_key: PublicKey,
+    pub public_key: PublicKey,
     /// Validation rules used when calling [`Token::verify`]
     pub validation: Validation,
 }
@@ -31,7 +31,7 @@ impl<S> tower::Layer<S> for ExtractToken {
     fn layer(&self, inner: S) -> Self::Service {
         Service {
             inner,
-            pub_key: self.pub_key,
+            public_key: self.public_key,
             validation: self.validation.clone(),
         }
     }
@@ -41,7 +41,7 @@ impl<S> tower::Layer<S> for ExtractToken {
 #[derive(Debug, Clone)]
 pub struct Service<S> {
     inner: S,
-    pub_key: PublicKey,
+    public_key: PublicKey,
     validation: Validation,
 }
 
@@ -62,7 +62,7 @@ where
         let clone = self.inner.clone();
         let mut inner = std::mem::replace(&mut self.inner, clone);
 
-        let token_maybe = extract_token(&req, &self.pub_key, &self.validation);
+        let token_maybe = extract_token(&req, &self.public_key, &self.validation);
 
         let mut flags = Flags::default();
         let mut permissions = HashSet::new();

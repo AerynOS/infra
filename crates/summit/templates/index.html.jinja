@@ -29,7 +29,7 @@
                     {% set builder = builders | builder(endpoint.id) %}
                     {% if builder %}
                         <li class="overview-builders__list__item overview-builders__list__item--{{ builder.status }}">
-                            <h4>{{ endpoint.description }}</h4>
+                            <h4>{{ endpoint.description }} ({{builder.size}})</h4>
                             {% if builder.building %}
                                 {% set task = building_tasks | task(builder.building) %}
                                 <p>{{ task.description }}</p>
