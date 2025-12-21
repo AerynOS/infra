@@ -52,4 +52,4 @@ For testing only the summit frontend, use this command:
 
 ## License
 
-The AerynOS infra project is licensed under the MPL-2.0 license.
+The AerynOS infra is available under the terms of the [MPL-2.0](https://spdx.org/licenses/MPL-2.0.html) licence.
