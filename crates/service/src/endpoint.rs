@@ -279,7 +279,7 @@ impl Tokens {
 }
 
 /// Status of the [`Endpoint`]
-#[derive(Debug, Clone, Copy, strum::Display, strum::EnumString, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, strum::Display, strum::EnumString, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 #[strum(serialize_all = "kebab-case")]
 pub enum Status {

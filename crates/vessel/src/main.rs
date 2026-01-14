@@ -52,7 +52,7 @@ async fn main() -> Result<()> {
 
     Server::new(Role::RepositoryManager, &state.service, config.admin.clone())
         .with_task("worker", worker_task)
-        .with_auto_enroll(issuer, config.upstream)
+        .with_auto_enroll(issuer, vec![config.hub])
         .with_grpc((host, grpc_port), |routes| {
             routes.add_service(grpc::service(state.service.clone(), worker_sender));
         })

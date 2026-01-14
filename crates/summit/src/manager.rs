@@ -514,6 +514,9 @@ impl Manager {
                 builder::Event::Connected => {
                     return Ok(true);
                 }
+                builder::Event::Idle => {
+                    return Ok(true);
+                }
                 builder::Event::BuildFailed { task_id } => {
                     let mut tx = self.begin().await.context("begin db tx")?;
 

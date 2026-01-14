@@ -26,8 +26,8 @@ async fn main() -> Result<()> {
     let issuer = config.issuer(state.key_pair.clone());
 
     Server::new(Role::Builder, &state, config.admin.clone())
-        .with_task("stream", stream::run(state.clone()))
-        .with_auto_enroll(issuer, config.upstream)
+        .with_task("stream", stream::run(state.clone(), config.clone()))
+        .with_auto_enroll(issuer, config.hubs)
         .start()
         .await?;
 
