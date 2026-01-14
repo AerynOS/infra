@@ -22,7 +22,7 @@ pub struct Config {
     pub admin: Admin,
     #[serde(default)]
     pub tracing: tracing::Config,
-    pub upstream: enrollment::Target,
+    pub hub: enrollment::HubTarget,
 }
 
 impl Config {

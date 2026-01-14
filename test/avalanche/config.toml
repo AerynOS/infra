@@ -1,12 +1,4 @@
 description = "Avalanche (test)"
-# TODO: Avalanche doesn't expose a grpc server so
-# it doesn't need to send a URI to summit
-grpc_address = "http://client.only"
-
-[upstream]
-host_address = "http://summit:5001"
-public_key = "gjbJc9Tyuj6nttjQBWV0E813d3ZnH2hZ9EtBEl6Tdn4"
-role = "hub"
 
 [tracing]
 level_filter = "info,avalanche=debug,service=trace,service_core=trace"
@@ -18,3 +10,8 @@ username = "admin"
 name = "Admin"
 email = "admin@serpentos.com"
 public_key = "9eBMCOKXlF16-yCNqHhBdg7S3CY9gOu8qqH_zPX1yp0"
+
+# We can define multiple summit instances to connect to
+[[hub]]
+host_address = "http://summit:5001"
+public_key = "gjbJc9Tyuj6nttjQBWV0E813d3ZnH2hZ9EtBEl6Tdn4"
