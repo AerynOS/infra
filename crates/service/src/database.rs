@@ -47,7 +47,7 @@ impl Database {
 
     /// Begin a database transaction
     pub async fn begin(&self) -> Result<Transaction, Error> {
-        Ok(Transaction(self.pool.begin().await?))
+        Ok(Transaction(self.pool.begin_with("BEGIN IMMEDIATE").await?))
     }
 
     /// Creates a new in-memory database for testing

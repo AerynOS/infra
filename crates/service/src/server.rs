@@ -8,6 +8,7 @@ use std::{
     time::Duration,
 };
 
+use futures_util::future::join_all;
 use thiserror::Error;
 use tracing::{error, info};
 
@@ -84,15 +85,29 @@ impl Server<'_> {
     }
 
     /// Add task to auto-enroll
-    pub fn with_auto_enroll(self, issuer: enrollment::Issuer, target: enrollment::Target) -> Self {
+    pub fn with_auto_enroll<T>(self, issuer: enrollment::Issuer, targets: Vec<T>) -> Self
+    where
+        T: Send + Sync + 'static + Into<enrollment::Target>,
+    {
         debug_assert!(!matches!(self.role, Role::Hub));
 
         let db = self.state.service_db.clone();
 
         self.with_task("auto enroll", async move {
-            if let Err(e) = enrollment::auto_enroll(&db, issuer, &target).await {
-                error!(error = %error::chain(e), "Auto enrollment failed");
-            }
+            join_all(targets.into_iter().map(|target| async {
+                let target = target.into();
+
+                if let Err(e) = enrollment::auto_enroll(&db, issuer.clone(), &target).await {
+                    error!(
+                        error = %error::chain(e),
+                        url = %target.host_address,
+                        public_key = %target.public_key,
+                        role = %target.role,
+                        "Auto enrollment failed"
+                    );
+                }
+            }))
+            .await;
 
             future::pending::<Result<(), Infallible>>().await
         })

@@ -323,12 +323,13 @@ async fn builder(
             };
 
             match event {
-                builder_stream_incoming::Event::Status(BuilderStatus { building }) => {
+                builder_stream_incoming::Event::Status(BuilderStatus { building, task_id }) => {
                     let _ = state.worker.send(worker::Message::Builder(
                         endpoint_id,
                         builder::Message::Status {
                             now: Utc::now(),
-                            building: building.map(|id| (id as i64).into()),
+                            building,
+                            task_id: task_id.map(|id| (id as i64).into()),
                         },
                     ));
                 }
@@ -337,7 +338,8 @@ async fn builder(
                         endpoint_id,
                         builder::Message::Status {
                             now: Utc::now(),
-                            building: Some((task_id as i64).into()),
+                            building: true,
+                            task_id: Some((task_id as i64).into()),
                         },
                     ));
 
@@ -398,7 +400,7 @@ async fn builder(
                         endpoint_id,
                         builder::Message::Busy {
                             requested: (requested_task_id as i64).into(),
-                            in_progress: (in_progress_task_id as i64).into(),
+                            in_progress: in_progress_task_id.map(|id| (id as i64).into()),
                         },
                     ));
                 }

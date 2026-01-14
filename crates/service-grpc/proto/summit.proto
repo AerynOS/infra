@@ -39,8 +39,13 @@ message BuilderStreamOutgoing {
 }
 
 message BuilderStatus {
+  // True if the builder is building
+  bool building = 1;
   // Current task being built
-  optional uint64 building = 1;
+  // 
+  // Not set if builder is busy building a task
+  // for another instance of summit
+  optional uint64 task_id = 2;
 }
 
 message BuilderBuild {
@@ -63,7 +68,9 @@ message BuilderFinished {
 
 message BuilderBusy {
   uint64 requested_task_id = 1;
-  uint64 in_progress_task_id = 2;
+  // Not set if builder is busy building a task
+  // for another instance of summit
+  optional uint64 in_progress_task_id = 2;
 }
 
 message BuilderUpload {
