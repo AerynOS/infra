@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use thiserror::Error;
 use tracing::{error, info};
 
-use crate::crypto::{KeyPair, PublicKey};
+use crate::crypto::KeyPair;
 use crate::{Account, Database, Endpoint, Token, account, crypto, database, endpoint, token};
 
 pub use service_client::*;
@@ -29,23 +29,6 @@ impl EndpointAuth {
             key_pair,
         }
     }
-
-    async fn verified_tokens(&self, public_key: &PublicKey) -> Result<VerifiedTokens, EndpointAuthError> {
-        let tokens = endpoint::Tokens::get(self.db.acquire().await?.as_mut(), self.endpoint).await?;
-
-        Ok(VerifiedTokens {
-            bearer_token: tokens
-                .bearer_token
-                .as_deref()
-                .map(|token| Token::verify(token, public_key, &token::Validation::new()))
-                .transpose()?,
-            access_token: tokens
-                .access_token
-                .as_deref()
-                .map(|token| Token::verify(token, public_key, &token::Validation::new()))
-                .transpose()?,
-        })
-    }
 }
 
 #[async_trait]
@@ -66,10 +49,22 @@ impl AuthProvider for EndpointAuth {
 
         let endpoint = Endpoint::get(conn.as_mut(), self.endpoint).await?;
         let account = Account::get(conn.as_mut(), endpoint.account).await?;
-
         let public_key = account.public_key.decoded()?;
 
-        self.verified_tokens(&public_key).await
+        let tokens = endpoint::Tokens::get(conn.as_mut(), self.endpoint).await?;
+
+        Ok(VerifiedTokens {
+            bearer_token: tokens
+                .bearer_token
+                .as_deref()
+                .map(|token| Token::verify(token, &public_key, &token::Validation::new()))
+                .transpose()?,
+            access_token: tokens
+                .access_token
+                .as_deref()
+                .map(|token| Token::verify(token, &public_key, &token::Validation::new()))
+                .transpose()?,
+        })
     }
 
     #[tracing::instrument(
@@ -114,6 +109,12 @@ impl AuthProvider for EndpointAuth {
 
                 error!("Invalid signature");
 
+                endpoint::Tokens {
+                    bearer_token: None,
+                    access_token: None,
+                }
+                .save(&mut tx, self.endpoint)
+                .await?;
                 endpoint.save(&mut tx).await?;
 
                 tx.commit().await?;
@@ -126,6 +127,12 @@ impl AuthProvider for EndpointAuth {
 
                 error!("Invalid token");
 
+                endpoint::Tokens {
+                    bearer_token: None,
+                    access_token: None,
+                }
+                .save(&mut tx, self.endpoint)
+                .await?;
                 endpoint.save(&mut tx).await?;
 
                 tx.commit().await?;
@@ -150,6 +157,12 @@ impl AuthProvider for EndpointAuth {
         endpoint.error = Some("Failed to refresh tokens".to_owned());
         error!(%error, "Failed to refresh tokens");
 
+        endpoint::Tokens {
+            bearer_token: None,
+            access_token: None,
+        }
+        .save(&mut tx, self.endpoint)
+        .await?;
         endpoint.save(&mut tx).await?;
 
         tx.commit().await?;

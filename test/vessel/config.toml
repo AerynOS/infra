@@ -1,11 +1,6 @@
 description = "Vessel (test)"
 grpc_address = "http://vessel:5001"
 
-[upstream]
-host_address = "http://summit:5001"
-public_key = "gjbJc9Tyuj6nttjQBWV0E813d3ZnH2hZ9EtBEl6Tdn4"
-role = "hub"
-
 [tracing]
 level_filter = "info,vessel=debug,service=trace,service_core=trace"
 # compact or json
@@ -16,3 +11,7 @@ username = "admin"
 name = "Admin"
 email = "admin@serpentos.com"
 public_key = "9eBMCOKXlF16-yCNqHhBdg7S3CY9gOu8qqH_zPX1yp0"
+
+[hub]
+host_address = "http://summit:5001"
+public_key = "gjbJc9Tyuj6nttjQBWV0E813d3ZnH2hZ9EtBEl6Tdn4"

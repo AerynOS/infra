@@ -16,13 +16,12 @@ use tokio::fs;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
-    #[serde(with = "http_serde::uri")]
-    pub grpc_address: Uri,
     pub description: String,
     pub admin: Admin,
     #[serde(default)]
     pub tracing: tracing::Config,
-    pub upstream: enrollment::Target,
+    #[serde(rename = "hub", default)]
+    pub hubs: Vec<enrollment::HubTarget>,
 }
 
 impl Config {
@@ -35,11 +34,22 @@ impl Config {
     pub fn issuer(&self, key_pair: KeyPair) -> Issuer {
         Issuer {
             key_pair,
-            host_address: self.grpc_address.clone(),
+            // Client only, we have no address to connect back to
+            host_address: Uri::from_static("avalanche://client.only"),
             role: Role::Builder,
             admin_name: self.admin.name.clone(),
             admin_email: self.admin.email.clone(),
             description: self.description.clone(),
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use http::Uri;
+
+    #[test]
+    fn client_only_address() {
+        Uri::from_static("avalanche://client.only");
     }
 }

@@ -184,6 +184,16 @@ async fn fix_stuck_building(
                         true
                     }
                 }
+                Some(builder::Status::Busy) => {
+                    warn!(
+                        task = %task.id,
+                        build = task.build_id,
+                        builder = %endpoint,
+                        "Builder is busy with something else, requeuing stuck build"
+                    );
+
+                    true
+                }
                 Some(builder::Status::Idle) => {
                     warn!(
                         task = %task.id,

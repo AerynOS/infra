@@ -17,7 +17,7 @@ use service::{
     },
 };
 use tokio::{sync::mpsc, task::spawn_blocking};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::{Task, config::Size, task};
 
@@ -27,7 +27,8 @@ pub enum Message {
     Disconnected,
     Status {
         now: DateTime<Utc>,
-        building: Option<task::Id>,
+        building: bool,
+        task_id: Option<task::Id>,
     },
     BuildSucceeded {
         task_id: task::Id,
@@ -42,13 +43,14 @@ pub enum Message {
     },
     Busy {
         requested: task::Id,
-        in_progress: task::Id,
+        in_progress: Option<task::Id>,
     },
 }
 
 #[derive(Debug)]
 pub enum Event {
     Connected,
+    Idle,
     BuildFailed { task_id: task::Id },
     BuildRequeued,
 }
@@ -96,7 +98,7 @@ impl Builder {
         let (last_seen, building) = match self.connection {
             Some(Connection {
                 last_seen,
-                status: Connected::Idle,
+                status: Connected::Idle | Connected::Busy,
                 ..
             }) => (Some(last_seen), None),
             Some(Connection {
@@ -130,6 +132,10 @@ impl Builder {
                 status: Connected::Idle,
                 ..
             }) => Status::Idle,
+            Some(Connection {
+                status: Connected::Busy,
+                ..
+            }) => Status::Busy,
             Some(Connection {
                 status: Connected::Building { task },
                 ..
@@ -260,17 +266,28 @@ impl Builder {
 
                 self.connection = None;
             }
-            Message::Status { now, building } => {
+            Message::Status { now, building, task_id } => {
+                let mut event = None;
+
                 if let Some(connection) = self.connection.as_mut() {
                     connection.last_seen = now;
 
                     // TODO: Invalidate tasks which still show as building
                     // on this builder that aren't this one
-                    connection.status = match building {
-                        Some(task) => Connected::Building { task },
-                        None => Connected::Idle,
+                    connection.status = match (building, task_id) {
+                        (true, Some(task)) => Connected::Building { task },
+                        (true, None) => Connected::Busy,
+                        (false, _) => {
+                            event = Some(Event::Idle);
+
+                            Connected::Idle
+                        }
                     };
+
+                    debug!(status = %connection.status, "Builder status updated");
                 }
+
+                return Ok(event);
             }
             Message::BuildSucceeded {
                 task_id,
@@ -402,7 +419,10 @@ impl Builder {
             }
             Message::Busy { requested, in_progress } => {
                 let connection = self.connection.as_mut().ok_or_eyre("builder not connected")?;
-                connection.status = Connected::Building { task: in_progress };
+                connection.status = match in_progress {
+                    Some(in_progress) => Connected::Building { task: in_progress },
+                    None => Connected::Busy,
+                };
 
                 let mut tx = state.service_db.begin().await.context("begin db tx")?;
 
@@ -443,10 +463,12 @@ struct Connection {
     pub status: Connected,
 }
 
-#[derive(Debug)]
+#[derive(Debug, strum::Display)]
 enum Connected {
     Idle,
+    Busy,
     #[allow(dead_code)]
+    #[strum(serialize = "Building {task}")]
     Building {
         task: task::Id,
     },
@@ -457,6 +479,7 @@ enum Connected {
 pub enum Status {
     Disconnected,
     Idle,
+    Busy,
     Building { task: task::Id },
 }
 

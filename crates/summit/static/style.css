@@ -239,6 +239,10 @@ header h1 {
     background-color: var(--status-blocked-color);
 }
 
+.overview-builders__list__item.overview-builders__list__item--Busy::before {
+    background-color: var(--status-building-color);
+}
+
 .overview-builders__list__item.overview-builders__list__item--Building::before {
     background-color: var(--status-building-color);
 }

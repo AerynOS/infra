@@ -85,7 +85,7 @@ pub struct Received {
     pub remote: Remote,
 }
 
-/// The target of a [`Sent`] enrollment
+/// The target of an enrollment request
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Target {
     /// [`Uri`] the target endpoint can be reached at
@@ -95,6 +95,26 @@ pub struct Target {
     pub public_key: PublicKey,
     /// Target endpoint role
     pub role: Role,
+}
+
+/// The [`Role::Hub`] target of an enrollment request
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HubTarget {
+    /// [`Uri`] the target endpoint can be reached at
+    #[serde(with = "http_serde::uri")]
+    pub host_address: Uri,
+    /// [`PublicKey`] of the target endpoint
+    pub public_key: PublicKey,
+}
+
+impl From<HubTarget> for Target {
+    fn from(target: HubTarget) -> Self {
+        Target {
+            host_address: target.host_address,
+            public_key: target.public_key,
+            role: Role::Hub,
+        }
+    }
 }
 
 /// Send auto-enrollment to the list of targets if the endpoint isn't already configured
