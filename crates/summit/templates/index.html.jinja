@@ -15,7 +15,7 @@
             <ul class="overview-recent__list">
                 {% for task in tasks %}
                     <li class="overview-recent__list__item overview-recent__list__item--{{ task.status }}">
-                        <h4>Building #{{ task.id}} {{task.source_path}} on {{ task.allocated_builder }}</h4>
+                        <h4>Building #{{ task.id}} {{task.source_path}} on {{ task.allocated_builder.description }}</h4>
                         <p>{{ task.description }}</p>
                         <div>{{ task.started }}</div>
                     </li>
