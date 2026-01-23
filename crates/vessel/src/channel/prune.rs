@@ -1,11 +1,11 @@
-use std::{collections::HashSet, time::Duration};
+use std::{collections::HashSet, path::Path, time::Duration};
 
 use chrono::Utc;
 use color_eyre::eyre::{Context, Result};
 use tokio::fs;
 use tracing::info;
 
-use crate::{State, channel::db, package};
+use crate::{Package, State, channel::db, package};
 
 #[tracing::instrument(skip_all, fields(%channel))]
 pub async fn prune(state: &State, channel: &str) -> Result<()> {
@@ -92,22 +92,47 @@ async fn prune_orphaned_packages(state: &State, channel: &str) -> Result<()> {
         return Ok(());
     }
 
-    for stone in &orphaned_stones {
-        let relative_path = stone.path.strip_prefix(&pool_dir).expect("lives in pool dir");
+    let num_stones = orphaned_stones.len();
 
-        fs::remove_file(&stone.path)
-            .await
-            .context(format!("remove orphaned stone {:?}", stone.path))?;
+    remove_orphaned_packages(state, &pool_dir, orphaned_stones)
+        .await
+        .context("remove orphaned packages")?;
 
-        state
-            .meta_db
-            .remove(&stone.sha256sum.clone().into())
-            .context("remove stone from metadb")?;
+    info!(num_stones, "All orphaned stones removed");
 
-        info!(path = ?relative_path, "Orphaned stone removed");
-    }
+    Ok(())
+}
 
-    info!("num_stones" = orphaned_stones.len(), "All orphaned stones removed");
+async fn remove_orphaned_packages(state: &State, pool_dir: &Path, packages: Vec<Package>) -> Result<()> {
+    use rayon::prelude::*;
+
+    let state = state.clone();
+    let pool_dir = pool_dir.to_owned();
+
+    tokio::task::spawn_blocking(move || {
+        packages
+            .into_par_iter()
+            .try_for_each_with((state, pool_dir), |(state, pool_dir), stone| {
+                remove_orphaned_package(state, pool_dir, stone)
+            })
+    })
+    .await
+    .context("join handle")?
+}
+
+fn remove_orphaned_package(state: &State, pool_dir: &Path, stone: Package) -> Result<()> {
+    use std::fs;
+
+    let relative_path = stone.path.strip_prefix(pool_dir).expect("lives in pool dir").to_owned();
+
+    fs::remove_file(&stone.path).context(format!("remove orphaned stone {:?}", stone.path))?;
+
+    state
+        .meta_db
+        .remove(&stone.sha256sum.into())
+        .context("remove stone from metadb")?;
+
+    info!(path = ?relative_path, "Orphaned stone removed");
 
     Ok(())
 }

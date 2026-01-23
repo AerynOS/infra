@@ -29,7 +29,7 @@ pub enum Message {
     Resume,
     Builder(endpoint::Id, builder::Message),
     ListBuilders(oneshot::Sender<Vec<builder::Info>>),
-    ConfigReloaded(Config),
+    ConfigReloaded(Box<Config>),
 }
 
 pub async fn run(
@@ -88,7 +88,7 @@ async fn reload_config_on_sighup_task(sender: Sender, config_path: PathBuf) {
 
         match Config::load(&config_path).await {
             Ok(config) => {
-                let _ = sender.send(Message::ConfigReloaded(config));
+                let _ = sender.send(Message::ConfigReloaded(Box::new(config)));
             }
             Err(err) => {
                 let error = service::error::chain(&*err);
@@ -129,7 +129,7 @@ async fn handle_message(sender: &Sender, manager: &mut Manager, paused: &mut boo
             Ok(())
         }
         Message::ConfigReloaded(config) => {
-            manager.config_reloaded(config);
+            manager.config_reloaded(*config);
 
             Ok(())
         }
