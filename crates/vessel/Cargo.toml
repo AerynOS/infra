@@ -19,6 +19,7 @@ http-serde.workspace = true
 itertools.workspace = true
 moss.workspace = true
 prost.workspace = true
+rayon.workspace = true
 serde.workspace = true
 sha2.workspace = true
 snafu.workspace = true
