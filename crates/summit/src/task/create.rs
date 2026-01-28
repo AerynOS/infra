@@ -5,8 +5,8 @@ use service::database::Transaction;
 use strum::IntoEnumIterator;
 use tracing::{Span, info, warn};
 
-use super::{Status, block, query, set_status, version};
-use crate::{Project, Repository, task::MissingTask};
+use super::{MissingTask, Status, TaskQueue, query, version};
+use crate::{Project, Repository, task};
 
 #[tracing::instrument(name = "create_task", skip_all, fields(slug, build_id, version))]
 pub(super) async fn create(
@@ -14,6 +14,7 @@ pub(super) async fn create(
     project: &Project,
     repository: &Repository,
     task @ MissingTask { profile, meta, .. }: &MissingTask<'_>,
+    queue: &impl TaskQueue,
 ) -> Result<()> {
     let build_id = format!(
         "{} / {} / {}-{}-{}_{}-{}",
@@ -55,25 +56,14 @@ pub(super) async fn create(
     let superseded_tasks = query(
         tx.as_mut(),
         query::Params::default()
-            .statuses(Status::iter().filter(|status| match status {
-                // Blocked and New tasks will not have been built
-                Status::Blocked | Status::New => true,
-                // Tasks already building / publishing shouldn't get cancelled & should have their
-                // lifecycle finished since they're already in-flight
-                Status::Building
-                | Status::Publishing
-                | Status::Completed
-                | Status::Failed
-                | Status::Cancelled
-                | Status::Superseded => false,
-            }))
+            .statuses(Status::iter().filter(|status| status.is_open() && !status.is_in_progress()))
             .source_path(source_path.clone()),
     )
     .await
     .context("find superseded tasks")?
     .tasks;
 
-    let task: i64 = sqlx::query_scalar(
+    let task_id: task::Id = sqlx::query_scalar::<_, i64>(
         "
         INSERT INTO task
         (
@@ -106,7 +96,8 @@ pub(super) async fn create(
     .bind(Status::New.to_string())
     .fetch_one(tx.as_mut())
     .await
-    .context("insert task")?;
+    .context("insert task")?
+    .into();
 
     // Mark all superseded tasks as superseded and
     // migrate their blockers to the new task, if any
@@ -115,43 +106,41 @@ pub(super) async fn create(
 
         for superseded_task in superseded_tasks {
             info!(
-                old = superseded_task.build_id,
-                new = build_id,
+                %task_id,
+                superceded_build_id = superseded_task.build_id,
                 "Task superseded by newer build"
             );
 
-            set_status(tx, superseded_task.id, Status::Superseded)
-                .await
-                .context("set task as superseded")?;
+            task::transition(
+                tx,
+                superseded_task.id,
+                task::Transition::Superceded { by: task_id },
+                queue,
+            )
+            .await
+            .context("transition task superceded")?;
 
-            blockers.extend(
-                sqlx::query_scalar::<_, String>(
-                    "
-                    DELETE FROM task_blockers
-                    WHERE task_id = ?
-                    RETURNING blocker;
-                    ",
-                )
-                .bind(i64::from(superseded_task.id))
-                .fetch_all(tx.as_mut())
-                .await?,
-            );
+            blockers.extend(superseded_task.blocked_by);
         }
 
         if !blockers.is_empty() {
-            for blocker in &blockers {
-                block(tx, task.into(), blocker).await.context("add blocker to task")?;
+            let num_blockers = blockers.len();
+
+            for blocker in blockers {
+                task::transition(tx, task_id, task::Transition::Blocked { blocker }, queue)
+                    .await
+                    .context("transition task to blocked")?;
             }
 
             info!(
-                task,
-                num_blockers = blockers.len(),
+                %task_id,
+                num_blockers,
                 "Task set as blocked due to superseded tasks being blocked"
             );
         }
     }
 
-    info!(build_id, "Task created");
+    info!(%task_id, "Task created");
 
     Ok(())
 }
