@@ -49,7 +49,6 @@ pub enum Message {
 
 #[derive(Debug)]
 pub enum Event {
-    Connected,
     Idle,
     BuildFailed { task_id: task::Id },
     BuildRequeued,
@@ -161,6 +160,10 @@ impl Builder {
                 ..
             }) => warn!("Builder is idle, nothing to cancel"),
             Some(Connection {
+                status: Connected::Busy,
+                ..
+            }) => warn!("Builder is building something else"),
+            Some(Connection {
                 status: Connected::Building { task: id },
                 ..
             }) if task.id != *id => warn!("Builder is building something else"),
@@ -258,8 +261,6 @@ impl Builder {
                     last_seen: Utc::now(),
                     status: Connected::Idle,
                 });
-
-                return Ok(Some(Event::Connected));
             }
             Message::Disconnected => {
                 warn!("Builder disconnected");
@@ -295,7 +296,6 @@ impl Builder {
                 log_path,
             } => {
                 let connection = self.connection.as_mut().ok_or_eyre("builder not connected")?;
-                connection.status = Connected::Idle;
 
                 let mut conn = state.service_db.acquire().await.context("acquire db conn")?;
 
@@ -396,9 +396,6 @@ impl Builder {
                 }
             }
             Message::BuildFailed { task_id, log_path } => {
-                let connection = self.connection.as_mut().ok_or_eyre("builder not connected")?;
-                connection.status = Connected::Idle;
-
                 let mut tx = state.service_db.begin().await.context("begin db tx")?;
 
                 if let Some(path) = log_path {
@@ -420,7 +417,7 @@ impl Builder {
             Message::Busy { requested, in_progress } => {
                 let connection = self.connection.as_mut().ok_or_eyre("builder not connected")?;
                 connection.status = match in_progress {
-                    Some(in_progress) => Connected::Building { task: in_progress },
+                    Some(task) => Connected::Building { task },
                     None => Connected::Busy,
                 };
 
@@ -467,7 +464,6 @@ struct Connection {
 enum Connected {
     Idle,
     Busy,
-    #[allow(dead_code)]
     #[strum(serialize = "Building {task}")]
     Building {
         task: task::Id,

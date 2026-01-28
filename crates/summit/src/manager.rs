@@ -511,10 +511,8 @@ impl Manager {
 
         if let Some(event) = builder.update(&self.state, message).await? {
             match event {
-                builder::Event::Connected => {
-                    return Ok(true);
-                }
                 builder::Event::Idle => {
+                    // Builder is available, lets try to queue a build on it
                     return Ok(true);
                 }
                 builder::Event::BuildFailed { task_id } => {
@@ -526,10 +524,9 @@ impl Manager {
                         .context("add queue blockers")?;
 
                     tx.commit().await.context("commit db tx")?;
-
-                    return Ok(true);
                 }
                 builder::Event::BuildRequeued => {
+                    // Build needs to be queued up on a new builder
                     return Ok(true);
                 }
             }

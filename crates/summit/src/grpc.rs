@@ -334,15 +334,6 @@ async fn builder(
                     ));
                 }
                 builder_stream_incoming::Event::BuildStarted(task_id) => {
-                    let _ = state.worker.send(worker::Message::Builder(
-                        endpoint_id,
-                        builder::Message::Status {
-                            now: Utc::now(),
-                            building: true,
-                            task_id: Some((task_id as i64).into()),
-                        },
-                    ));
-
                     let parent = state.service.state_dir.join("logs").join(task_id.to_string());
 
                     let _ = fs::remove_dir_all(&parent).await;
