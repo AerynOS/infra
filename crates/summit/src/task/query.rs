@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::{profile, project, repository, use_mock_data};
 
-use super::{Id, Status, Task};
+use super::{Blocker, Id, Status, Task};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, strum::Display, strum::EnumString)]
 #[serde(rename_all = "lowercase")]
@@ -350,7 +350,7 @@ pub async fn query(conn: &mut SqliteConnection, params: Params) -> Result<Query>
 
         for (id, blocker) in rows {
             if let Some(task) = chunk.iter_mut().find(|t| t.id == Id::from(id)) {
-                task.blocked_by.push(blocker);
+                task.blocked_by.push(Blocker(blocker));
             }
         }
     }

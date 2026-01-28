@@ -5,12 +5,17 @@ use dag::Dag;
 use futures_util::{StreamExt, TryStreamExt, stream};
 use itertools::Itertools;
 use moss::db::meta;
-use service::{database::Transaction, error};
+use service::error;
 use sqlx::SqliteConnection;
 use tokio::task::spawn_blocking;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
-use crate::{Project, config::BuildSizesConfig, repository, task};
+use crate::{
+    Project,
+    config::BuildSizesConfig,
+    repository,
+    task::{self, TaskQueue},
+};
 
 #[derive(Default)]
 pub struct Queue(Vec<task::Queued>);
@@ -60,7 +65,7 @@ impl Queue {
                         //       status::Zombie maybe?
                         warn!(
                             error = error::chain(&*err),
-                            task = %task.id,
+                            task_id = %task.id,
                             build_id = %task.build_id,
                             profile = %profile.name,
                             repository = %repo.name,
@@ -159,71 +164,23 @@ impl Queue {
         Ok(())
     }
 
-    #[tracing::instrument(name = "queue_add_blockers", skip_all, fields(%task_id))]
-    pub async fn add_blockers(&mut self, tx: &mut Transaction, task_id: task::Id) -> Result<()> {
-        let idx = self
-            .0
-            .iter()
-            .position(|queued| queued.task.id == task_id)
-            .ok_or_eyre("task_id={task_id:?} is missing")?;
-        let removed = self.0.remove(idx);
-
-        let blocker_id = format!(
-            "{}_{}@{}/{}",
-            removed.meta.source_id, removed.task.arch, removed.task.project_id, removed.task.repository_id
-        );
-
-        let mut num_blocked = 0;
-
-        for blocked in self.0.iter().filter(|queued| queued.dependencies.contains(&task_id)) {
-            task::block(tx, blocked.task.id, &blocker_id)
-                .await
-                .context("add task blocker")?;
-
-            num_blocked += 1;
-
-            warn!(task_id = %blocked.task.id, blocker = %removed.task.id, "Task blocked");
-        }
-
-        if num_blocked == 0 {
-            debug!(%task_id, "No dependents to block");
-        }
-
-        Ok(())
-    }
-
-    #[tracing::instrument(name = "queue_remove_blockers", skip_all, fields(%task_id))]
-    pub async fn remove_blockers(&mut self, tx: &mut Transaction, task_id: task::Id) -> Result<()> {
-        let idx = self
-            .0
-            .iter()
-            .position(|queued| queued.task.id == task_id)
-            .ok_or_eyre("task is missing")?;
-        let removed = self.0.remove(idx);
-
-        let blocker_id = format!(
-            "{}_{}@{}/{}",
-            removed.meta.source_id, removed.task.arch, removed.task.project_id, removed.task.repository_id
-        );
-
-        for blocked in self.0.iter().filter(|queued| queued.dependencies.contains(&task_id)) {
-            let remaining = task::unblock(tx, blocked.task.id, &blocker_id)
-                .await
-                .context("unblock task")?;
-
-            if remaining > 0 {
-                info!(task_id = %blocked.task.id, "Task still blocked ({remaining:?} remaining blockers)");
-            } else {
-                info!(task_id = %blocked.task.id, "Task unblocked");
-            }
-        }
-
-        Ok(())
-    }
-
     pub fn available(&self) -> impl Iterator<Item = &task::Queued> {
         self.0
             .iter()
             .filter(|queued| queued.dependencies.is_empty() && matches!(queued.task.status, task::Status::New))
+    }
+}
+
+impl TaskQueue for Queue {
+    fn get(&self, task_id: task::Id) -> Option<&task::Queued> {
+        self.0.iter().find(|queued| queued.task.id == task_id)
+    }
+
+    fn dependents(&self, task_id: task::Id) -> Vec<task::Id> {
+        self.0
+            .iter()
+            .filter(move |queued| queued.dependencies.contains(&task_id))
+            .map(|queued| queued.task.id)
+            .collect()
     }
 }

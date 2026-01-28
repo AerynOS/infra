@@ -1,7 +1,7 @@
 use std::{convert::Infallible, future::Future, path::PathBuf, time::Duration};
 
 use color_eyre::{Result, eyre::Context};
-use service::{endpoint, signal};
+use service::{crypto::EncodedPublicKey, endpoint, signal};
 use tokio::{
     sync::{mpsc, oneshot},
     time::{self, Instant},
@@ -27,7 +27,7 @@ pub enum Message {
     ForceRefresh,
     Pause,
     Resume,
-    Builder(endpoint::Id, builder::Message),
+    Builder(endpoint::Id, EncodedPublicKey, builder::Message),
     ListBuilders(oneshot::Sender<Vec<builder::Info>>),
     ConfigReloaded(Box<Config>),
 }
@@ -109,9 +109,9 @@ async fn handle_message(sender: &Sender, manager: &mut Manager, paused: &mut boo
         Message::ForceRefresh => force_refresh(sender, manager, *paused).await,
         Message::Pause => pause(paused).await,
         Message::Resume => resume(sender, paused).await,
-        Message::Builder(endpoint, message) => {
+        Message::Builder(endpoint, public_key, message) => {
             let allocate_builds = manager
-                .update_builder(endpoint, message)
+                .update_builder(endpoint, public_key, message)
                 .await
                 .context("update builder")?;
 
