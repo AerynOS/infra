@@ -336,7 +336,7 @@ impl Manager {
                                 &self.queue,
                             )
                             .await
-                            .context("transition task to building")?;
+                            .context(format!("transition task {} to building", task.task.id))?;
 
                             tx.commit().await?;
 
@@ -377,7 +377,7 @@ impl Manager {
         // Transition the task to complete
         task::transition(&mut tx, task.id, task::Transition::Complete, &self.queue)
             .await
-            .context("transition task to complete")?;
+            .context(format!("transition task {} to complete", task.id))?;
 
         tx.commit().await.context("commit db tx")?;
 
@@ -413,7 +413,7 @@ impl Manager {
             &self.queue,
         )
         .await
-        .context("transition task to failed")?;
+        .context(format!("transition task {task_id} to failed"))?;
 
         tx.commit().await.context("commit db tx")?;
 
@@ -426,7 +426,7 @@ impl Manager {
         // Transition to retried
         task::transition(&mut tx, task_id, task::Transition::Retry, &self.queue)
             .await
-            .context("transition task to retried")?;
+            .context(format!("transition task {task_id} to retried"))?;
 
         tx.commit().await.context("commit db tx")?;
 
@@ -467,7 +467,7 @@ impl Manager {
         // Transition to cancelled
         task::transition(&mut tx, task_id, task::Transition::Cancelled, &self.queue)
             .await
-            .context("transition task to cancelled")?;
+            .context(format!("transition task {task_id} to cancelled"))?;
 
         tx.commit().await.context("commit db tx")?;
 
@@ -510,7 +510,7 @@ impl Manager {
                         &self.queue,
                     )
                     .await
-                    .context("transition task to publishing")?;
+                    .context(format!("transition task {task_id} to publishing"))?;
 
                     tx.commit().await?;
 
@@ -533,7 +533,7 @@ impl Manager {
                             &self.queue,
                         )
                         .await
-                        .context("transition task to failed")?;
+                        .context(format!("transition task {task_id} to failed"))?;
 
                         tx.commit().await?;
                     }
@@ -554,7 +554,7 @@ impl Manager {
                         &self.queue,
                     )
                     .await
-                    .context("transition task to failed")?;
+                    .context(format!("transition task {task_id} to failed"))?;
 
                     tx.commit().await?;
                 }
@@ -563,7 +563,7 @@ impl Manager {
 
                     task::transition(&mut tx, task_id, task::Transition::Requeue, &self.queue)
                         .await
-                        .context("requeue task")?;
+                        .context(format!("transition task {task_id} to requeued"))?;
 
                     tx.commit().await?;
 

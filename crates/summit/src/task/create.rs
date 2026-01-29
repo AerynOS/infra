@@ -118,7 +118,7 @@ pub(super) async fn create(
                 queue,
             )
             .await
-            .context("transition task superseded")?;
+            .context(format!("transition task {} to superseded", superseded_task.id))?;
 
             blockers.extend(superseded_task.blocked_by);
         }
@@ -129,7 +129,7 @@ pub(super) async fn create(
             for blocker in blockers {
                 task::transition(tx, task_id, task::Transition::Blocked { blocker }, queue)
                     .await
-                    .context("transition task to blocked")?;
+                    .context(format!("transition task {task_id} to blocked"))?;
             }
 
             info!(

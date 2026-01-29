@@ -550,7 +550,7 @@ async fn fix_stuck_building(
         if requeue {
             transition(tx, task.id, Transition::Requeue, &manager.queue)
                 .await
-                .context("requeue task")?;
+                .context(format!("transition task {} to requeued", task.id))?;
         }
     }
 
@@ -601,7 +601,7 @@ async fn fix_orphaned(
                 queue,
             )
             .await
-            .context("transition task to failed")?;
+            .context(format!("transition task {} to failed", task.id))?;
         }
     }
 
@@ -914,7 +914,7 @@ async fn block_all(tx: &mut Transaction, task_id: Id, queue: &impl TaskQueue) ->
             queue,
         )
         .await
-        .context("block task")?;
+        .context(format!("transition task {dependent} to blocked"))?;
     }
 
     Ok(())
@@ -936,7 +936,7 @@ async fn unblock_all(tx: &mut Transaction, task_id: Id, queue: &impl TaskQueue) 
             queue,
         )
         .await
-        .context("unblock task")?;
+        .context(format!("transition task {blocked} to unblocked"))?;
     }
 
     Ok(())
