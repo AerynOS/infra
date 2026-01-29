@@ -47,12 +47,24 @@ pub async fn run(
         async move {
             let mut paused = false;
 
-            while let Some(message) = receiver.recv().await {
-                let kind = message.to_string();
+            loop {
+                if receiver.is_closed() && receiver.is_empty() {
+                    break;
+                }
 
-                if let Err(e) = handle_message(&sender, &mut manager, &mut paused, message).await {
-                    let error = service::error::chain(e.as_ref() as &dyn std::error::Error);
-                    error!(message = kind, %error, "Error handling message");
+                // Pull out all immediately available messages or wait
+                // for at least 1 to come in
+                let num_to_recv = receiver.len().max(1);
+                let mut messages = Vec::with_capacity(num_to_recv);
+                receiver.recv_many(&mut messages, num_to_recv).await;
+
+                for message in dedupe_messages(messages) {
+                    let kind = message.to_string();
+
+                    if let Err(e) = handle_message(&sender, &mut manager, &mut paused, message).await {
+                        let error = service::error::chain(e.as_ref() as &dyn std::error::Error);
+                        error!(message = kind, %error, "Error handling message");
+                    }
                 }
             }
 
@@ -250,4 +262,75 @@ async fn resume(sender: &Sender, paused: &mut bool) -> Result<()> {
     let _ = sender.send(Message::AllocateBuilds);
 
     Ok(())
+}
+
+/// Remove sequential duplicate messages that'd can be collapsed
+/// to a single message
+fn dedupe_messages(messages: Vec<Message>) -> Vec<Message> {
+    fn is_dupe(a: &Message, b: &Message) -> bool {
+        use Message::*;
+
+        matches!(
+            (a, b),
+            (AllocateBuilds, AllocateBuilds) | (ForceRefresh, ForceRefresh) | (Pause, Pause) | (Resume, Resume)
+        )
+    }
+
+    let num_messages = messages.len();
+
+    messages
+        .into_iter()
+        .fold(Vec::with_capacity(num_messages), |mut acc, message| {
+            if acc.last().is_some_and(|m| is_dupe(m, &message)) {
+                return acc;
+            }
+
+            acc.push(message);
+            acc
+        })
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    #[allow(clippy::needless_range_loop)]
+    fn test_dedupe_messages() {
+        use Message::*;
+
+        let messages = vec![
+            AllocateBuilds,
+            Pause,
+            AllocateBuilds,
+            AllocateBuilds,
+            AllocateBuilds,
+            Resume,
+            Resume,
+            Pause,
+            Pause,
+            Resume,
+            AllocateBuilds,
+        ];
+
+        let deduped = dedupe_messages(messages);
+
+        // Message doesn't impl Eq
+        assert_eq!(deduped.len(), 7);
+
+        for i in 0..7 {
+            let actual = &deduped[i];
+
+            match i {
+                0 => assert!(matches!(actual, AllocateBuilds)),
+                1 => assert!(matches!(actual, Pause)),
+                2 => assert!(matches!(actual, AllocateBuilds)),
+                3 => assert!(matches!(actual, Resume)),
+                4 => assert!(matches!(actual, Pause)),
+                5 => assert!(matches!(actual, Resume)),
+                6 => assert!(matches!(actual, AllocateBuilds)),
+                _ => unreachable!(),
+            }
+        }
+    }
 }
