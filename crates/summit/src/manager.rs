@@ -1,8 +1,10 @@
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
     path::PathBuf,
+    sync::{Arc, LazyLock},
 };
 
+use arc_swap::ArcSwap;
 use color_eyre::eyre::{self, Context, OptionExt, Report, Result};
 use itertools::Itertools;
 use moss::db::meta;
@@ -12,6 +14,9 @@ use tokio::task::spawn_blocking;
 use tracing::{Span, debug, error, info, warn};
 
 use crate::{Builder, Config, Project, Queue, builder, config::Size, profile, project, repository, task};
+
+/// Current view of builder info
+pub static BUILDERS: LazyLock<Arc<ArcSwap<Vec<builder::Info>>>> = LazyLock::new(Default::default);
 
 pub struct Manager {
     pub state: State,
@@ -578,8 +583,8 @@ impl Manager {
             .map(Builder::status)
     }
 
-    pub async fn builders(&self) -> Result<Vec<builder::Info>> {
-        Ok(self.builders.values().map(Builder::info).collect())
+    pub fn refresh_cached_builder_info(&self) {
+        BUILDERS.store(Arc::new(self.builders.values().map(Builder::info).collect()));
     }
 
     #[tracing::instrument(skip_all)]

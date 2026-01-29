@@ -12,6 +12,7 @@ templates-autoreload = ["dep:camino", "dep:minijinja-autoreload", "minijinja/loa
 [dependencies]
 service = { path = "../service" }
 
+arc-swap.workspace = true
 async-trait.workspace = true
 axum.workspace = true
 chrono.workspace = true

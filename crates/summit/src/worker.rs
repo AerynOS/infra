@@ -3,7 +3,7 @@ use std::{convert::Infallible, future::Future, path::PathBuf, time::Duration};
 use color_eyre::{Result, eyre::Context};
 use service::{crypto::EncodedPublicKey, endpoint, signal};
 use tokio::{
-    sync::{mpsc, oneshot},
+    sync::mpsc,
     time::{self, Instant},
 };
 use tracing::{debug, error, info, warn};
@@ -28,7 +28,6 @@ pub enum Message {
     Pause,
     Resume,
     Builder(endpoint::Id, EncodedPublicKey, builder::Message),
-    ListBuilders(oneshot::Sender<Vec<builder::Info>>),
     ConfigReloaded(Box<Config>),
 }
 
@@ -65,6 +64,10 @@ pub async fn run(
                         let error = service::error::chain(e.as_ref() as &dyn std::error::Error);
                         error!(message = kind, %error, "Error handling message");
                     }
+
+                    // Ensure cached build info is always up-to-date after
+                    // any state change so frontend can access this asynchrnously
+                    manager.refresh_cached_builder_info();
                 }
             }
 
@@ -130,13 +133,6 @@ async fn handle_message(sender: &Sender, manager: &mut Manager, paused: &mut boo
             if allocate_builds {
                 let _ = sender.send(Message::AllocateBuilds);
             }
-
-            Ok(())
-        }
-        Message::ListBuilders(sender) => {
-            let builders = manager.builders().await.context("list builders")?;
-
-            let _ = sender.send(builders);
 
             Ok(())
         }

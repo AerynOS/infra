@@ -10,18 +10,16 @@ use serde::Deserialize;
 use service::Endpoint;
 use snafu::Snafu;
 use strum::IntoEnumIterator;
-use tokio::sync::oneshot;
 
-use crate::{project, task, template, worker};
+use crate::{manager, project, task, template};
 
-pub fn state(service: service::State, worker: worker::Sender) -> State {
-    State { service, worker }
+pub fn state(service: service::State) -> State {
+    State { service }
 }
 
 #[derive(Clone)]
 pub struct State {
     service: service::State,
-    worker: worker::Sender,
 }
 
 pub async fn index(extract::State(state): extract::State<State>) -> Result<impl IntoResponse, Error> {
@@ -42,13 +40,8 @@ pub async fn index(extract::State(state): extract::State<State>) -> Result<impl 
 
     let endpoints = Endpoint::list(&mut *conn).await.context("list endpoints")?;
 
-    let builders = {
-        let (sender, receiver) = oneshot::channel();
-
-        let _ = state.worker.send(worker::Message::ListBuilders(sender));
-
-        receiver.await.context("list builders")?
-    };
+    let _builders_guard = manager::BUILDERS.load();
+    let builders = _builders_guard.as_slice();
 
     Ok(template::render(
         "index.html.jinja",
