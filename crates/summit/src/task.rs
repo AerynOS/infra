@@ -122,10 +122,10 @@ pub enum Transition {
     ///
     /// Must transition from `blocked`
     Unblocked { blocker: Blocker },
-    /// Task has been superceded
+    /// Task has been superseded
     ///
     /// Must transition from open but not-inprogress statuses
-    Superceded { by: Id },
+    Superseded { by: Id },
     /// Task is building
     ///
     /// Must transition from `new`
@@ -246,8 +246,8 @@ pub async fn transition(
                 matches!(task.status, Status::Blocked)
             }
         }
-        // We can only supercede things still waiting to get built
-        Transition::Superceded { .. } => task.status.is_open() && !task.status.is_in_progress(),
+        // We can only supersede things still waiting to get built
+        Transition::Superseded { .. } => task.status.is_open() && !task.status.is_in_progress(),
         // Must transition from a new unblocked task
         Transition::Building { .. } => matches!(task.status, Status::New),
         // Must transition from a building task
@@ -278,8 +278,8 @@ pub async fn transition(
     };
 
     if !is_valid_transition {
-        // Trying to cancel / fail / complete / supercede an already
-        // cancelled / failed / completed / superceded task
+        // Trying to cancel / fail / complete / supersede an already
+        // cancelled / failed / completed / superseded task
         //
         // We don't want to override that status to failed but instead
         // log the error & return
@@ -328,8 +328,8 @@ pub async fn transition(
                 info!(unblocked_by = %blocker, "Task fully unblocked");
             }
         }
-        Transition::Superceded { by } => {
-            // `superceded` can be reached from `blocked` so remove any blockers
+        Transition::Superseded { by } => {
+            // `superseded` can be reached from `blocked` so remove any blockers
             // for this task if they exist since they're no longer relevant
             if !task.blocked_by.is_empty() {
                 clear_blockers(tx, task.id).await.context("clear blockers")?;
@@ -342,7 +342,7 @@ pub async fn transition(
                 .await
                 .context("set status")?;
 
-            info!(superceded_by = %by, "Task marked as superceded");
+            info!(superseded_by = %by, "Task marked as superseded");
         }
         Transition::Building { builder } => {
             set_allocated_builder(tx, task.id, Some(builder))

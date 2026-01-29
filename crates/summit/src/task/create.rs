@@ -107,18 +107,18 @@ pub(super) async fn create(
         for superseded_task in superseded_tasks {
             info!(
                 %task_id,
-                superceded_build_id = superseded_task.build_id,
+                superseded_build_id = superseded_task.build_id,
                 "Task superseded by newer build"
             );
 
             task::transition(
                 tx,
                 superseded_task.id,
-                task::Transition::Superceded { by: task_id },
+                task::Transition::Superseded { by: task_id },
                 queue,
             )
             .await
-            .context("transition task superceded")?;
+            .context("transition task superseded")?;
 
             blockers.extend(superseded_task.blocked_by);
         }

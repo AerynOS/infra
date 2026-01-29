@@ -66,7 +66,7 @@ pub async fn run(
                     }
 
                     // Ensure cached build info is always up-to-date after
-                    // any state change so frontend can access this asynchrnously
+                    // any state change so frontend can access this asynchronously
                     manager.refresh_cached_builder_info();
                 }
             }

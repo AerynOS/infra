@@ -74,10 +74,10 @@ impl TryFrom<String> for Version {
     fn try_from(value: String) -> Result<Self, Self::Error> {
         match value.split_once('/').ok_or("missing delimiter")? {
             ("history", ident) => Ok(Version::History {
-                identifier: HistoryIdentifier(Identifier::new(ident).map_err(|_| "invalid idenitifier")?),
+                identifier: HistoryIdentifier(Identifier::new(ident).map_err(|_| "invalid identifier")?),
             }),
             ("tag", ident) => Ok(Version::Tag {
-                identifier: TagIdentifier(Identifier::new(ident).map_err(|_| "invalid idenitifier")?),
+                identifier: TagIdentifier(Identifier::new(ident).map_err(|_| "invalid identifier")?),
             }),
             ("stream", "volatile") => Ok(Version::Volatile),
             ("stream", "unstable") => Ok(Version::Unstable),
