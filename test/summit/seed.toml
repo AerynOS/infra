@@ -22,4 +22,4 @@ priority = 20
 name = "recipes"
 summary = "Test recipes"
 uri = "https://github.com/AerynOS/recipes.git"
-branch = "2025-05-repo-rebuild"
+branch = "main"
