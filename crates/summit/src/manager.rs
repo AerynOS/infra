@@ -487,9 +487,65 @@ impl Manager {
 
         if let Some(event) = builder.update(message).await {
             match event {
-                builder::Event::Idle => {
-                    // Builder is available, lets try to queue a build on it
-                    return Ok(true);
+                builder::Event::StatusChanged(status) => {
+                    let mut reallocate_builds = false;
+                    let mut building = None;
+
+                    match status {
+                        builder::Status::Idle => {
+                            reallocate_builds = true;
+                        }
+                        builder::Status::Busy => {}
+                        builder::Status::Building { task } => {
+                            building = Some(task);
+                        }
+                        builder::Status::Disconnected => {}
+                    }
+
+                    // Check for stuck / stale builds on this builder that dont
+                    // match the current status and rebuild them.
+                    {
+                        let mut tx = self.state.service_db.begin().await?;
+
+                        let query = task::query(
+                            tx.as_mut(),
+                            task::query::Params::default().statuses([task::Status::Building]),
+                        )
+                        .await
+                        .context("query tasks")?;
+
+                        for task in query.tasks {
+                            // Skip tasks not on this builder
+                            if task.allocated_builder.is_none_or(|id| id != builder.endpoint) {
+                                continue;
+                            }
+
+                            // Skip the task currently being built
+                            if building.is_some_and(|id| id == task.id) {
+                                continue;
+                            }
+
+                            warn!(
+                                task_id = %task.id,
+                                build_id = %task.build_id,
+                                builder = %builder.endpoint,
+                                "Task stuck as building, but builder is no longer building it. Requeuing the task."
+                            );
+
+                            // This task isn't being built anymore but got stuck as building
+                            // (builder crashed / shut down / etc), so requeue it
+                            task::transition(&mut tx, task.id, task::Transition::Requeue, &self.queue)
+                                .await
+                                .context(format!("transition task {} to requeued", task.id))?;
+
+                            // Pick this task back up on another builder
+                            reallocate_builds = true;
+                        }
+
+                        tx.commit().await?;
+                    }
+
+                    return Ok(reallocate_builds);
                 }
                 builder::Event::BuildSucceeded {
                     task_id,

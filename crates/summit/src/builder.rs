@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, time::Duration};
 
 use chrono::{DateTime, Utc};
 use color_eyre::eyre::{Context, OptionExt, Result};
@@ -15,10 +15,12 @@ use service::{
         vessel::UploadTokenRequest,
     },
 };
-use tokio::sync::mpsc;
+use tokio::{sync::mpsc, time::Instant};
 use tracing::{debug, info, warn};
 
 use crate::{Task, config::Size, task};
+
+const REQUESTED_BUILD_ACK_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug)]
 pub enum Message {
@@ -48,7 +50,7 @@ pub enum Message {
 
 #[derive(Debug)]
 pub enum Event {
-    Idle,
+    StatusChanged(Status),
     BuildSucceeded {
         task_id: task::Id,
         collectables: Vec<Collectable>,
@@ -107,15 +109,15 @@ impl Builder {
 
         let (last_seen, building) = match self.connection {
             Some(Connection {
-                last_seen,
+                last_status_update,
                 status: Connected::Idle | Connected::Busy,
                 ..
-            }) => (Some(last_seen), None),
+            }) => (last_status_update, None),
             Some(Connection {
-                last_seen,
-                status: Connected::Building { task },
+                last_status_update,
+                status: Connected::BuildRequested { task, .. } | Connected::Building { task },
                 ..
-            }) => (Some(last_seen), Some(task)),
+            }) => (last_status_update, Some(task)),
             None => (None, None),
         };
 
@@ -147,7 +149,7 @@ impl Builder {
                 ..
             }) => Status::Busy,
             Some(Connection {
-                status: Connected::Building { task },
+                status: Connected::BuildRequested { task, .. } | Connected::Building { task },
                 ..
             }) => Status::Building { task },
             None => Status::Disconnected,
@@ -243,7 +245,10 @@ impl Builder {
             .await
             .context("send builder stream message")?;
 
-        connection.status = Connected::Building { task: queued.task.id };
+        connection.status = Connected::BuildRequested {
+            at: Instant::now(),
+            task: queued.task.id,
+        };
 
         info!("Task sent for build");
 
@@ -258,7 +263,7 @@ impl Builder {
 
                 self.connection = Some(Connection {
                     handle,
-                    last_seen: Utc::now(),
+                    last_status_update: None,
                     status: Connected::Idle,
                 });
             }
@@ -268,27 +273,51 @@ impl Builder {
                 self.connection = None;
             }
             Message::Status { now, building, task_id } => {
-                let mut event = None;
+                let mut first_update = false;
+                let previous_status = self.status();
 
                 if let Some(connection) = self.connection.as_mut() {
-                    connection.last_seen = now;
+                    if connection.last_status_update.is_none() {
+                        first_update = true;
+                    }
 
-                    // TODO: Invalidate tasks which still show as building
-                    // on this builder that aren't this one
+                    connection.last_status_update = Some(now);
+
                     connection.status = match (building, task_id) {
                         (true, Some(task)) => Connected::Building { task },
                         (true, None) => Connected::Busy,
                         (false, _) => {
-                            event = Some(Event::Idle);
+                            // Allow up to N duration to receive an ACK on a requested
+                            // build before considering it unprocessed builder side &
+                            // syncing back to reported status. This is to ensure we
+                            // don't process `idle` messages sent by the builder between
+                            // us assigning the build & the builder actually receiving it
+                            if let Connected::BuildRequested {
+                                task,
+                                at: build_requested_at,
+                            } = connection.status
+                                && build_requested_at.duration_since(Instant::now()) < REQUESTED_BUILD_ACK_TIMEOUT
+                            {
+                                debug!(
+                                    task_id = %task,
+                                    "Ignoring builder idle status race condition while waiting for requested build ack",
+                                );
 
-                            Connected::Idle
+                                return None;
+                            } else {
+                                Connected::Idle
+                            }
                         }
                     };
 
                     debug!(status = %connection.status, "Builder status updated");
                 }
 
-                return event;
+                let new_status = self.status();
+
+                if first_update || new_status != previous_status {
+                    return Some(Event::StatusChanged(new_status));
+                }
             }
             Message::BuildSucceeded {
                 task_id,
@@ -404,15 +433,19 @@ impl From<mpsc::Sender<BuilderStreamOutgoing>> for Handle {
 
 #[derive(Debug)]
 struct Connection {
-    pub handle: Handle,
-    pub last_seen: DateTime<Utc>,
-    pub status: Connected,
+    handle: Handle,
+    last_status_update: Option<DateTime<Utc>>,
+    status: Connected,
 }
 
-#[derive(Debug, strum::Display)]
+#[derive(Debug, Clone, Copy, strum::Display)]
 enum Connected {
     Idle,
     Busy,
+    BuildRequested {
+        at: Instant,
+        task: task::Id,
+    },
     #[strum(serialize = "Building {task}")]
     Building {
         task: task::Id,
