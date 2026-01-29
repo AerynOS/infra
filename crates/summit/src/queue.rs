@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use color_eyre::eyre::{self, Context, OptionExt, Result};
 use dag::Dag;
@@ -8,7 +8,7 @@ use moss::db::meta;
 use service::error;
 use sqlx::SqliteConnection;
 use tokio::task::spawn_blocking;
-use tracing::{debug, warn};
+use tracing::{debug, error, warn};
 
 use crate::{
     Project,
@@ -104,60 +104,72 @@ impl Queue {
             .await?
             .into_iter()
             .flatten()
-            .collect::<HashMap<_, _>>();
+            .collect::<BTreeMap<_, _>>();
 
         let mut dag = Dag::<task::Id>::new();
 
         for current in mapped_tasks.values() {
             let current_node = dag.add_node_or_get_index(&current.task.id);
 
-            // All other tasks which share the same arch & index
-            let common_tasks = mapped_tasks
+            // No deps to link
+            if current.meta.dependencies.is_empty() {
+                continue;
+            }
+
+            // All tasks that provide something that satisfies
+            // a dep of this task == a dependency of this task
+            mapped_tasks
                 .values()
+                // Intersections == dependency
+                //
+                // NOTE: I tried using a BTreeSet here but it slowed this function
+                // down from millis on 1500 items to seconds.
+                .filter(|a| {
+                    a.meta.providers.iter().any(|provider| {
+                        current
+                            .meta
+                            .dependencies
+                            .iter()
+                            .any(|dep| dep.kind == provider.kind && dep.name == provider.name)
+                    })
+                })
+                // Ensure tasks share the same arch & index
                 .filter(|a| {
                     current.task.id != a.task.id
                         && current.task.arch == a.task.arch
                         && current.remotes.contains(&a.index_uri)
                 })
-                .collect::<Vec<_>>();
+                // Connect each dependency to this task
+                .for_each(|dependency| {
+                    let dep_node = dag.add_node_or_get_index(&dependency.task.id);
 
-            // for dep in current
-            for dep in &current.meta.dependencies {
-                common_tasks
-                    .iter()
-                    .filter(|a| {
-                        a.meta
-                            .providers
-                            .iter()
-                            .any(|p| p.kind == dep.kind && p.name == dep.name)
-                    })
-                    .for_each(|provider| {
-                        let provider_node = dag.add_node_or_get_index(&provider.task.id);
-
-                        dag.add_edge(provider_node, current_node);
-                    });
-            }
+                    // We want to iterate the graph by dependencies
+                    // so we add the direction of the edge from
+                    // the dependent to the dependency
+                    if !dag.add_edge(current_node, dep_node) {
+                        // Cyclic connection
+                        error!(
+                            dependency = %dependency.task.build_id,
+                            dependent = %current.task.build_id,
+                            "Cyclic connection in queue DAG"
+                        );
+                    }
+                });
         }
 
-        let mut topo = dag
-            .topo()
-            .map(|id| mapped_tasks.get(id).cloned().expect("dag populated from mapped tasks"))
-            .collect::<Vec<_>>();
-
-        // Transpose the graph so we can search for
-        // all dependencies of a package
-        let transposed = dag.transpose();
-
-        for queued in topo.iter_mut() {
-            queued.dependencies = transposed
-                .dfs(dag.get_index(&queued.task.id).expect("topo derived from dag"))
-                // DFS always starts on current node, skip it
-                .skip(1)
-                .copied()
-                .collect();
-        }
-
-        self.0 = topo;
+        self.0 = mapped_tasks
+            .into_values()
+            .map(|mut queued| {
+                queued.dependencies = dag
+                    // DFS traverses deps with how we connected edges above
+                    .dfs(dag.get_index(&queued.task.id).expect("topo derived from dag"))
+                    // DFS always starts on current node, skip it
+                    .skip(1)
+                    .copied()
+                    .collect();
+                queued
+            })
+            .collect();
 
         debug!(num_tasks = self.0.len(), "Queue recomputed");
 
