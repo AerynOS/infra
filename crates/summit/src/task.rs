@@ -11,7 +11,7 @@ use service::endpoint;
 use sqlx::{SqliteConnection, prelude::FromRow};
 use strum::IntoEnumIterator;
 use tokio::task::spawn_blocking;
-use tracing::{Instrument, Span, debug, error, info, warn};
+use tracing::{Instrument, Span, debug, error, info, trace, warn};
 use uuid::Uuid;
 
 use crate::{Manager, Profile, Project, Repository, builder, config::Size, profile, project, repository};
@@ -834,7 +834,7 @@ async fn collect_missing<'a>(
                     if let Some((_, published)) = latest {
                         // distinguishing between > and == is the kind thing to do in logs
                         if published.source_release > meta.source_release {
-                            warn!(
+                            trace!(
                                 slug = slug(),
                                 published = version(published),
                                 recipe = version(&meta),
@@ -842,7 +842,7 @@ async fn collect_missing<'a>(
                             );
                             continue;
                         } else if published.source_release == meta.source_release {
-                            warn!(
+                            trace!(
                                 slug = slug(),
                                 published = version(published),
                                 recipe = version(&meta),
