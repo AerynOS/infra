@@ -88,24 +88,24 @@ impl Params {
     }
 
     fn where_clause(&self) -> String {
-        if self.id.is_some() || self.statuses.is_some() || self.search_query.is_some() {
-            let conditions = self
-                .id
-                .map(|_| "task_id = ?".to_owned())
-                .into_iter()
-                .chain(self.statuses.as_ref().map(|statuses| {
-                    let binds = ",?".repeat(statuses.len()).chars().skip(1).collect::<String>();
+        let conditions = self
+            .id
+            .map(|_| "task_id = ?".to_owned())
+            .into_iter()
+            .chain(self.statuses.as_ref().map(|statuses| {
+                let binds = ",?".repeat(statuses.len()).chars().skip(1).collect::<String>();
 
-                    format!("status IN ({binds})")
-                }))
-                .chain(self.source_path.is_some().then(|| "source_path = ?".to_owned()))
-                .chain(
-                    self.search_query
-                        .is_some()
-                        .then(|| "description LIKE ? COLLATE NOCASE".to_owned()),
-                )
-                .join(" AND ");
+                format!("status IN ({binds})")
+            }))
+            .chain(self.source_path.is_some().then(|| "source_path = ?".to_owned()))
+            .chain(
+                self.search_query
+                    .is_some()
+                    .then(|| "description LIKE ? COLLATE NOCASE".to_owned()),
+            )
+            .join(" AND ");
 
+        if !conditions.is_empty() {
             format!("WHERE {conditions}")
         } else {
             String::default()
