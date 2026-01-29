@@ -289,8 +289,8 @@ pub async fn transition(
             return Ok(false);
         }
         // Otherwise something is broken in our state machine for progressing
-        // and open task forward. Fail it so it & log the issue. This will
-        // require manual intervention & investigation to fix the broken flow.
+        // an open task forward. Fail it & log the issue. This will require manual
+        // intervention & investigation to fix the broken flow.
         else {
             error!("Invalid transition on an open task, marking as failed");
 

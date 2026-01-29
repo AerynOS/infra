@@ -260,8 +260,7 @@ async fn resume(sender: &Sender, paused: &mut bool) -> Result<()> {
     Ok(())
 }
 
-/// Remove sequential duplicate messages that'd can be collapsed
-/// to a single message
+/// Remove sequential duplicate messages that can be collapsed to a single message
 fn dedupe_messages(messages: Vec<Message>) -> Vec<Message> {
     fn is_dupe(a: &Message, b: &Message) -> bool {
         use Message::*;
