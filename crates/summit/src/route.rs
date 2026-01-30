@@ -25,9 +25,14 @@ pub struct State {
 pub async fn index(extract::State(state): extract::State<State>) -> Result<impl IntoResponse, Error> {
     let mut conn = state.service.service_db.acquire().await.context("acquire db conn")?;
 
-    let task::Query { tasks, .. } = task::query(&mut conn, task::query::Params::default().limit(10))
-        .await
-        .context("query tasks")?;
+    let task::Query { tasks, .. } = task::query(
+        &mut conn,
+        task::query::Params::default()
+            .limit(10)
+            .sort(task::query::SortField::Updated, task::query::SortOrder::Desc),
+    )
+    .await
+    .context("query tasks")?;
 
     let task::Query {
         tasks: building_tasks, ..

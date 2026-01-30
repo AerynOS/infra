@@ -17,6 +17,7 @@ use super::{Blocker, Id, Status, Task};
 pub enum SortField {
     Ended,
     Build,
+    Updated,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, strum::Display, strum::EnumString)]
@@ -156,6 +157,16 @@ impl Params {
                     END) DESC,
                     added DESC,
                     task_id DESC"
+            }
+            (Some(SortField::Updated), Some(SortOrder::Asc)) => {
+                "ORDER BY
+                updated ASC,
+                task_id DESC"
+            }
+            (Some(SortField::Updated), Some(SortOrder::Desc)) => {
+                "ORDER BY
+                updated DESC,
+                task_id DESC"
             }
             _ => "ORDER BY added DESC, task_id DESC",
         }
