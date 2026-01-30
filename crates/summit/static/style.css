@@ -264,14 +264,15 @@ header h1 {
     gap: 24px;
     text-align: center;
     margin-left: 12px;
+    margin-right: 12px;
     justify-content: space-between;
 }
 
 .tasks-total-filter__search {
-    background: #27262c;
-    border: 1px solid #3c3a46;
+    background: var(--light-background-color);
+    border: var(--light-border);
     border-radius: 3px;
-    color: white;
+    color: var(--body-text-color);
 }
 
 .tasks-total-filter__filter-sort {
@@ -548,6 +549,34 @@ header h1 {
     color: var(--body-text-color);
 }
 
+.queue-options {
+    padding: 24px 0;
+    color: var(--body-text-color);
+    display: flex;
+    flex-direction: row;
+    gap: 24px;
+    text-align: center;
+    margin-left: 12px;
+    margin-right: 12px;
+}
+
+.queue-options__search {
+    background: var(--light-background-color);
+    border: var(--light-border);
+    border-radius: 3px;
+    color: var(--body-text-color);
+}
+
+.queue-graph {
+    width: 100%;
+    margin: 0;
+    padding: 0;
+}
+
+.queue-graph svg {
+    display: block;
+}
+
 @media (max-width: 480px) {
     .page-link {
         padding: 0.4em 0.6em;
@@ -613,5 +642,11 @@ header h1 {
 
     .tasks-total-filter {
         margin-left: 0;
+        margin-right: 0;
+    }
+
+    .queue-options {
+        margin-left: 0;
+        margin-right: 0;
     }
 }

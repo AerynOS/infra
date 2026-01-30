@@ -101,6 +101,7 @@ async fn main() -> Result<()> {
             axum::Router::new()
                 .route("/", get(route::index))
                 .route("/tasks", get(route::tasks))
+                .route("/queue", get(route::queue))
                 .route_layer(middleware::from_fn(move |request: Request, next: Next| {
                     USE_MOCK_DATA.scope(use_mock_data, next.run(request))
                 }))

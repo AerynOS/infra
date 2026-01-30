@@ -11,7 +11,7 @@ use service::Endpoint;
 use snafu::Snafu;
 use strum::IntoEnumIterator;
 
-use crate::{manager, project, task, template};
+use crate::{manager, project, queue, task, template};
 
 pub fn state(service: service::State) -> State {
     State { service }
@@ -133,6 +133,18 @@ pub async fn tasks(
             total => task_query.total,
         },
     ))
+}
+
+pub async fn queue() -> impl IntoResponse {
+    let data = queue::JSON_VIEW.load();
+
+    template::render(
+        "queue.html.jinja",
+        minijinja::context! {
+            nodes => &data.nodes,
+            links => &data.links,
+        },
+    )
 }
 
 pub async fn fallback() -> impl IntoResponse {
