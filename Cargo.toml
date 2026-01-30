@@ -9,10 +9,10 @@ edition = "2024"
 rust-version = "1.88"
 
 [workspace.dependencies]
-dag = { git = "https://github.com/AerynOS/os-tools.git" }
-moss = { git = "https://github.com/AerynOS/os-tools.git" }
-stone = { git = "https://github.com/AerynOS/os-tools.git" }
-stone_recipe = { git = "https://github.com/AerynOS/os-tools.git" }
+dag = { git = "https://github.com/AerynOS/os-tools.git", branch = "task/expose-dag" }
+moss = { git = "https://github.com/AerynOS/os-tools.git", branch = "task/expose-dag" }
+stone = { git = "https://github.com/AerynOS/os-tools.git", branch = "task/expose-dag" }
+stone_recipe = { git = "https://github.com/AerynOS/os-tools.git", branch = "task/expose-dag" }
 
 arc-swap = "1.8.0"
 async-trait = "0.1.88"
@@ -50,9 +50,10 @@ tonic-prost = "0.14.1"
 tonic-prost-build = "0.14.1"
 tracing = "0.1.40"
 url = "2.5.2"
+petgraph = "0.8.2"
 
 clap = { version = "4.4", features = ["derive"] }
-derive_more = { version = "2.0.1", features = ["display", "from", "into"] }
+derive_more = { version = "2.0.1", features = ["display", "from", "into", "as_ref"] }
 ed25519-dalek = { version = "2.1.0", features = ["rand_core", "pkcs8", "pem"] }
 futures-util = { version = "0.3.30", default-features = false }
 jsonwebtoken = { version = "9.2.0", default-features = false }
@@ -121,3 +122,6 @@ opt-level = 2
 # -O2         : 1m29s = 261%
 # -O1 thinlto : 1m37s = 285%
 # -O2 thinlto : 1m48s = 317%
+
+[patch.crates-io]
+sqlx = { git = "https://github.com/tarkah/sqlx", branch = "task/sqlite3-version" }

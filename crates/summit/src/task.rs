@@ -188,6 +188,7 @@ pub struct Queued {
     pub index_uri: Uri,
     pub remotes: Vec<Uri>,
     pub dependencies: Vec<Id>,
+    pub depth: usize,
     pub size: Size,
 }
 

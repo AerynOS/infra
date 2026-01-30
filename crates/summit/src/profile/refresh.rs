@@ -9,6 +9,7 @@ use moss::{
     request,
 };
 use service::State;
+use stone::StoneDecodedPayload;
 use tokio::{
     fs::{self, File},
     io::AsyncWriteExt,
@@ -94,7 +95,7 @@ fn update_db(db: meta::Database, index_path: &Path) -> Result<()> {
     let packages = payloads
         .into_iter()
         .filter_map(|payload| {
-            if let stone::read::PayloadKind::Meta(meta) = payload {
+            if let StoneDecodedPayload::Meta(meta) = payload {
                 Some(meta)
             } else {
                 None
@@ -104,7 +105,7 @@ fn update_db(db: meta::Database, index_path: &Path) -> Result<()> {
             let meta = Meta::from_stone_payload(&payload.body).context("convert meta payload")?;
 
             let span = Span::current();
-            span.record("package", meta.name.as_ref());
+            span.record("package", meta.name.as_str());
 
             // Create id from hash of meta
             let hash = meta.hash.clone().ok_or_eyre("missing package hash")?;

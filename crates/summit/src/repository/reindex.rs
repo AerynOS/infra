@@ -4,6 +4,7 @@ use color_eyre::eyre::{Context, OptionExt, Result};
 use moss::{db::meta, package::Meta};
 use service::{State, git};
 use sqlx::SqliteConnection;
+use stone::StoneDecodedPayload;
 use tokio::{fs, task};
 use tracing::{info, trace};
 
@@ -136,7 +137,7 @@ fn install_manifest(db: &meta::Database, work_dir: &Path, manifest: &Path) -> Re
         .collect::<Result<Vec<_>, _>>()
         .context("read stone payloads")?;
 
-    let mut meta_payloads = payloads.iter().filter_map(stone::read::PayloadKind::meta);
+    let mut meta_payloads = payloads.iter().filter_map(StoneDecodedPayload::meta);
 
     // Seed metadata from the first payload
     let first = meta_payloads.next().ok_or_eyre("missing meta payload in manifest")?;

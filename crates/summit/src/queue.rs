@@ -1,10 +1,16 @@
-use std::collections::{BTreeMap, HashMap};
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::{Arc, LazyLock},
+};
 
+use arc_swap::ArcSwap;
 use color_eyre::eyre::{self, Context, OptionExt, Result};
 use dag::Dag;
 use futures_util::{StreamExt, TryStreamExt, stream};
 use itertools::Itertools;
 use moss::db::meta;
+use petgraph::{algo::dijkstra, graph::DiGraph, visit::EdgeRef};
+use serde_json::json;
 use service::error;
 use sqlx::SqliteConnection;
 use tokio::task::spawn_blocking;
@@ -17,8 +23,26 @@ use crate::{
     task::{self, TaskQueue},
 };
 
+/// Cached json view of the queue, used to render it on the frontend
+pub static JSON_VIEW: LazyLock<ArcSwap<JsonView>> = LazyLock::new(ArcSwap::default);
+
 #[derive(Default)]
 pub struct Queue(Vec<task::Queued>);
+
+#[derive(Debug)]
+pub struct JsonView {
+    pub nodes: serde_json::Value,
+    pub links: serde_json::Value,
+}
+
+impl Default for JsonView {
+    fn default() -> Self {
+        Self {
+            nodes: json!([]),
+            links: json!([]),
+        }
+    }
+}
 
 impl Queue {
     #[tracing::instrument(name = "recompute_queue", skip_all)]
@@ -95,8 +119,10 @@ impl Queue {
                         origin_uri: repo.origin_uri.clone(),
                         index_uri: profile.index_uri.clone(),
                         remotes,
-                        dependencies: vec![],
                         size,
+                        // Calulated via DAG
+                        dependencies: vec![],
+                        depth: 0,
                     },
                 )))
             })
@@ -160,16 +186,16 @@ impl Queue {
         self.0 = mapped_tasks
             .into_values()
             .map(|mut queued| {
-                queued.dependencies = dag
-                    // DFS traverses deps with how we connected edges above
-                    .dfs(dag.get_index(&queued.task.id).expect("topo derived from dag"))
-                    // DFS always starts on current node, skip it
-                    .skip(1)
-                    .copied()
-                    .collect();
+                let (deps, depth) = deps_and_depth(queued.task.id, dag.as_ref());
+
+                queued.dependencies = deps;
+                queued.depth = depth;
+
                 queued
             })
             .collect();
+
+        JSON_VIEW.store(Arc::new(cache_json_view(&self.0, &dag)));
 
         debug!(num_tasks = self.0.len(), "Queue recomputed");
 
@@ -195,4 +221,52 @@ impl TaskQueue for Queue {
             .map(|queued| queued.task.id)
             .collect()
     }
+}
+
+fn deps_and_depth(node: task::Id, graph: &DiGraph<task::Id, ()>) -> (Vec<task::Id>, usize) {
+    let node_idx = graph.node_indices().find(|i| graph[*i] == node).unwrap();
+
+    let mut map = dijkstra(graph, node_idx, None, |_| 1);
+    map.remove(&node_idx);
+
+    let depth = map.values().copied().max().unwrap_or_default() as usize;
+    let deps = map.into_keys().map(|i| graph[i]).collect::<Vec<_>>();
+
+    (deps, depth)
+}
+
+fn cache_json_view(nodes: &[task::Queued], dag: &Dag<task::Id>) -> JsonView {
+    let nodes = serde_json::Value::Array(
+        nodes
+            .iter()
+            .map(|node| {
+                json!({
+                    "id": node.task.id,
+                    "package": node.meta.id().to_string(),
+                    "name": node.meta.name.to_string(),
+                    "depth": node.depth,
+                    "dependencies": node.dependencies,
+                })
+            })
+            .collect(),
+    );
+    let links = serde_json::Value::Array(
+        dag.as_ref()
+            .node_indices()
+            .flat_map(|node| {
+                let source = dag.as_ref()[node];
+
+                dag.as_ref().edges(node).map(move |edge| {
+                    let target = dag.as_ref()[edge.target()];
+
+                    json!({
+                        "source": source,
+                        "target": target,
+                    })
+                })
+            })
+            .collect(),
+    );
+
+    JsonView { nodes, links }
 }
