@@ -155,8 +155,7 @@ pub enum Transition {
     },
     /// Task has been cancelled
     ///
-    /// Only allowed from an "in-progress" status
-    /// like `building` & `publishing`
+    /// Only allowed from an "open" status
     Cancelled,
     /// Task needs to be retried
     ///
@@ -271,8 +270,8 @@ pub async fn transition(
         Transition::Complete => matches!(task.status, Status::Publishing),
         // Only open tasks can enter a failure state
         Transition::Failed { .. } => task.status.is_open(),
-        // We can only cancel things that are currently in-progress
-        Transition::Cancelled => task.status.is_in_progress(),
+        // We can only cancel things that are currently open
+        Transition::Cancelled => task.status.is_open(),
         // We can only retry things that are closed but not already completed
         Transition::Retry => task.status.is_closed() && !matches!(task.status, Status::Completed),
         // We can only requeue something that is currently being built
@@ -406,6 +405,12 @@ pub async fn transition(
             Box::pin(block_all(tx, task.id, queue))
                 .await
                 .context("block all tasks")?;
+
+            // `cancelled` can be reached from `blocked` so remove any blockers
+            // for this task if they exist since they're no longer relevant
+            if !task.blocked_by.is_empty() {
+                clear_blockers(tx, task.id).await.context("clear blockers")?;
+            }
 
             set_status(tx, task.id, Status::Cancelled).await.context("set status")?;
 
