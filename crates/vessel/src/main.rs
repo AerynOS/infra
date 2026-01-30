@@ -3,7 +3,9 @@ use std::{net::IpAddr, path::PathBuf};
 use channel::DEFAULT_CHANNEL;
 use clap::Parser;
 use color_eyre::eyre::Context;
+use service::error;
 use service::{Server, endpoint::Role};
+use tracing::error;
 
 pub use self::config::Config;
 pub use self::package::Package;
@@ -39,9 +41,9 @@ async fn main() -> Result<()> {
     migration::run_all(&state).await.context("run migrations")?;
 
     if let Some(directory) = import {
-        channel::import_directory(&state, DEFAULT_CHANNEL, directory)
-            .await
-            .context("import")?;
+        if let Err(err) = channel::import_directory(&state, DEFAULT_CHANNEL, directory).await {
+            error!(error = error::chain(&*err), "Failed to import directory");
+        }
     } else {
         channel::reindex_latest(&state, DEFAULT_CHANNEL)
             .await
