@@ -94,7 +94,7 @@ async fn main() -> Result<()> {
             routes
                 // Allow other services to enroll w/ summit
                 .add_service(endpoint::service(issuer, state.service_db.clone(), downstreams))
-                .add_service(grpc::service(state.clone(), worker_sender.clone()));
+                .add_service(grpc::service(state.clone(), worker_sender));
         })
         .with_http(
             (host, http_port),
@@ -107,7 +107,7 @@ async fn main() -> Result<()> {
                 .nest_service("/static", serve_static)
                 .nest_service("/logs", serve_logs)
                 .fallback(get(route::fallback))
-                .with_state(route::state(state.clone(), worker_sender.clone())),
+                .with_state(route::state(state.clone())),
         )
         .start()
         .await?;

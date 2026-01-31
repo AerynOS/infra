@@ -1,17 +1,17 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
-use color_eyre::eyre::{self, Context, Result};
+use color_eyre::eyre::{self, Context, OptionExt, Result};
 use derive_more::derive::{Display, From, Into};
 use http::Uri;
 use moss::{db::meta, dependency, package::Meta};
 use serde::{Deserialize, Serialize};
 use service::database::Transaction;
 use service::endpoint;
-use sqlx::prelude::FromRow;
+use sqlx::{SqliteConnection, prelude::FromRow};
 use strum::IntoEnumIterator;
 use tokio::task::spawn_blocking;
-use tracing::{Instrument, debug, warn};
+use tracing::{Instrument, Span, debug, error, info, trace, warn};
 use uuid::Uuid;
 
 use crate::{Manager, Profile, Project, Repository, builder, config::Size, profile, project, repository};
@@ -23,7 +23,9 @@ pub mod query;
 
 use self::create::create;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, From, Into, Display, FromRow)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, From, Into, Display, FromRow,
+)]
 pub struct Id(i64);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -50,7 +52,7 @@ pub struct Task {
     /// Failed dependencies that stop this task from getting executed.
     ///
     /// Items are blocker IDs consisting of source ID, arch, project ID and repo ID.
-    pub blocked_by: Vec<String>,
+    pub blocked_by: Vec<Blocker>,
 
     pub added: DateTime<Utc>,
     pub started: Option<DateTime<Utc>>,
@@ -67,14 +69,18 @@ pub struct Task {
 pub enum Status {
     /// Freshly created task
     New,
-    /// Failed execution or evaluation
-    Failed,
-    /// Cancelled execution
-    Cancelled,
+    /// This build must remain blocked until its block
+    /// criteria have been met, i.e. the dependent that
+    /// caused the failure has been fixed.
+    Blocked,
     /// This task is now building
     Building,
     /// Now publishing to Vessel
     Publishing,
+    /// Job successfully completed!
+    Completed,
+    /// Failed execution or evaluation
+    Failed,
     /// Task was superseded by a newer task.
     ///
     /// If this task was previously blocked, it must be
@@ -82,20 +88,20 @@ pub enum Status {
     /// superseding task has been marked blocked by the blocker
     /// in a new row in the task_blockers table.
     Superseded,
-    /// Job successfully completed!
-    Completed,
-    /// This build must remain blocked until its block
-    /// criteria have been met, i.e. the dependent that
-    /// caused the failure has been fixed.
-    Blocked,
+    /// Cancelled execution
+    Cancelled,
 }
 
 impl Status {
-    pub fn is_open(&self) -> bool {
-        !matches!(
+    pub fn is_closed(&self) -> bool {
+        matches!(
             self,
             Status::Completed | Status::Failed | Status::Cancelled | Status::Superseded
         )
+    }
+
+    pub fn is_open(&self) -> bool {
+        !self.is_closed()
     }
 
     pub fn is_in_progress(&self) -> bool {
@@ -105,6 +111,72 @@ impl Status {
     pub fn open() -> impl Iterator<Item = Status> {
         Status::iter().filter(Status::is_open)
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, strum::Display)]
+#[strum(serialize_all = "kebab-case")]
+pub enum Transition {
+    /// Task is blocked by a specific blocked
+    ///
+    /// Must transition from open but not-inprogress statuses
+    Blocked { blocker: Blocker },
+    /// Task is unblocked by a specific blocker
+    ///
+    /// Must transition from `blocked`
+    Unblocked { blocker: Blocker },
+    /// Task has been superseded
+    ///
+    /// Must transition from open but not-inprogress statuses
+    Superseded { by: Id },
+    /// Task is building
+    ///
+    /// Must transition from `new`
+    Building { builder: endpoint::Id },
+    /// Task is publishing
+    ///
+    /// Must transition from `building`
+    /// where we have stashed the build logs
+    Publishing {
+        builder: endpoint::Id,
+        stashed_build_logs: PathBuf,
+    },
+    /// Task is complete
+    ///
+    /// Must transition from `publishing`
+    Complete,
+    /// Task is failed
+    ///
+    /// Can transition from any open status
+    // TODO: Add failure reason / record in DB / display on UI
+    Failed {
+        // If caused by a build failure, we will have stashed
+        // logs from the failed build
+        stashed_build_logs: Option<PathBuf>,
+    },
+    /// Task has been cancelled
+    ///
+    /// Only allowed from an "open" status
+    Cancelled,
+    /// Task needs to be retried
+    ///
+    /// Only allowed from a non-`complete` closed status
+    Retry,
+    /// Task is being requeued
+    ///
+    /// Only allowed from `building` status
+    Requeue,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, derive_more::AsRef, derive_more::Display)]
+pub struct Blocker(String);
+
+/// A queue of tasks
+pub trait TaskQueue: Send + Sync + 'static {
+    /// Get a queued task from the queue
+    fn get(&self, task_id: Id) -> Option<&Queued>;
+
+    /// Get all tasks dependent on the provided `task_id`
+    fn dependents(&self, task_id: Id) -> Vec<Id>;
 }
 
 #[derive(Debug, Clone)]
@@ -117,6 +189,254 @@ pub struct Queued {
     pub remotes: Vec<Uri>,
     pub dependencies: Vec<Id>,
     pub size: Size,
+}
+
+impl Queued {
+    /// Returns the associated [`Blocker`] of this task
+    pub fn blocker(&self) -> Blocker {
+        Blocker(format!(
+            "{}_{}@{}/{}",
+            self.meta.source_id, self.task.arch, self.task.project_id, self.task.repository_id
+        ))
+    }
+}
+
+pub async fn get(conn: &mut SqliteConnection, id: Id) -> Result<Task> {
+    query(conn, query::Params::default().id(id))
+        .await
+        .context("query for task")?
+        .tasks
+        .into_iter()
+        .next()
+        .ok_or_eyre(format!("task doesn't exist: {id}"))
+}
+
+/// Transition the task from one status to another
+#[tracing::instrument(skip_all, fields(transition_task_id = %id, %transition, transition_build_id, transition_prev_status))]
+pub async fn transition(
+    tx: &mut Transaction,
+    id: Id,
+    mut transition: Transition,
+    queue: &impl TaskQueue,
+) -> Result<bool> {
+    let span = Span::current();
+
+    // Get current view on task
+    let task = get(tx.as_mut(), id).await.context("get task")?;
+
+    span.record("transition_build_id", &task.build_id);
+    span.record("transition_prev_status", task.status.to_string());
+
+    // Ensure this transition is valid and if not,
+    // we mark the task as failed since our state
+    // machine is somehow borked & needs to be fixed
+    let is_valid_transition = match &transition {
+        // We can only block things still waiting to get built
+        Transition::Blocked { .. } => task.status.is_open() && !task.status.is_in_progress(),
+        // We can only unblock things that are blocked
+        Transition::Unblocked { blocker } => {
+            // Ensure it's actually blocked by this
+            if matches!(task.status, Status::Blocked) && !task.blocked_by.contains(blocker) {
+                error!(
+                    %blocker,
+                    "Attempting unblock, but task is not blocked by this blocker"
+                );
+
+                false
+            } else {
+                matches!(task.status, Status::Blocked)
+            }
+        }
+        // We can only supersede things still waiting to get built
+        Transition::Superseded { .. } => task.status.is_open() && !task.status.is_in_progress(),
+        // Must transition from a new unblocked task
+        Transition::Building { .. } => matches!(task.status, Status::New),
+        // Must transition from a building task
+        Transition::Publishing { builder, .. } => {
+            // Ensure is transitioning on the correct builder
+            if matches!(task.status, Status::Building) && task.allocated_builder.is_none_or(|b| b != *builder) {
+                error!(
+                    requested_builder = %builder,
+                    allocated_builder = task.allocated_builder.as_ref().map(ToString::to_string),
+                    "Attempting to transition from building to publishing, but received request from non-allocated builder"
+                );
+
+                false
+            } else {
+                matches!(task.status, Status::Building)
+            }
+        }
+        // Must transition from a publishing task
+        Transition::Complete => matches!(task.status, Status::Publishing),
+        // Only open tasks can enter a failure state
+        Transition::Failed { .. } => task.status.is_open(),
+        // We can only cancel things that are currently open
+        Transition::Cancelled => task.status.is_open(),
+        // We can only retry things that are closed but not already completed
+        Transition::Retry => task.status.is_closed() && !matches!(task.status, Status::Completed),
+        // We can only requeue something that is currently being built
+        Transition::Requeue => matches!(task.status, Status::Building),
+    };
+
+    if !is_valid_transition {
+        // Trying to cancel / fail / complete / supersede an already
+        // cancelled / failed / completed / superseded task
+        //
+        // We don't want to override that status to failed but instead
+        // log the error & return
+        if task.status.is_closed() {
+            error!("Invalid transition on a closed task");
+
+            return Ok(false);
+        }
+        // Otherwise something is broken in our state machine for progressing
+        // an open task forward. Fail it & log the issue. This will require manual
+        // intervention & investigation to fix the broken flow.
+        else {
+            error!("Invalid transition on an open task, marking as failed");
+
+            transition = Transition::Failed {
+                stashed_build_logs: None,
+            };
+        }
+    }
+
+    match transition {
+        Transition::Blocked { blocker } => {
+            add_blocker(tx, task.id, &blocker).await.context("add blocker")?;
+
+            // Only update status if not already blocked
+            if !matches!(task.status, Status::Blocked) {
+                set_status(tx, task.id, Status::Blocked).await.context("set status")?;
+            }
+
+            warn!(blocked_by = %blocker, "Task blocked");
+        }
+        Transition::Unblocked { blocker } => {
+            let remaining = task.blocked_by.iter().filter(|b| **b != blocker).count();
+
+            remove_blocker(tx, task.id, &blocker).await.context("remove blocker")?;
+
+            if remaining > 0 {
+                info!(
+                    unblocked_by = %blocker,
+                    %remaining,
+                    "Task unblocked with remaining blockers"
+                );
+            } else {
+                set_status(tx, task.id, Status::New).await.context("set status")?;
+
+                info!(unblocked_by = %blocker, "Task fully unblocked");
+            }
+        }
+        Transition::Superseded { by } => {
+            // `superseded` can be reached from `blocked` so remove any blockers
+            // for this task if they exist since they're no longer relevant
+            if !task.blocked_by.is_empty() {
+                clear_blockers(tx, task.id).await.context("clear blockers")?;
+            }
+
+            // No need to add blockers on dependents since the new incoming
+            // task replaces this one & those tasks will depend on it
+
+            set_status(tx, task.id, Status::Superseded)
+                .await
+                .context("set status")?;
+
+            info!(superseded_by = %by, "Task marked as superseded");
+        }
+        Transition::Building { builder } => {
+            set_allocated_builder(tx, task.id, Some(builder))
+                .await
+                .context("set status")?;
+            set_status(tx, task.id, Status::Building).await.context("set status")?;
+
+            info!(%builder, "Task marked as building");
+        }
+        Transition::Publishing { stashed_build_logs, .. } => {
+            set_log_path(tx, task.id, Some(&stashed_build_logs))
+                .await
+                .context("set status")?;
+            set_status(tx, task.id, Status::Publishing)
+                .await
+                .context("set status")?;
+
+            info!("Task marked as publishing");
+        }
+        Transition::Complete => {
+            // Unblock any queued items blocked by this now that it's complete
+            Box::pin(unblock_all(tx, task.id, queue))
+                .await
+                .context("unblock all tasks")?;
+
+            set_status(tx, task.id, Status::Completed).await.context("set status")?;
+
+            info!("Task marked as complete");
+        }
+        Transition::Failed { stashed_build_logs } => {
+            // Block all queued tasks dependent on this one since it failed
+            // to build. A new task needs to be submitted that succeeds to
+            // unblock these.
+            if task.status.is_open() {
+                Box::pin(block_all(tx, task.id, queue))
+                    .await
+                    .context("block all tasks")?;
+            }
+
+            // `failed` can be reached from `blocked` so remove any blockers
+            // for this task if they exist since they're no longer relevant
+            if !task.blocked_by.is_empty() {
+                clear_blockers(tx, task.id).await.context("clear blockers")?;
+            }
+
+            // If this failed from within a build, we will have logs to stash
+            if let Some(logs) = stashed_build_logs {
+                set_log_path(tx, task.id, Some(&logs)).await.context("set status")?;
+            }
+
+            set_status(tx, task.id, Status::Failed).await.context("set status")?;
+
+            warn!("Task marked as failed");
+        }
+        Transition::Cancelled => {
+            // Block all queued tasks dependent on this one since it was cancelled.
+            // Cancelling is typically required for stuck builds, so this is akin
+            // to "failing" and should block dependent tasks
+            Box::pin(block_all(tx, task.id, queue))
+                .await
+                .context("block all tasks")?;
+
+            // `cancelled` can be reached from `blocked` so remove any blockers
+            // for this task if they exist since they're no longer relevant
+            if !task.blocked_by.is_empty() {
+                clear_blockers(tx, task.id).await.context("clear blockers")?;
+            }
+
+            set_status(tx, task.id, Status::Cancelled).await.context("set status")?;
+
+            info!("Task marked as cancelled");
+        }
+        Transition::Retry => {
+            // Clear all previously associated data from the last time it was built
+            // and set as New to kick off the full task lifecycle again
+            set_allocated_builder(tx, task.id, None).await.context("set status")?;
+            set_log_path(tx, task.id, None).await.context("set status")?;
+            set_status(tx, task.id, Status::New).await.context("set status")?;
+
+            info!("Task marked as new for retry");
+        }
+        Transition::Requeue => {
+            // Clear all previously associated data from the last time it was built
+            // and set as New to kick off the full task lifecycle again
+            set_allocated_builder(tx, task.id, None).await.context("set status")?;
+            set_log_path(tx, task.id, None).await.context("set status")?;
+            set_status(tx, task.id, Status::New).await.context("set status")?;
+
+            info!("Task requeued");
+        }
+    }
+
+    Ok(is_valid_transition)
 }
 
 #[tracing::instrument(name = "fix_and_create_tasks", skip_all, fields(repository = %repo.name))]
@@ -136,13 +456,15 @@ pub async fn fix_and_create(
 
     for task in &collect_missing(manager, project, repo, repo_db).await? {
         // FIXME: do a batch insert?
-        create(tx, project, repo, task).await.context("create task")?;
+        create(tx, project, repo, task, &manager.queue)
+            .await
+            .context("create task")?;
     }
 
     // Move tasks no longer in the recipe repo to failed after
     // adding new tasks so that superseded tasks are marked as such
     // and only truly orphaned tasks remain
-    fix_orphaned(tx, project, repo, repo_db)
+    fix_orphaned(tx, project, repo, repo_db, &manager.queue)
         .await
         .context("fix orphaned tasks")?;
 
@@ -175,8 +497,8 @@ async fn fix_stuck_building(
                         false
                     } else {
                         warn!(
-                            task = %task.id,
-                            build = task.build_id,
+                            task_id = %task.id,
+                            build_id = task.build_id,
                             builder = %endpoint,
                             "Builder is building another task, requeuing stuck build"
                         );
@@ -186,8 +508,8 @@ async fn fix_stuck_building(
                 }
                 Some(builder::Status::Busy) => {
                     warn!(
-                        task = %task.id,
-                        build = task.build_id,
+                        task_id = %task.id,
+                        build_id = task.build_id,
                         builder = %endpoint,
                         "Builder is busy with something else, requeuing stuck build"
                     );
@@ -196,8 +518,8 @@ async fn fix_stuck_building(
                 }
                 Some(builder::Status::Idle) => {
                     warn!(
-                        task = %task.id,
-                        build = task.build_id,
+                        task_id = %task.id,
+                        build_id = task.build_id,
                         builder = %endpoint,
                         "Builder is idle, requeuing stuck build"
                     );
@@ -209,8 +531,8 @@ async fn fix_stuck_building(
 
                     if build_duration > DISCONNECTED_TIMEOUT {
                         warn!(
-                            task = %task.id,
-                            build = task.build_id,
+                            task_id = %task.id,
+                            build_id = task.build_id,
                             builder = %endpoint,
                             "Builder is disconnected & build is older than {} minutes, requeuing stuck build",
                             DISCONNECTED_TIMEOUT.num_minutes()
@@ -224,8 +546,8 @@ async fn fix_stuck_building(
             }
         } else {
             warn!(
-                task = %task.id,
-                build = task.build_id,
+                task_id = %task.id,
+                build_id = task.build_id,
                 "Building task has no set allocated builder, requeuing"
             );
 
@@ -233,7 +555,9 @@ async fn fix_stuck_building(
         };
 
         if requeue {
-            set_status(tx, task.id, Status::New).await.context("set task status")?;
+            transition(tx, task.id, Transition::Requeue, &manager.queue)
+                .await
+                .context(format!("transition task {} to requeued", task.id))?;
         }
     }
 
@@ -250,6 +574,7 @@ async fn fix_orphaned(
     project: &Project,
     repo: &Repository,
     repo_db: &meta::Database,
+    queue: &impl TaskQueue,
 ) -> Result<()> {
     let pending_tasks = query(tx.as_mut(), query::Params::default().statuses(Some(Status::New)))
         .await
@@ -269,14 +594,21 @@ async fn fix_orphaned(
 
         if is_missing {
             warn!(
-                task = %task.id,
-                build = task.build_id,
+                task_id = %task.id,
+                build_id = task.build_id,
                 "Task no longer exists in repository, marking as failed"
             );
 
-            set_status(tx, task.id, Status::Failed)
-                .await
-                .context("set task status")?;
+            transition(
+                tx,
+                task.id,
+                Transition::Failed {
+                    stashed_build_logs: None,
+                },
+                queue,
+            )
+            .await
+            .context(format!("transition task {} to failed", task.id))?;
         }
     }
 
@@ -284,7 +616,7 @@ async fn fix_orphaned(
 }
 
 /// Set the status of a task_id in the db
-pub async fn set_status(tx: &mut Transaction, task_id: Id, status: Status) -> Result<()> {
+async fn set_status(tx: &mut Transaction, task_id: Id, status: Status) -> Result<()> {
     let ended = if !status.is_open() {
         ", ended = unixepoch()"
     }
@@ -326,7 +658,7 @@ pub async fn set_status(tx: &mut Transaction, task_id: Id, status: Status) -> Re
 }
 
 /// Set the path to the task logfile in the filesystem
-pub async fn set_log_path(tx: &mut Transaction, task_id: Id, log_path: &Path) -> Result<()> {
+async fn set_log_path(tx: &mut Transaction, task_id: Id, log_path: Option<&Path>) -> Result<()> {
     sqlx::query(
         "
         UPDATE task
@@ -336,7 +668,7 @@ pub async fn set_log_path(tx: &mut Transaction, task_id: Id, log_path: &Path) ->
         WHERE task_id = ?;
         ",
     )
-    .bind(log_path.display().to_string())
+    .bind(log_path.map(|p| p.display().to_string()))
     .bind(i64::from(task_id))
     .execute(tx.as_mut())
     .await
@@ -348,7 +680,7 @@ pub async fn set_log_path(tx: &mut Transaction, task_id: Id, log_path: &Path) ->
 }
 
 /// Allocate a builder for a task
-pub async fn set_allocated_builder(tx: &mut Transaction, task_id: Id, builder: Option<endpoint::Id>) -> Result<()> {
+async fn set_allocated_builder(tx: &mut Transaction, task_id: Id, builder: Option<endpoint::Id>) -> Result<()> {
     sqlx::query(
         "
         UPDATE task
@@ -369,10 +701,7 @@ pub async fn set_allocated_builder(tx: &mut Transaction, task_id: Id, builder: O
     Ok(())
 }
 
-/// block a task Id with a blocker string and insert it into the task_blockers table
-pub async fn block(tx: &mut Transaction, task_id: Id, blocker: &str) -> Result<()> {
-    set_status(tx, task_id, Status::Blocked).await?;
-
+async fn add_blocker(tx: &mut Transaction, task_id: Id, blocker: &Blocker) -> Result<()> {
     let _ = sqlx::query(
         "
         INSERT INTO task_blockers (task_id, blocker)
@@ -381,18 +710,14 @@ pub async fn block(tx: &mut Transaction, task_id: Id, blocker: &str) -> Result<(
         ",
     )
     .bind(i64::from(task_id))
-    .bind(blocker)
+    .bind(blocker.as_ref())
     .execute(tx.as_mut())
-    .await
-    .context("add blocker={blocker:?} for task_id={task_id:?}")?;
-
-    debug!("add blocker={blocker:?} for task_id={task_id:?}");
+    .await?;
 
     Ok(())
 }
 
-/// Unblock a task Id previously blocked by blocker string from the task_blockers table
-pub async fn unblock(tx: &mut Transaction, task_id: Id, blocker: &str) -> Result<usize> {
+async fn remove_blocker(tx: &mut Transaction, task_id: Id, blocker: &Blocker) -> Result<()> {
     let _ = sqlx::query(
         "
         DELETE FROM task_blockers
@@ -400,32 +725,44 @@ pub async fn unblock(tx: &mut Transaction, task_id: Id, blocker: &str) -> Result
         ",
     )
     .bind(i64::from(task_id))
-    .bind(blocker)
+    .bind(blocker.as_ref())
     .execute(tx.as_mut())
     .await?;
 
-    let remaining: u32 = sqlx::query_scalar(
+    Ok(())
+}
+
+async fn clear_blockers(tx: &mut Transaction, task_id: Id) -> Result<()> {
+    let _ = sqlx::query(
         "
-        SELECT COUNT(*)
-        FROM task_blockers
+        DELETE FROM task_blockers
         WHERE task_id = ?;
         ",
     )
     .bind(i64::from(task_id))
-    .fetch_one(tx.as_mut())
+    .execute(tx.as_mut())
     .await?;
 
-    debug!("remove blocker={blocker:?} for task_id={task_id:?} ({remaining:?} blockers remain)");
+    Ok(())
+}
 
-    if remaining > 0 {
-        set_status(tx, task_id, Status::Blocked).await?;
-        debug!(%task_id, "remains blocked by {remaining:?} blockers");
-    } else {
-        set_status(tx, task_id, Status::New).await?;
-        debug!(%task_id, "is now unblocked ({remaining:?} blockers remain)");
-    }
+/// Returns the task blocked by this [`Blocker`]
+pub async fn blocked(conn: &mut SqliteConnection, blocker: &Blocker) -> Result<Vec<Id>> {
+    let tasks = sqlx::query_as(
+        "
+        SELECT
+          task_id
+        FROM
+          task_blockers
+        WHERE
+          blocker = ?;
+        ",
+    )
+    .bind(&blocker.0)
+    .fetch_all(conn)
+    .await?;
 
-    Ok(remaining as usize)
+    Ok(tasks)
 }
 
 struct MissingTask<'a> {
@@ -504,7 +841,7 @@ async fn collect_missing<'a>(
                     if let Some((_, published)) = latest {
                         // distinguishing between > and == is the kind thing to do in logs
                         if published.source_release > meta.source_release {
-                            warn!(
+                            trace!(
                                 slug = slug(),
                                 published = version(published),
                                 recipe = version(&meta),
@@ -512,7 +849,7 @@ async fn collect_missing<'a>(
                             );
                             continue;
                         } else if published.source_release == meta.source_release {
-                            warn!(
+                            trace!(
                                 slug = slug(),
                                 published = version(published),
                                 recipe = version(&meta),
@@ -568,4 +905,46 @@ async fn collect_missing<'a>(
 
 fn version(meta: &Meta) -> String {
     format!("{}-{}", meta.version_identifier, meta.source_release)
+}
+
+#[tracing::instrument(skip_all)]
+async fn block_all(tx: &mut Transaction, task_id: Id, queue: &impl TaskQueue) -> Result<()> {
+    let task_blocker = queue.get(task_id).ok_or_eyre("task missing from queue")?.blocker();
+
+    for dependent in queue.dependents(task_id) {
+        transition(
+            tx,
+            dependent,
+            Transition::Blocked {
+                blocker: task_blocker.clone(),
+            },
+            queue,
+        )
+        .await
+        .context(format!("transition task {dependent} to blocked"))?;
+    }
+
+    Ok(())
+}
+
+#[tracing::instrument(skip_all)]
+async fn unblock_all(tx: &mut Transaction, task_id: Id, queue: &impl TaskQueue) -> Result<()> {
+    let task_blocker = queue.get(task_id).ok_or_eyre("task missing from queue")?.blocker();
+
+    let all_blocked = blocked(tx.as_mut(), &task_blocker).await.context("get blocked tasks")?;
+
+    for blocked in all_blocked {
+        transition(
+            tx,
+            blocked,
+            Transition::Unblocked {
+                blocker: task_blocker.clone(),
+            },
+            queue,
+        )
+        .await
+        .context(format!("transition task {blocked} to unblocked"))?;
+    }
+
+    Ok(())
 }

@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use http::Extensions;
 use service::{
-    endpoint,
+    Account, account, database, endpoint,
     grpc::{
         self,
         summit::{
@@ -284,7 +284,7 @@ async fn resume(state: Arc<State>, request: tonic::Request<()>) -> Result<(), Er
     Ok(())
 }
 
-#[tracing::instrument(skip_all, fields(endpoint))]
+#[tracing::instrument(skip_all, fields(endpoint, public_key))]
 async fn builder(
     state: Arc<State>,
     extensions: Extensions,
@@ -305,12 +305,30 @@ async fn builder(
         .parse::<endpoint::Id>()
         .context(InvalidEndpointSnafu)?;
 
+    let account_id = account::Id::from(token.decoded.payload.account_id);
+    let account = Account::get(
+        state
+            .service
+            .service_db
+            .acquire()
+            .await
+            .context(AcquireDbConnSnafu)?
+            .as_mut(),
+        account_id,
+    )
+    .await
+    .context(GetAccountSnafu { account_id })?;
+
+    let public_key = account.public_key;
+
     span.record("endpoint", endpoint_id.to_string());
+    span.record("public_key", public_key.to_string());
 
     let handle = builder::Handle::from(sender);
 
     let _ = state.worker.send(worker::Message::Builder(
         endpoint_id,
+        public_key.clone(),
         builder::Message::Connected(handle),
     ));
 
@@ -326,6 +344,7 @@ async fn builder(
                 builder_stream_incoming::Event::Status(BuilderStatus { building, task_id }) => {
                     let _ = state.worker.send(worker::Message::Builder(
                         endpoint_id,
+                        public_key.clone(),
                         builder::Message::Status {
                             now: Utc::now(),
                             building,
@@ -334,15 +353,6 @@ async fn builder(
                     ));
                 }
                 builder_stream_incoming::Event::BuildStarted(task_id) => {
-                    let _ = state.worker.send(worker::Message::Builder(
-                        endpoint_id,
-                        builder::Message::Status {
-                            now: Utc::now(),
-                            building: true,
-                            task_id: Some((task_id as i64).into()),
-                        },
-                    ));
-
                     let parent = state.service.state_dir.join("logs").join(task_id.to_string());
 
                     let _ = fs::remove_dir_all(&parent).await;
@@ -368,6 +378,7 @@ async fn builder(
 
                     let _ = state.worker.send(worker::Message::Builder(
                         endpoint_id,
+                        public_key.clone(),
                         builder::Message::BuildSucceeded {
                             task_id: (task_id as i64).into(),
                             collectables,
@@ -386,6 +397,7 @@ async fn builder(
 
                     let _ = state.worker.send(worker::Message::Builder(
                         endpoint_id,
+                        public_key.clone(),
                         builder::Message::BuildFailed {
                             task_id: (task_id as i64).into(),
                             log_path,
@@ -398,6 +410,7 @@ async fn builder(
                 }) => {
                     let _ = state.worker.send(worker::Message::Builder(
                         endpoint_id,
+                        public_key.clone(),
                         builder::Message::Busy {
                             requested: (requested_task_id as i64).into(),
                             in_progress: in_progress_task_id.map(|id| (id as i64).into()),
@@ -412,9 +425,11 @@ async fn builder(
 
     let result = inner().instrument(span).await;
 
-    let _ = state
-        .worker
-        .send(worker::Message::Builder(endpoint_id, builder::Message::Disconnected));
+    let _ = state.worker.send(worker::Message::Builder(
+        endpoint_id,
+        public_key,
+        builder::Message::Disconnected,
+    ));
 
     result
 }
@@ -433,6 +448,13 @@ enum Error {
     WriteLogFile { source: io::Error, task_id: u64 },
     #[snafu(display("Missing log file for finished task {task_id}"))]
     TakeLogFile { task_id: u64 },
+    #[snafu(display("Acquire database connection"))]
+    AcquireDbConn { source: database::Error },
+    #[snafu(display("Get account {account_id}"))]
+    GetAccount {
+        source: account::Error,
+        account_id: account::Id,
+    },
 }
 
 impl From<Error> for tonic::Status {
@@ -441,9 +463,11 @@ impl From<Error> for tonic::Status {
             Error::MissingRequestToken => tonic::Status::unauthenticated(""),
             Error::InvalidEndpoint { .. } => tonic::Status::invalid_argument(""),
             Error::BuilderStream { source } => source,
-            Error::CreateLogFile { .. } | Error::WriteLogFile { .. } | Error::TakeLogFile { .. } => {
-                tonic::Status::internal("")
-            }
+            Error::CreateLogFile { .. }
+            | Error::WriteLogFile { .. }
+            | Error::TakeLogFile { .. }
+            | Error::GetAccount { .. }
+            | Error::AcquireDbConn { .. } => tonic::Status::internal(""),
         }
     }
 }

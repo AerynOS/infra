@@ -1,19 +1,27 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::{
+    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
+    path::PathBuf,
+    sync::{Arc, LazyLock},
+};
 
-use color_eyre::eyre::{self, Context, OptionExt, Report, Result, bail};
+use arc_swap::ArcSwap;
+use color_eyre::eyre::{self, Context, OptionExt, Report, Result};
 use itertools::Itertools;
 use moss::db::meta;
-use service::{Account, Endpoint, State, database::Transaction, endpoint, error};
+use service::{Account, Endpoint, State, crypto::EncodedPublicKey, database::Transaction, endpoint, error};
 use sqlx::{Sqlite, pool::PoolConnection};
 use tokio::task::spawn_blocking;
 use tracing::{Span, debug, error, info, warn};
 
 use crate::{Builder, Config, Project, Queue, builder, config::Size, profile, project, repository, task};
 
+/// Current view of builder info
+pub static BUILDERS: LazyLock<Arc<ArcSwap<Vec<builder::Info>>>> = LazyLock::new(Default::default);
+
 pub struct Manager {
     pub state: State,
     pub paused: bool,
-    queue: Queue,
+    pub queue: Queue,
     builders: BTreeMap<builder::Key, Builder>,
     profile_dbs: HashMap<profile::Id, meta::Database>,
     repository_dbs: HashMap<repository::Id, meta::Database>,
@@ -306,8 +314,8 @@ impl Manager {
                     if task.size > best_fit_builder_size {
                         debug!(
                             builder = %builder.endpoint,
-                            task = %task.task.id,
-                            build = %task.task.build_id,
+                            task_id = %task.task.id,
+                            build_id = %task.task.build_id,
                             task_size = %task.size,
                             builder_size = %best_fit_builder_size,
                             %max_connected_builder_size,
@@ -315,18 +323,37 @@ impl Manager {
                         );
                     }
 
-                    match builder.build(&self.state, task).await {
+                    match builder.build(task).await {
                         Ok(_) => {
+                            let mut tx = self.state.service_db.begin().await?;
+
+                            task::transition(
+                                &mut tx,
+                                task.task.id,
+                                task::Transition::Building {
+                                    builder: builder.endpoint,
+                                },
+                                &self.queue,
+                            )
+                            .await
+                            .context(format!("transition task {} to building", task.task.id))?;
+
+                            tx.commit().await?;
+
                             continue 'tasks;
                         }
-                        Err(_) => {
-                            warn!(builder = %builder.endpoint, "Failed to send build, trying next builder");
+                        Err(err) => {
+                            warn!(
+                                builder = %builder.endpoint,
+                                error = error::chain(&*err),
+                                "Failed to send build, trying next builder"
+                            );
                         }
                     }
                 } else {
                     debug!(
-                        task = %task.task.id,
-                        build = %task.task.build_id,
+                        task_id = %task.task.id,
+                        build_id = %task.task.build_id,
                         task_size = %task.size,
                         %max_connected_builder_size,
                         "Waiting on a builder large enough to queue up this task"
@@ -343,39 +370,32 @@ impl Manager {
     pub async fn import_succeeded(&mut self, task_id: task::Id) -> Result<()> {
         let mut tx = self.begin().await.context("begin db tx")?;
 
-        task::set_status(&mut tx, task_id, task::Status::Completed)
-            .await
-            .context("set task_id={task_id:?} as import completed")?;
-
         let mut projects = project::list(tx.as_mut()).await.context("list projects")?;
 
-        let task = task::query(tx.as_mut(), task::query::Params::default().id(task_id))
-            .await
-            .context("query task")?
-            .tasks
-            .into_iter()
-            .next()
-            .ok_or_eyre("task is missing")?;
+        let task = task::get(tx.as_mut(), task_id).await.context("get task")?;
 
-        self.queue
-            .remove_blockers(&mut tx, task_id)
+        // Transition the task to complete
+        task::transition(&mut tx, task.id, task::Transition::Complete, &self.queue)
             .await
-            .context("remove queue blockers for task_id={task_id:?}")?;
+            .context(format!("transition task {} to complete", task.id))?;
 
         tx.commit().await.context("commit db tx")?;
 
-        let profile = projects
-            .iter_mut()
-            .find_map(|p| p.profiles.iter_mut().find(|p| p.id == task.profile_id))
-            .ok_or_eyre("missing profile")?;
-        let profile_db = self
-            .profile_dbs
-            .get(&task.profile_id)
-            .ok_or_eyre("missing profile db")?
-            .clone();
-        profile::refresh(&self.state, profile, profile_db)
-            .await
-            .context("refresh profile")?;
+        // Refresh profile since this task is now indexed by it
+        {
+            let profile = projects
+                .iter_mut()
+                .find_map(|p| p.profiles.iter_mut().find(|p| p.id == task.profile_id))
+                .ok_or_eyre("missing profile")?;
+            let profile_db = self
+                .profile_dbs
+                .get(&task.profile_id)
+                .ok_or_eyre("missing profile db")?
+                .clone();
+            profile::refresh(&self.state, profile, profile_db)
+                .await
+                .context("refresh profile")?;
+        }
 
         Ok(())
     }
@@ -383,14 +403,17 @@ impl Manager {
     pub async fn import_failed(&mut self, task_id: task::Id) -> Result<()> {
         let mut tx = self.begin().await.context("begin db tx")?;
 
-        task::set_status(&mut tx, task_id, task::Status::Failed)
-            .await
-            .context("set task_id={task_id:?} as import failed")?;
-
-        self.queue
-            .add_blockers(&mut tx, task_id)
-            .await
-            .context("add queue blockers for task_id={task_id}")?;
+        // Transition to failed
+        task::transition(
+            &mut tx,
+            task_id,
+            task::Transition::Failed {
+                stashed_build_logs: None,
+            },
+            &self.queue,
+        )
+        .await
+        .context(format!("transition task {task_id} to failed"))?;
 
         tx.commit().await.context("commit db tx")?;
 
@@ -400,29 +423,12 @@ impl Manager {
     pub async fn retry_task(&mut self, task_id: task::Id) -> Result<()> {
         let mut tx = self.begin().await.context("begin db tx")?;
 
-        let task = task::query(tx.as_mut(), task::query::Params::default().id(task_id))
+        // Transition to retried
+        task::transition(&mut tx, task_id, task::Transition::Retry, &self.queue)
             .await
-            .context("get task")?
-            .tasks
-            .into_iter()
-            .next()
-            .ok_or_eyre("task is missing")?;
-
-        if matches!(task.status, task::Status::New) {
-            warn!(status = %task.status, "Task is already in new status and won't be retried");
-            return Ok(());
-        }
-
-        task::set_status(&mut tx, task_id, task::Status::New)
-            .await
-            .context("set task as import failed")?;
-        task::set_allocated_builder(&mut tx, task_id, None)
-            .await
-            .context("set builder")?;
+            .context(format!("transition task {task_id} to retried"))?;
 
         tx.commit().await.context("commit db tx")?;
-
-        info!(%task_id, "task marked for retry");
 
         Ok(())
     }
@@ -430,44 +436,38 @@ impl Manager {
     pub async fn cancel_task(&mut self, task_id: task::Id) -> Result<()> {
         let mut tx = self.begin().await.context("begin db tx")?;
 
-        let task = task::query(tx.as_mut(), task::query::Params::default().id(task_id))
-            .await
-            .context("get task")?
-            .tasks
-            .into_iter()
-            .next()
-            .ok_or_eyre("task is missing")?;
+        let task = task::get(tx.as_mut(), task_id).await.context("get task")?;
 
-        if !task.status.is_in_progress() {
-            warn!(%task_id, status = %task.status, "Task isn't in progress and won't be cancelled");
-            return Ok(());
-        }
-
+        // Send cancellation to builder, if connected & building
         if let Some(endpoint) = task.allocated_builder.filter(|_| task.status == task::Status::Building) {
             if let Some(builder) = self
                 .builders
                 .iter_mut()
                 .find_map(|(key, value)| (key.endpoint == endpoint).then_some(value))
             {
-                builder.cancel_build(&task).await.context("cancel build")?;
+                if let Err(err) = builder.cancel_build(&task).await {
+                    error!(
+                        builder = %endpoint,
+                        task_id = %task.id,
+                        build_id = task.build_id,
+                        error = error::chain(&*err),
+                        "Failed to send cancellation request to builder"
+                    );
+                }
             } else {
                 warn!(
                     builder = %endpoint,
-                    task = %task.id,
-                    build = task.build_id,
+                    task_id = %task.id,
+                    build_id = task.build_id,
                     "Builder not connected while cancelling task"
                 );
             }
         }
 
-        task::set_status(&mut tx, task_id, task::Status::Cancelled)
+        // Transition to cancelled
+        task::transition(&mut tx, task_id, task::Transition::Cancelled, &self.queue)
             .await
-            .context("set task_id={task_id:?} as cancelled")?;
-
-        self.queue
-            .add_blockers(&mut tx, task_id)
-            .await
-            .context("add queue blockers for task_id={task_id:?}")?;
+            .context(format!("transition task {task_id} to cancelled"))?;
 
         tx.commit().await.context("commit db tx")?;
 
@@ -476,60 +476,154 @@ impl Manager {
         Ok(())
     }
 
-    pub async fn update_builder(&mut self, endpoint: endpoint::Id, message: builder::Message) -> Result<bool> {
-        let builder = if let Some(builder) = self
-            .builders
-            .iter_mut()
-            .find_map(|(key, value)| (key.endpoint == endpoint).then_some(value))
-        {
-            builder
-        }
-        // First time connecting after enrollment
-        else {
-            let mut conn = self.state.service_db.acquire().await?;
-            let endpoint = Endpoint::get(conn.as_mut(), endpoint).await?;
-            let account = Account::get(conn.as_mut(), endpoint.account).await?;
+    pub async fn update_builder(
+        &mut self,
+        endpoint: endpoint::Id,
+        public_key: EncodedPublicKey,
+        message: builder::Message,
+    ) -> Result<bool> {
+        let builder =
+            get_or_init_builder(&mut self.builders, &self.config, endpoint, public_key).context("init builder")?;
 
-            if let Some((index, config)) = self
-                .config
-                .builders
-                .iter()
-                .enumerate()
-                .find(|(_, config)| config.public_key.encode() == account.public_key)
-            {
-                let key = builder::Key {
-                    index,
-                    endpoint: endpoint.id,
-                };
-
-                self.builders.insert(key, Builder::new(endpoint.id, config));
-                self.builders.get_mut(&key).unwrap()
-            } else {
-                bail!("builder not defined in config: {}", endpoint.id);
-            }
-        };
-
-        if let Some(event) = builder.update(&self.state, message).await? {
+        if let Some(event) = builder.update(message).await {
             match event {
-                builder::Event::Connected => {
-                    return Ok(true);
-                }
-                builder::Event::Idle => {
-                    return Ok(true);
-                }
-                builder::Event::BuildFailed { task_id } => {
-                    let mut tx = self.begin().await.context("begin db tx")?;
+                builder::Event::StatusChanged(status) => {
+                    let mut reallocate_builds = false;
+                    let mut building = None;
 
-                    self.queue
-                        .add_blockers(&mut tx, task_id)
+                    match status {
+                        builder::Status::Idle => {
+                            reallocate_builds = true;
+                        }
+                        builder::Status::Busy => {}
+                        builder::Status::Building { task } => {
+                            building = Some(task);
+                        }
+                        builder::Status::Disconnected => {}
+                    }
+
+                    // Check for stuck / stale builds on this builder that dont
+                    // match the current status and rebuild them.
+                    {
+                        let mut tx = self.state.service_db.begin().await?;
+
+                        let query = task::query(
+                            tx.as_mut(),
+                            task::query::Params::default().statuses([task::Status::Building]),
+                        )
                         .await
-                        .context("add queue blockers")?;
+                        .context("query tasks")?;
 
-                    tx.commit().await.context("commit db tx")?;
+                        for task in query.tasks {
+                            // Skip tasks not on this builder
+                            if task.allocated_builder.is_none_or(|id| id != builder.endpoint) {
+                                continue;
+                            }
 
-                    return Ok(true);
+                            // Skip the task currently being built
+                            if building.is_some_and(|id| id == task.id) {
+                                continue;
+                            }
+
+                            warn!(
+                                task_id = %task.id,
+                                build_id = %task.build_id,
+                                builder = %builder.endpoint,
+                                "Task stuck as building, but builder is no longer building it. Requeuing the task."
+                            );
+
+                            // This task isn't being built anymore but got stuck as building
+                            // (builder crashed / shut down / etc), so requeue it
+                            task::transition(&mut tx, task.id, task::Transition::Requeue, &self.queue)
+                                .await
+                                .context(format!("transition task {} to requeued", task.id))?;
+
+                            // Pick this task back up on another builder
+                            reallocate_builds = true;
+                        }
+
+                        tx.commit().await?;
+                    }
+
+                    return Ok(reallocate_builds);
                 }
-                builder::Event::BuildRequeued => {
+                builder::Event::BuildSucceeded {
+                    task_id,
+                    collectables,
+                    log_path,
+                } => {
+                    let stashed_build_logs = stash_log(&self.state, log_path).await.context("stash logs")?;
+
+                    let mut tx = self.state.service_db.begin().await?;
+
+                    task::transition(
+                        &mut tx,
+                        task_id,
+                        task::Transition::Publishing {
+                            builder: builder.endpoint,
+                            stashed_build_logs,
+                        },
+                        &self.queue,
+                    )
+                    .await
+                    .context(format!("transition task {task_id} to publishing"))?;
+
+                    tx.commit().await?;
+
+                    if let Err(err) = builder.request_upload(&self.state, task_id, collectables).await {
+                        error!(
+                            %task_id,
+                            builder = %builder.endpoint,
+                            error = error::chain(&*err),
+                            "Failed to send upload request to builder"
+                        );
+
+                        let mut tx = self.state.service_db.begin().await?;
+
+                        task::transition(
+                            &mut tx,
+                            task_id,
+                            task::Transition::Failed {
+                                stashed_build_logs: None,
+                            },
+                            &self.queue,
+                        )
+                        .await
+                        .context(format!("transition task {task_id} to failed"))?;
+
+                        tx.commit().await?;
+                    }
+                }
+                builder::Event::BuildFailed { task_id, log_path } => {
+                    let mut tx = self.state.service_db.begin().await?;
+
+                    let stashed_build_logs = if let Some(path) = log_path {
+                        Some(stash_log(&self.state, path).await.context("stash logs")?)
+                    } else {
+                        None
+                    };
+
+                    task::transition(
+                        &mut tx,
+                        task_id,
+                        task::Transition::Failed { stashed_build_logs },
+                        &self.queue,
+                    )
+                    .await
+                    .context(format!("transition task {task_id} to failed"))?;
+
+                    tx.commit().await?;
+                }
+                builder::Event::BuildRejected { task_id } => {
+                    let mut tx = self.state.service_db.begin().await?;
+
+                    task::transition(&mut tx, task_id, task::Transition::Requeue, &self.queue)
+                        .await
+                        .context(format!("transition task {task_id} to requeued"))?;
+
+                    tx.commit().await?;
+
+                    // Task needs to be queued up on a new builder
                     return Ok(true);
                 }
             }
@@ -545,8 +639,8 @@ impl Manager {
             .map(Builder::status)
     }
 
-    pub async fn builders(&self) -> Result<Vec<builder::Info>> {
-        Ok(self.builders.values().map(Builder::info).collect())
+    pub fn refresh_cached_builder_info(&self) {
+        BUILDERS.store(Arc::new(self.builders.values().map(Builder::info).collect()));
     }
 
     #[tracing::instrument(skip_all)]
@@ -584,4 +678,55 @@ fn connect_repository_db(state: &State, repository: &repository::Id) -> Result<m
         .context("open repository db")?;
 
     Ok(db)
+}
+
+async fn stash_log(state: &State, path: PathBuf) -> Result<PathBuf> {
+    let compressed_path = spawn_blocking(move || {
+        use flate2::write::GzEncoder;
+        use std::fs::{self, File};
+        use std::io::{self, Write};
+
+        let mut plain_file = File::open(&path).context("open plain file")?;
+
+        let gz_path = PathBuf::from(format!("{}.gz", path.display()));
+        let mut gz_file = File::create(&gz_path).context("create compressed file")?;
+
+        let mut encoder = GzEncoder::new(&mut gz_file, flate2::Compression::new(9));
+
+        io::copy(&mut plain_file, &mut encoder)?;
+
+        encoder.finish()?;
+        gz_file.flush()?;
+
+        fs::remove_file(path).context("remove plain file")?;
+
+        Result::<_, Report>::Ok(gz_path)
+    })
+    .await
+    .context("join handle")?
+    .context("compress log file")?;
+
+    let relative_path = compressed_path
+        .strip_prefix(&state.state_dir)
+        .context("log is descendent of state dir")?;
+
+    Ok(relative_path.to_owned())
+}
+
+fn get_or_init_builder<'a>(
+    builders: &'a mut BTreeMap<builder::Key, Builder>,
+    config: &Config,
+    endpoint: endpoint::Id,
+    public_key: EncodedPublicKey,
+) -> Result<&'a mut Builder> {
+    let (index, builder_config) = config
+        .builders
+        .iter()
+        .enumerate()
+        .find(|(_, config)| config.public_key.encode() == public_key)
+        .ok_or_eyre(format!("builder not defined in config: {public_key}"))?;
+
+    let key = builder::Key { index, endpoint };
+
+    Ok(builders.entry(key).or_insert(Builder::new(endpoint, builder_config)))
 }
