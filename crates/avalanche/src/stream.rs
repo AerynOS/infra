@@ -17,7 +17,7 @@ use service::{
 };
 use tokio::{
     select,
-    sync::{Mutex, broadcast, mpsc, watch},
+    sync::{Mutex, mpsc, watch},
     time,
 };
 use tokio_stream::wrappers::ReceiverStream;
@@ -80,13 +80,13 @@ struct Building {
 pub async fn run(state: State, config: Config) -> Result<(), Infallible> {
     let building = Arc::new(Mutex::new(None));
 
-    let (build_changed_tx, _rx) = watch::channel(None);
+    let (notify_build_change, _) = watch::channel(());
 
     join_all(
         config
             .hubs
             .iter()
-            .map(|hub| connect(&state, hub, building.clone(), build_changed_tx.clone())),
+            .map(|hub| connect(&state, hub, building.clone(), notify_build_change.clone())),
     )
     .await;
 
@@ -105,12 +105,12 @@ async fn connect(
     state: &State,
     target: &HubTarget,
     building: Arc<Mutex<Option<Building>>>,
-    build_changed_tx: watch::Sender<Option<Building>>,
+    notify_build_change: watch::Sender<()>,
 ) {
     loop {
         debug!("Attempting to connect to summit");
 
-        if let Err(e) = connect_inner(state, target, building.clone(), build_changed_tx.clone()).await {
+        if let Err(e) = connect_inner(state, target, building.clone(), notify_build_change.clone()).await {
             let error = error::chain(&*e);
             error!(%error, "Stream error");
 
@@ -124,7 +124,7 @@ async fn connect_inner(
     state: &State,
     target: &HubTarget,
     building: Arc<Mutex<Option<Building>>>,
-    build_changed_tx: watch::Sender<Option<Building>>,
+    notify_build_change: watch::Sender<()>,
 ) -> Result<()> {
     let endpoint = Endpoint::list(&mut *state.service_db.acquire().await.context("acquire db conn")?)
         .await
@@ -152,11 +152,11 @@ async fn connect_inner(
 
     info!("Connected to summit");
 
+    let (notify_build_cancelled, _) = watch::channel(());
+
     let mut stream = resp.into_inner();
     let mut interval = time::interval(Duration::from_secs(60));
-    let mut build_changed_rx = build_changed_tx.subscribe();
-
-    let (cancel_sender, cancel_receiver) = broadcast::channel::<()>(1);
+    let mut build_changed_receiver = notify_build_change.subscribe();
 
     loop {
         select! {
@@ -164,7 +164,7 @@ async fn connect_inner(
                 let building = *building.lock().await;
 
                 // Only send task id if its being built for this summit instance
-                let task_id = building.filter(|b| b.hub_id == endpoint.id).map(|b| b.task_id);
+                let task_id = building.and_then(|b| (b.hub_id == endpoint.id).then_some(b.task_id));
                 let building = building.is_some();
 
                 let _ = sender
@@ -175,11 +175,11 @@ async fn connect_inner(
 
                 debug!(building, task_id, "Status reported");
             },
-            _ = build_changed_rx.changed() => {
-                let building = *build_changed_rx.borrow_and_update();
+            _ = build_changed_receiver.changed() => {
+                let building = *building.lock().await;
 
                 // Only send task id if its being built for this summit instance
-                let task_id = building.filter(|b| b.hub_id == endpoint.id).map(|b| b.task_id);
+                let task_id = building.and_then(|b| (b.hub_id == endpoint.id).then_some(b.task_id));
                 let building = building.is_some();
 
                 let _ = sender
@@ -196,7 +196,17 @@ async fn connect_inner(
 
                     match event {
                         builder_stream_outgoing::Event::Build(request) => {
-                            build_requested(state, endpoint.id, &building, &sender, request, &cancel_receiver, &build_changed_tx).await;
+                            let build_changed_receiver = notify_build_cancelled.subscribe();
+
+                            build_requested(
+                                state,
+                                endpoint.id,
+                                &building,
+                                &sender,
+                                request,
+                                build_changed_receiver,
+                                &notify_build_change
+                            ).await;
                         }
                         builder_stream_outgoing::Event::Upload(BuilderUpload { build, token, uri }) => {
                             let build = build.ok_or_eyre("missing build message")?;
@@ -213,7 +223,7 @@ async fn connect_inner(
                             });
                         }
                         builder_stream_outgoing::Event::CancelBuild(()) => {
-                            let _  = cancel_sender.send(());
+                            notify_build_cancelled.send_replace(());
                         }
                     }
                 } else {
@@ -233,8 +243,8 @@ async fn build_requested(
     building: &Arc<Mutex<Option<Building>>>,
     sender: &mpsc::Sender<BuilderStreamIncoming>,
     request: BuilderBuild,
-    cancel_receiver: &broadcast::Receiver<()>,
-    build_changed_tx: &watch::Sender<Option<Building>>,
+    mut cancelled_receiver: watch::Receiver<()>,
+    notify_build_changed: &watch::Sender<()>,
 ) {
     let mut build_guard = building.lock().await;
 
@@ -259,7 +269,7 @@ async fn build_requested(
         hub_id,
         task_id: request.task_id,
     });
-    let _ = build_changed_tx.send(*build_guard);
+    notify_build_changed.send_replace(());
 
     drop(build_guard);
 
@@ -268,30 +278,21 @@ async fn build_requested(
         let sender = sender.clone();
         let handle = Handle { sender: sender.clone() };
         let building = building.clone();
-        let build_changed_tx = build_changed_tx.clone();
-        let mut cancel_receiver = cancel_receiver.resubscribe();
+        let notify_build_changed = notify_build_changed.clone();
 
         async move {
             select! {
                 biased;
 
-                _ = cancel_receiver.recv() => {
+                _ = cancelled_receiver.changed() => {
                     info!("Build cancelled");
-
-                    let _ = sender
-                        .send(BuilderStreamIncoming {
-                            event: Some(builder_stream_incoming::Event::Status(
-                                BuilderStatus { building: false, task_id: None })
-                            ),
-                        })
-                        .await;
                 }
 
                 _ = build(request, state, handle) => {}
             }
 
             building.lock().await.take();
-            let _ = build_changed_tx.send(None);
+            notify_build_changed.send_replace(());
         }
     });
 }

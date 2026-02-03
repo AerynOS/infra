@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::{profile, project, repository, use_mock_data};
 
-use super::{Id, Status, Task};
+use super::{Blocker, Id, Status, Task};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, strum::Display, strum::EnumString)]
 #[serde(rename_all = "lowercase")]
@@ -17,6 +17,7 @@ use super::{Id, Status, Task};
 pub enum SortField {
     Ended,
     Build,
+    Updated,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, strum::Display, strum::EnumString)]
@@ -88,24 +89,24 @@ impl Params {
     }
 
     fn where_clause(&self) -> String {
-        if self.id.is_some() || self.statuses.is_some() || self.search_query.is_some() {
-            let conditions = self
-                .id
-                .map(|_| "task_id = ?".to_owned())
-                .into_iter()
-                .chain(self.statuses.as_ref().map(|statuses| {
-                    let binds = ",?".repeat(statuses.len()).chars().skip(1).collect::<String>();
+        let conditions = self
+            .id
+            .map(|_| "task_id = ?".to_owned())
+            .into_iter()
+            .chain(self.statuses.as_ref().map(|statuses| {
+                let binds = ",?".repeat(statuses.len()).chars().skip(1).collect::<String>();
 
-                    format!("status IN ({binds})")
-                }))
-                .chain(self.source_path.is_some().then(|| "source_path = ?".to_owned()))
-                .chain(
-                    self.search_query
-                        .is_some()
-                        .then(|| "description LIKE ? COLLATE NOCASE".to_owned()),
-                )
-                .join(" AND ");
+                format!("status IN ({binds})")
+            }))
+            .chain(self.source_path.is_some().then(|| "source_path = ?".to_owned()))
+            .chain(
+                self.search_query
+                    .is_some()
+                    .then(|| "description LIKE ? COLLATE NOCASE".to_owned()),
+            )
+            .join(" AND ");
 
+        if !conditions.is_empty() {
             format!("WHERE {conditions}")
         } else {
             String::default()
@@ -156,6 +157,16 @@ impl Params {
                     END) DESC,
                     added DESC,
                     task_id DESC"
+            }
+            (Some(SortField::Updated), Some(SortOrder::Asc)) => {
+                "ORDER BY
+                updated ASC,
+                task_id DESC"
+            }
+            (Some(SortField::Updated), Some(SortOrder::Desc)) => {
+                "ORDER BY
+                updated DESC,
+                task_id DESC"
             }
             _ => "ORDER BY added DESC, task_id DESC",
         }
@@ -350,7 +361,7 @@ pub async fn query(conn: &mut SqliteConnection, params: Params) -> Result<Query>
 
         for (id, blocker) in rows {
             if let Some(task) = chunk.iter_mut().find(|t| t.id == Id::from(id)) {
-                task.blocked_by.push(blocker);
+                task.blocked_by.push(Blocker(blocker));
             }
         }
     }

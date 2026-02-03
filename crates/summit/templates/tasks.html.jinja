@@ -17,6 +17,7 @@
                         <option {% if selected_sort == "ended" and selected_order == "asc" %}selected{% endif %} value="{{ build_task_query_url(selected_status, "ended", "asc", search_tasks) }}">Oldest Finished</option>
                         <option {% if selected_sort == "build" and selected_order == "asc" %}selected{% endif %} value="{{ build_task_query_url(selected_status, "build", "asc", search_tasks) }}">Shortest Build Time</option>
                         <option {% if selected_sort == "build" and selected_order == "desc" %}selected{% endif %} value="{{ build_task_query_url(selected_status, "build", "desc", search_tasks) }}">Longest Build Time</option>
+                        <option {% if selected_sort == "updated" and selected_order == "desc" %}selected{% endif %} value="{{ build_task_query_url(selected_status, "updated", "desc", search_tasks) }}">Last Updated</option>
                     </select>
                 </div>
             </div>
