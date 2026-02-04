@@ -1,9 +1,5 @@
-use std::{
-    collections::{BTreeMap, HashMap},
-    sync::{Arc, LazyLock},
-};
+use std::collections::{BTreeMap, HashMap};
 
-use arc_swap::ArcSwap;
 use color_eyre::eyre::{self, Context, OptionExt, Result};
 use dag::Dag;
 use futures_util::{StreamExt, TryStreamExt, stream};
@@ -22,9 +18,6 @@ use crate::{
     repository,
     task::{self, TaskQueue},
 };
-
-/// Cached json view of the queue, used to render it on the frontend
-pub static JSON_VIEW: LazyLock<ArcSwap<JsonView>> = LazyLock::new(ArcSwap::default);
 
 #[derive(Default)]
 pub struct Queue(Vec<task::Queued>);
@@ -52,7 +45,7 @@ impl Queue {
         projects: &[Project],
         repo_dbs: &HashMap<repository::Id, meta::Database>,
         build_sizes: &BuildSizesConfig,
-    ) -> Result<()> {
+    ) -> Result<JsonView> {
         let open_tasks = task::query(conn, task::query::Params::default().statuses(task::Status::open()))
             .await
             .context("list open tasks")?
@@ -195,11 +188,11 @@ impl Queue {
             })
             .collect();
 
-        JSON_VIEW.store(Arc::new(cache_json_view(&self.0, &dag)));
+        let json_view = cache_json_view(&self.0, &dag);
 
         debug!(num_tasks = self.0.len(), "Queue recomputed");
 
-        Ok(())
+        Ok(json_view)
     }
 
     pub fn available(&self) -> impl Iterator<Item = &task::Queued> {

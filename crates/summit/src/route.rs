@@ -1,4 +1,4 @@
-use std::{iter, num::NonZeroU32};
+use std::{iter, num::NonZeroU32, sync::Arc};
 
 use axum::{
     extract::{self, Query},
@@ -11,18 +11,9 @@ use service::Endpoint;
 use snafu::Snafu;
 use strum::IntoEnumIterator;
 
-use crate::{manager, project, queue, task, template};
+use crate::{State, project, task, template};
 
-pub fn state(service: service::State) -> State {
-    State { service }
-}
-
-#[derive(Clone)]
-pub struct State {
-    service: service::State,
-}
-
-pub async fn index(extract::State(state): extract::State<State>) -> Result<impl IntoResponse, Error> {
+pub async fn index(extract::State(state): extract::State<Arc<State>>) -> Result<impl IntoResponse, Error> {
     let mut conn = state.service.service_db.acquire().await.context("acquire db conn")?;
 
     let task::Query { tasks, .. } = task::query(
@@ -45,7 +36,7 @@ pub async fn index(extract::State(state): extract::State<State>) -> Result<impl 
 
     let endpoints = Endpoint::list(&mut *conn).await.context("list endpoints")?;
 
-    let _builders_guard = manager::BUILDERS.load();
+    let _builders_guard = state.builders.load();
     let builders = _builders_guard.as_slice();
 
     Ok(template::render(
@@ -70,7 +61,7 @@ pub struct TasksQuery {
 }
 
 pub async fn tasks(
-    extract::State(state): extract::State<State>,
+    extract::State(state): extract::State<Arc<State>>,
     Query(query): Query<TasksQuery>,
 ) -> Result<impl IntoResponse, Error> {
     const DEFAULT_LIMIT: u32 = 25;
@@ -135,8 +126,8 @@ pub async fn tasks(
     ))
 }
 
-pub async fn queue() -> impl IntoResponse {
-    let data = queue::JSON_VIEW.load();
+pub async fn queue(extract::State(state): extract::State<Arc<State>>) -> impl IntoResponse {
+    let data = state.queue_json_view.load();
 
     template::render(
         "queue.html.jinja",

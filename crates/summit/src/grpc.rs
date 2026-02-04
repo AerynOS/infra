@@ -28,9 +28,12 @@ use crate::{builder, worker};
 
 pub type Server = SummitServiceServer<Service>;
 
-pub fn service(state: crate::State, worker: worker::Sender) -> Server {
+pub fn service(state: &crate::State, worker: worker::Sender) -> Server {
     Server::new(Service {
-        state: Arc::new(State { worker, service: state }),
+        state: Arc::new(State {
+            worker,
+            service: state.service.clone(),
+        }),
     })
 }
 

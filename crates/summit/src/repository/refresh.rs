@@ -1,12 +1,13 @@
 use std::path::Path;
 
 use color_eyre::eyre::{Context, Result};
-use service::{State, git};
+use service::git;
 use sqlx::SqliteConnection;
 use tokio::fs;
 use tracing::{debug, info, warn};
 
 use super::{Repository, Status, set_commit_ref, set_status};
+use crate::State;
 
 #[tracing::instrument(name = "refresh_repository", skip_all, fields(repository = %repo.name))]
 pub async fn refresh(conn: &mut SqliteConnection, state: &State, mut repo: Repository) -> Result<(Repository, bool)> {
@@ -42,7 +43,7 @@ pub async fn refresh(conn: &mut SqliteConnection, state: &State, mut repo: Repos
 async fn clone_git(conn: &mut SqliteConnection, state: &State, repo: &mut Repository) -> Result<String> {
     debug!("Cloning repository");
 
-    let repo_dir = state.cache_dir.join("repository").join(repo.id.to_string());
+    let repo_dir = state.cache_dir().join("repository").join(repo.id.to_string());
     let clone_dir = repo_dir.join("clone");
 
     let _ = fs::remove_dir_all(&repo_dir).await;
@@ -69,7 +70,7 @@ async fn update_git(conn: &mut SqliteConnection, state: &State, repo: &mut Repos
     debug!("Updating repository");
 
     let clone_dir = state
-        .cache_dir
+        .cache_dir()
         .join("repository")
         .join(repo.id.to_string())
         .join("clone");

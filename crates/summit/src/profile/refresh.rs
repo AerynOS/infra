@@ -8,7 +8,6 @@ use moss::{
     package::{self, Meta},
     request,
 };
-use service::State;
 use stone::StoneDecodedPayload;
 use tokio::{
     fs::{self, File},
@@ -18,14 +17,15 @@ use tokio::{
 use tracing::{Span, info};
 
 use super::{Profile, Status, set_status};
+use crate::State;
 
 #[tracing::instrument(name = "refresh_profile", skip_all, fields(profile = profile.name))]
 pub async fn refresh(state: &State, profile: &mut Profile, db: meta::Database) -> Result<()> {
-    let profile_dir = state.cache_dir.join("profile").join(profile.id.to_string());
+    let profile_dir = state.cache_dir().join("profile").join(profile.id.to_string());
     let index_path = profile_dir.join("index");
 
     set_status(
-        &mut *state.service_db.acquire().await.context("acquire db conn")?,
+        &mut *state.service_db().acquire().await.context("acquire db conn")?,
         profile,
         Status::Refreshing,
     )
@@ -48,7 +48,7 @@ pub async fn refresh(state: &State, profile: &mut Profile, db: meta::Database) -
         .context("update index db")?;
 
     set_status(
-        &mut *state.service_db.acquire().await.context("acquire db conn")?,
+        &mut *state.service_db().acquire().await.context("acquire db conn")?,
         profile,
         Status::Indexed,
     )
