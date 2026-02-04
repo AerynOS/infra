@@ -1,0 +1,17 @@
+<div class="overview-builders">
+    <h3>Builders</h3>
+    <ul class="overview-builders__list">
+        {% for builder in builders %}
+            <li class="overview-builders__list__item overview-builders__list__item--{{ builder.status }}">
+                <h4>{{ builder.description }} ({{builder.size}})</h4>
+                {% if builder.building %}
+                    {% set task = building_tasks | task(builder.building) %}
+                    <p>{{ task.description }}</p>
+                    <div>{{ task.duration | format_duration }}</div>
+                {% else %}
+                    <p>{{ builder.status }}</p>
+                {% endif %}
+            </li>
+        {% endfor %}
+    </ul>
+</div>

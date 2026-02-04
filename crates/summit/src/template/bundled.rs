@@ -3,7 +3,7 @@ use std::sync::LazyLock;
 use include_dir::{Dir, DirEntry, include_dir};
 use tracing::error;
 
-use super::{Response, env};
+use super::env;
 
 static ENV: LazyLock<minijinja::Environment<'_>> = LazyLock::new(|| {
     static TEMPLATES: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/templates");
@@ -45,6 +45,6 @@ fn add_templates<'a>(dir: &Dir<'a>, env: &mut minijinja::Environment<'a>) {
 }
 
 #[allow(clippy::result_large_err)]
-pub(super) fn with_environment(f: impl FnOnce(&minijinja::Environment<'_>) -> Response) -> Response {
+pub(super) fn with_environment<T>(f: impl FnOnce(&minijinja::Environment<'_>) -> T) -> T {
     f(&ENV)
 }

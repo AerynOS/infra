@@ -2,8 +2,9 @@ use std::{path::Path, sync::Arc};
 
 use arc_swap::ArcSwap;
 use color_eyre::eyre::{Context, Result};
+use tokio::sync::broadcast;
 
-use crate::{builder, queue};
+use crate::{builder, queue, route};
 
 pub struct State {
     pub service: service::State,
@@ -11,10 +12,15 @@ pub struct State {
     pub builders: ArcSwap<Vec<builder::Info>>,
     /// Cached json view of the queue, used to render it on the frontend
     pub queue_json_view: ArcSwap<queue::JsonView>,
+    /// Events that get forwarded by SSE connected streams
+    pub sse_receiver: broadcast::Receiver<route::SseEvent>,
 }
 
 impl State {
-    pub async fn load(root: impl AsRef<Path>) -> Result<Arc<State>> {
+    pub async fn load(
+        root: impl AsRef<Path>,
+        sse_receiver: broadcast::Receiver<route::SseEvent>,
+    ) -> Result<Arc<State>> {
         let service = service::State::load(root).await.context("load service state")?;
 
         service
@@ -27,6 +33,7 @@ impl State {
             service,
             builders: Default::default(),
             queue_json_view: Default::default(),
+            sse_receiver,
         }))
     }
 

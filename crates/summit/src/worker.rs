@@ -64,10 +64,6 @@ pub async fn run(
                         let error = service::error::chain(e.as_ref() as &dyn std::error::Error);
                         error!(message = kind, %error, "Error handling message");
                     }
-
-                    // Ensure cached build info is always up-to-date after
-                    // any state change so frontend can access this asynchronously
-                    manager.refresh_cached_builder_info();
                 }
             }
 
@@ -129,6 +125,10 @@ async fn handle_message(sender: &Sender, manager: &mut Manager, paused: &mut boo
                 .update_builder(endpoint, public_key, message)
                 .await
                 .context("update builder")?;
+
+            // Ensure cached build info is always up-to-date after
+            // any builder state change so frontend can access this asynchronously
+            manager.refresh_cached_builder_info();
 
             if allocate_builds {
                 let _ = sender.send(Message::AllocateBuilds);

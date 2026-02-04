@@ -447,17 +447,19 @@ pub async fn fix_and_create(
     project: &Project,
     repo: &Repository,
     repo_db: &meta::Database,
-) -> Result<()> {
+) -> Result<bool> {
+    let mut tasks_updated = false;
+
     // Move tasks stuck in building back to new prior to
     // adding new tasks so if they have been superseded, they
     // can be marked as such
-    fix_stuck_building(tx, manager, project, repo)
+    tasks_updated |= fix_stuck_building(tx, manager, project, repo)
         .await
         .context("fix stuck building tasks")?;
 
     for task in &collect_missing(manager, project, repo, repo_db).await? {
         // FIXME: do a batch insert?
-        create(tx, project, repo, task, &manager.queue)
+        tasks_updated |= create(tx, project, repo, task, &manager.queue)
             .await
             .context("create task")?;
     }
@@ -465,11 +467,11 @@ pub async fn fix_and_create(
     // Move tasks no longer in the recipe repo to failed after
     // adding new tasks so that superseded tasks are marked as such
     // and only truly orphaned tasks remain
-    fix_orphaned(tx, project, repo, repo_db, &manager.queue)
+    tasks_updated |= fix_orphaned(tx, project, repo, repo_db, &manager.queue)
         .await
         .context("fix orphaned tasks")?;
 
-    Ok(())
+    Ok(tasks_updated)
 }
 
 #[tracing::instrument(
@@ -482,13 +484,15 @@ async fn fix_stuck_building(
     manager: &Manager,
     project: &Project,
     repo: &Repository,
-) -> Result<()> {
+) -> Result<bool> {
     const DISCONNECTED_TIMEOUT: chrono::Duration = chrono::Duration::minutes(60);
 
     let building_tasks = query(tx.as_mut(), query::Params::default().statuses(Some(Status::Building)))
         .await
         .context("list building tasks")?
         .tasks;
+
+    let mut tasks_updated = false;
 
     for task in building_tasks {
         let requeue = if let Some(endpoint) = task.allocated_builder {
@@ -559,10 +563,12 @@ async fn fix_stuck_building(
             transition(tx, task.id, Transition::Requeue, &manager.queue)
                 .await
                 .context(format!("transition task {} to requeued", task.id))?;
+
+            tasks_updated = true;
         }
     }
 
-    Ok(())
+    Ok(tasks_updated)
 }
 
 #[tracing::instrument(
@@ -576,11 +582,13 @@ async fn fix_orphaned(
     repo: &Repository,
     repo_db: &meta::Database,
     queue: &impl TaskQueue,
-) -> Result<()> {
+) -> Result<bool> {
     let pending_tasks = query(tx.as_mut(), query::Params::default().statuses(Some(Status::New)))
         .await
         .context("list new tasks")?
         .tasks;
+
+    let mut tasks_updated = false;
 
     for task in pending_tasks {
         let is_missing = spawn_blocking({
@@ -610,10 +618,12 @@ async fn fix_orphaned(
             )
             .await
             .context(format!("transition task {} to failed", task.id))?;
+
+            tasks_updated = true;
         }
     }
 
-    Ok(())
+    Ok(tasks_updated)
 }
 
 /// Set the status of a task_id in the db
