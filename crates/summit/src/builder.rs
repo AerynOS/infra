@@ -74,6 +74,7 @@ pub struct Info {
     pub status: StatusKind,
     pub building: Option<task::Id>,
     pub size: Size,
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -92,14 +93,16 @@ pub struct Config {
 pub struct Builder {
     pub endpoint: endpoint::Id,
     pub size: Size,
+    description: Option<String>,
     connection: Option<Connection>,
 }
 
 impl Builder {
-    pub fn new(endpoint: endpoint::Id, config: &Config) -> Self {
+    pub fn new(endpoint: &Endpoint, config: &Config) -> Self {
         Self {
-            endpoint,
+            endpoint: endpoint.id,
             size: config.size,
+            description: endpoint.description.clone(),
             connection: None,
         }
     }
@@ -127,6 +130,7 @@ impl Builder {
             last_seen,
             status,
             building,
+            description: self.description.clone(),
         }
     }
 
@@ -165,8 +169,8 @@ impl Builder {
             build_id = task.build_id
         )
     )]
-    pub async fn cancel_build(&mut self, task: &Task) -> Result<()> {
-        match self.connection.as_mut() {
+    pub async fn cancel_build(&self, task: &Task) -> Result<()> {
+        match self.connection.as_ref() {
             None => warn!("Builder is disconnected, cannot cancel build"),
             Some(Connection {
                 status: Connected::Idle,

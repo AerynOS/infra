@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashMap, VecDeque, btree_map},
     path::PathBuf,
     sync::Arc,
 };
@@ -9,10 +9,17 @@ use itertools::Itertools;
 use moss::db::meta;
 use service::{Account, Endpoint, crypto::EncodedPublicKey, database::Transaction, endpoint, error};
 use sqlx::{Sqlite, pool::PoolConnection};
-use tokio::task::spawn_blocking;
+use tokio::{sync::mpsc, task::spawn_blocking};
 use tracing::{Span, debug, error, info, warn};
 
 use crate::{Builder, Config, Project, Queue, State, builder, config::Size, profile, project, repository, task};
+
+#[derive(Debug, Clone)]
+pub enum Event {
+    QueueRecomputed,
+    TasksUpdated,
+    BuildersUpdated,
+}
 
 pub struct Manager {
     pub state: Arc<State>,
@@ -22,11 +29,12 @@ pub struct Manager {
     profile_dbs: HashMap<profile::Id, meta::Database>,
     repository_dbs: HashMap<repository::Id, meta::Database>,
     config: Config,
+    event_sender: mpsc::Sender<Event>,
 }
 
 impl Manager {
     #[tracing::instrument(name = "load_manager", skip_all)]
-    pub async fn load(config: Config, state: Arc<State>) -> Result<Self> {
+    pub async fn load(config: Config, state: Arc<State>, event_sender: mpsc::Sender<Event>) -> Result<Self> {
         let mut conn = state.service_db().acquire().await?;
 
         let projects = project::list(conn.as_mut()).await?;
@@ -83,7 +91,7 @@ impl Manager {
                             index,
                             endpoint: endpoint.id,
                         },
-                        Builder::new(endpoint.id, config),
+                        Builder::new(&endpoint, config),
                     );
                 }
             }
@@ -97,6 +105,7 @@ impl Manager {
             profile_dbs,
             repository_dbs,
             config,
+            event_sender,
         };
 
         manager.refresh(true).await.context("refresh")?;
@@ -178,21 +187,23 @@ impl Manager {
                     if force || repo_changed || profile_refreshed {
                         let mut tx = self.begin().await.context("begin db tx")?;
 
-                        task::fix_and_create(&mut tx, self, &project, &repo, &repo_db)
+                        let tasks_updated = task::fix_and_create(&mut tx, self, &project, &repo, &repo_db)
                             .await
                             .context("create missing tasks")?;
 
                         tx.commit().await.context("commit tx")?;
 
-                        Result::<_, Report>::Ok(true)
+                        Result::<_, Report>::Ok(tasks_updated)
                     } else {
                         Ok(false)
                     }
                 };
 
                 match refresh(profile_refreshed).await {
-                    Ok(tasks_created) => {
-                        if tasks_created {
+                    Ok(tasks_updated) => {
+                        if tasks_updated {
+                            let _ = self.event_sender.try_send(Event::TasksUpdated);
+
                             have_changes = true;
                         }
                     }
@@ -237,7 +248,10 @@ impl Manager {
             .await
             .context("recompute queue")?;
 
-        self.state.queue_json_view.store(Arc::new(json_view));
+        self.state.queue_json_view.store(json_view);
+
+        // Send event w/out backpressure (drop event otherwise)
+        let _ = self.event_sender.try_send(Event::QueueRecomputed);
 
         let mut available_tasks = self
             .queue
@@ -274,6 +288,8 @@ impl Manager {
         // update all the things together, so we don't need
         // this connection anymore
         drop(conn);
+
+        let mut tasks_updated = false;
 
         // Tasks are processed from highest to lowest build size, so
         // we just need to ensure we queue up against the largest available
@@ -339,6 +355,8 @@ impl Manager {
 
                             tx.commit().await?;
 
+                            tasks_updated = true;
+
                             continue 'tasks;
                         }
                         Err(err) => {
@@ -363,6 +381,10 @@ impl Manager {
             }
         }
 
+        if tasks_updated {
+            let _ = self.event_sender.try_send(Event::TasksUpdated);
+        }
+
         Ok(())
     }
 
@@ -379,6 +401,8 @@ impl Manager {
             .context(format!("transition task {} to complete", task.id))?;
 
         tx.commit().await.context("commit db tx")?;
+
+        let _ = self.event_sender.try_send(Event::TasksUpdated);
 
         // Refresh profile since this task is now indexed by it
         {
@@ -416,6 +440,8 @@ impl Manager {
 
         tx.commit().await.context("commit db tx")?;
 
+        let _ = self.event_sender.try_send(Event::TasksUpdated);
+
         Ok(())
     }
 
@@ -428,6 +454,8 @@ impl Manager {
             .context(format!("transition task {task_id} to retried"))?;
 
         tx.commit().await.context("commit db tx")?;
+
+        let _ = self.event_sender.try_send(Event::TasksUpdated);
 
         Ok(())
     }
@@ -470,6 +498,8 @@ impl Manager {
 
         tx.commit().await.context("commit db tx")?;
 
+        let _ = self.event_sender.try_send(Event::TasksUpdated);
+
         info!(%task_id, "Task successfully cancelled");
 
         Ok(())
@@ -481,13 +511,25 @@ impl Manager {
         public_key: EncodedPublicKey,
         message: builder::Message,
     ) -> Result<bool> {
-        let builder =
-            get_or_init_builder(&mut self.builders, &self.config, endpoint, public_key).context("init builder")?;
+        let builder = get_or_init_builder(
+            &mut self.builders,
+            &self.config,
+            self.state.service_db(),
+            endpoint,
+            public_key,
+        )
+        .await
+        .context("init builder")?;
 
-        if let Some(event) = builder.update(message).await {
+        let event = builder.update(message).await;
+
+        let _ = self.event_sender.try_send(Event::BuildersUpdated);
+
+        if let Some(event) = event {
             match event {
                 builder::Event::StatusChanged(status) => {
                     let mut reallocate_builds = false;
+                    let mut tasks_updated = false;
                     let mut building = None;
 
                     match status {
@@ -539,9 +581,14 @@ impl Manager {
 
                             // Pick this task back up on another builder
                             reallocate_builds = true;
+                            tasks_updated = true;
                         }
 
                         tx.commit().await?;
+                    }
+
+                    if tasks_updated {
+                        let _ = self.event_sender.try_send(Event::TasksUpdated);
                     }
 
                     return Ok(reallocate_builds);
@@ -592,6 +639,8 @@ impl Manager {
 
                         tx.commit().await?;
                     }
+
+                    let _ = self.event_sender.try_send(Event::TasksUpdated);
                 }
                 builder::Event::BuildFailed { task_id, log_path } => {
                     let mut tx = self.state.service_db().begin().await?;
@@ -612,6 +661,8 @@ impl Manager {
                     .context(format!("transition task {task_id} to failed"))?;
 
                     tx.commit().await?;
+
+                    let _ = self.event_sender.try_send(Event::TasksUpdated);
                 }
                 builder::Event::BuildRejected { task_id } => {
                     let mut tx = self.state.service_db().begin().await?;
@@ -621,6 +672,8 @@ impl Manager {
                         .context(format!("transition task {task_id} to requeued"))?;
 
                     tx.commit().await?;
+
+                    let _ = self.event_sender.try_send(Event::TasksUpdated);
 
                     // Task needs to be queued up on a new builder
                     return Ok(true);
@@ -714,10 +767,11 @@ async fn stash_log(state: &State, path: PathBuf) -> Result<PathBuf> {
     Ok(relative_path.to_owned())
 }
 
-fn get_or_init_builder<'a>(
+async fn get_or_init_builder<'a>(
     builders: &'a mut BTreeMap<builder::Key, Builder>,
     config: &Config,
-    endpoint: endpoint::Id,
+    service_db: &service::Database,
+    endpoint_id: endpoint::Id,
     public_key: EncodedPublicKey,
 ) -> Result<&'a mut Builder> {
     let (index, builder_config) = config
@@ -727,7 +781,17 @@ fn get_or_init_builder<'a>(
         .find(|(_, config)| config.public_key.encode() == public_key)
         .ok_or_eyre(format!("builder not defined in config: {public_key}"))?;
 
-    let key = builder::Key { index, endpoint };
+    let key = builder::Key {
+        index,
+        endpoint: endpoint_id,
+    };
 
-    Ok(builders.entry(key).or_insert(Builder::new(endpoint, builder_config)))
+    match builders.entry(key) {
+        btree_map::Entry::Vacant(entry) => {
+            let endpoint = Endpoint::get(service_db.acquire().await?.as_mut(), endpoint_id).await?;
+
+            Ok(entry.insert(Builder::new(&endpoint, builder_config)))
+        }
+        btree_map::Entry::Occupied(entry) => Ok(entry.into_mut()),
+    }
 }

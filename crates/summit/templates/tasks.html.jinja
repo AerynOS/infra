@@ -1,187 +1,52 @@
 {% extends "skel.html.jinja" %}
 {% block body %}
-    <div class="tasks-total-filter">
-        <div>
-            <span>{{ total }} tasks</span>
-            <span>|</span>
-            <input type="text" class="tasks-total-filter__search" id="searchTasksInput" placeholder="Search Tasks..." value="{{ search_tasks if search_tasks is not none else '' }}" {% if search_tasks %}autofocus{% endif %}>
-        </div>
-        <div class="tasks-total-filter__filter-sort">
-
-            <div>
-                <span>Sort by:</span>
-                <div class="custom-select-wrapper">
-                    <select class="custom-select" id="taskSortSelect">
-                        <option value="{{ build_task_query_url(status, '', '', search_tasks) }}">Default</option>
-                        <option {% if selected_sort == "ended" and selected_order == "desc" %}selected{% endif %} value="{{ build_task_query_url(selected_status, "ended", "desc", search_tasks) }}">Newest Finished</option>
-                        <option {% if selected_sort == "ended" and selected_order == "asc" %}selected{% endif %} value="{{ build_task_query_url(selected_status, "ended", "asc", search_tasks) }}">Oldest Finished</option>
-                        <option {% if selected_sort == "build" and selected_order == "asc" %}selected{% endif %} value="{{ build_task_query_url(selected_status, "build", "asc", search_tasks) }}">Shortest Build Time</option>
-                        <option {% if selected_sort == "build" and selected_order == "desc" %}selected{% endif %} value="{{ build_task_query_url(selected_status, "build", "desc", search_tasks) }}">Longest Build Time</option>
-                        <option {% if selected_sort == "updated" and selected_order == "desc" %}selected{% endif %} value="{{ build_task_query_url(selected_status, "updated", "desc", search_tasks) }}">Last Updated</option>
-                    </select>
-                </div>
-            </div>
-            <div class="tasks-total-filter__filter-sort__item">
-                <span>Filter by:</span>
-                <div class="custom-select-wrapper">
-                    <select class="custom-select" id="taskFilterSelect">
-                        <option value="{{ build_task_query_url('', selected_sort, selected_order, search_tasks) }}">All</option>
-                        {% for status in statuses %}
-                            <option {% if status == selected_status %}selected{% endif %} value="{{ build_task_query_url(status, selected_sort, selected_order, search_tasks) }}">{{ status }}</option>
-                        {% endfor %}
-                    </select>
-                </div>
-            </div>
-        </div>
+    <div hx-ext="sse" sse-connect="/sse" sse-swap="tasks" style="display: contents;">
+        {% include 'tasks-table.html.jinja' %}
     </div>
-
-    <div class="tasks">
-        <ul class="tasks__list">
-            {% if tasks | length == 0 %}
-                <li class="tasks__list__item tasks__list__item--not-found">
-                    {% if selected_status %}
-                        No tasks found for status: <span> {{ selected_status }}</span>
-                    {% else %}
-                        No tasks found
-                    {% endif %}
-                </li>
-            {% endif %}
-
-            {% for task in tasks %}
-                {% set profile = projects | profile(task.profile_id) %}
-                {% set endpoint = endpoints | endpoint(task.allocated_builder) %}
-
-                {% if endpoint.description is not none -%}
-                    {% set builder_description = endpoint.description ~ " " -%}
-                {% endif -%}
-
-                <li class="tasks__list__item">
-                    <code style="display:none">{{ task }}</code>
-
-                    <div class="tasks__list__item__id">
-                        <span>#{{ task.id }}</span>
-                    </div>
-                    <div class="tasks__list__item__detail">
-                        {{ task.build_id }}
-                        <div>{{ task.description }}</div>
-                    </div>
-                    <div class="tasks__list__item__timing">
-                        {% if task.ended %}
-                            <span><a href="/logs/{{ task.id }}/build.log">Ended @ {{ task.ended }}</a></span>
-                            <span title="{{ task.allocated_builder }}">{{ task.duration | format_duration }} on {{ builder_description }}</span>
-                        {% elif task.started %}
-                            <span><a href="/logs/{{ task.id }}/build.log">Started @ {{ task.started }}</a></span>
-                            <span title="{{ task.allocated_builder }}">on {{ builder_description }}</span>
-                        {% else %}
-                            <span>Added @ {{ task.added }}</span>
-                        {% endif %}
-                    </div>
-                    <div class="tasks__list__item__arch">
-                        <span>{{ profile.arch }}</span>
-                    </div>
-                    <div class="tasks__list__item__status"><span class="badge badge--{{ task.status }}">{{ task.status }}</span></div>
-                </li>
-            {% endfor %}
-        </ul>
-    </div>
-
-    {% if total > 0 %}
-        {% set query = build_task_query_url(selected_status, selected_sort, selected_order, search_tasks) %}
-
-        {% if query %}
-            {% set full_query = "&" ~ query %}
-        {% endif %}
-
-        <nav class="pagination-wrap" aria-label="Pagination">
-            <ul class="pagination">
-
-                {# Previous Button #}
-                <li class="page-item {% if page <= 1 %}disabled{% endif %}">
-                    <a class="page-link" href="?page={{ page - 1 }}{{ full_query }}" aria-label="Previous">
-                        <span aria-hidden="true">&laquo;</span>
-                    </a>
-                </li>
-
-                {# First page + ellipsis if not in pages_to_show #}
-                {% if pages_to_show[0] > 1 %}
-                    <li class="page-item">
-                        <a class="page-link" href="?page=1{{ full_query }}">1</a>
-                    </li>
-                    {% if pages_to_show[0] > 2 %}
-                        <li class="page-item disabled">
-                            <span class="page-link">...</span>
-                        </li>
-                    {% endif %}
-                {% endif %}
-
-                {# Page Numbers #}
-                {% for p in pages_to_show %}
-                    <li class="page-item {% if p == page %}active{% endif %}">
-                        <a class="page-link" href="?page={{ p }}{{ full_query }}">{{ p }}</a>
-                    </li>
-                {% endfor %}
-
-                {# Ellipsis + last page if not in pages_to_show #}
-                {% if pages_to_show[pages_to_show | length - 1] < total_pages %}
-                    {% if pages_to_show[pages_to_show | length - 1] < total_pages - 1 %}
-                        <li class="page-item disabled">
-                            <span class="page-link">...</span>
-                        </li>
-                    {% endif %}
-                    <li class="page-item">
-                        <a class="page-link" href="?page={{ total_pages }}{{ full_query }}">{{ total_pages }}</a>
-                    </li>
-                {% endif %}
-
-                {# Next Button #}
-                <li class="page-item {% if page >= total_pages %}disabled{% endif %}">
-                    <a class="page-link" href="?page={{ page + 1 }}{{ full_query }}" aria-label="Next">
-                        <span aria-hidden="true">&raquo;</span>
-                    </a>
-                </li>
-
-            </ul>
-        </nav>
-    {% endif %}
-
 {% endblock %}
 
 {% block javascript %}
     <script>
-        const taskSortSelect = document.getElementById('taskSortSelect');
-        const taskFilterSelect = document.getElementById('taskFilterSelect');
-        const searchTasksInput = document.getElementById('searchTasksInput');
+        bind();
 
-        const urlParams = new URLSearchParams(window.location.search);
-        const sort = urlParams.get('sort');
-        const order = urlParams.get('order');
-        const status = urlParams.get('status');
+        document.body.addEventListener('htmx:afterSwap', (_) => bind());
 
-        searchTasksInput.addEventListener('keydown', function (e) {
-            if (e.key === 'Enter') {
-                let url = [];
+        function bind() {
+            const taskSortSelect = document.getElementById('taskSortSelect');
+            const taskFilterSelect = document.getElementById('taskFilterSelect');
+            const searchTasksInput = document.getElementById('searchTasksInput');
 
-                url.push('search_tasks=' + e.target.value);
+            const urlParams = new URLSearchParams(window.location.search);
+            const sort = urlParams.get('sort');
+            const order = urlParams.get('order');
+            const status = urlParams.get('status');
 
-                if (sort && order) {
-                    url.push('sort=' + sort);
-                    url.push('order=' + order);
+            searchTasksInput.addEventListener('keydown', function (e) {
+                if (e.key === 'Enter') {
+                    let url = [];
+
+                    url.push('search_tasks=' + e.target.value);
+
+                    if (sort && order) {
+                        url.push('sort=' + sort);
+                        url.push('order=' + order);
+                    }
+
+                    if (status) {
+                        url.push('status=' + status);
+                    }
+
+                    window.location.href = url.length > 0 ? `?${url.join('&')}` : '';
                 }
+            });
 
-                if (status) {
-                    url.push('status=' + status);
-                }
+            taskSortSelect.addEventListener('change', function(e) {
+                window.location.href = '?' + this.value;
+            });
 
-                window.location.href = url.length > 0 ? `?${url.join('&')}` : '';
-            }
-        });
-
-        taskSortSelect.addEventListener('change', function(e) {
-            window.location.href = '?' + this.value;
-        });
-
-        taskFilterSelect.addEventListener('change', function(e) {
-            window.location.href = '?' + this.value;
-        });
+            taskFilterSelect.addEventListener('change', function(e) {
+                window.location.href = '?' + this.value;
+            });
+        }
     </script>
 {% endblock %}

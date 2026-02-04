@@ -1,4 +1,7 @@
-use std::collections::{BTreeMap, HashMap};
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::Arc,
+};
 
 use color_eyre::eyre::{self, Context, OptionExt, Result};
 use dag::Dag;
@@ -6,6 +9,7 @@ use futures_util::{StreamExt, TryStreamExt, stream};
 use itertools::Itertools;
 use moss::db::meta;
 use petgraph::{algo::dijkstra, graph::DiGraph, visit::EdgeRef};
+use serde::Serialize;
 use serde_json::json;
 use service::error;
 use sqlx::SqliteConnection;
@@ -22,7 +26,7 @@ use crate::{
 #[derive(Default)]
 pub struct Queue(Vec<task::Queued>);
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub struct JsonView {
     pub nodes: serde_json::Value,
     pub links: serde_json::Value,
@@ -45,7 +49,7 @@ impl Queue {
         projects: &[Project],
         repo_dbs: &HashMap<repository::Id, meta::Database>,
         build_sizes: &BuildSizesConfig,
-    ) -> Result<JsonView> {
+    ) -> Result<Arc<JsonView>> {
         let open_tasks = task::query(conn, task::query::Params::default().statuses(task::Status::open()))
             .await
             .context("list open tasks")?
@@ -192,7 +196,7 @@ impl Queue {
 
         debug!(num_tasks = self.0.len(), "Queue recomputed");
 
-        Ok(json_view)
+        Ok(Arc::new(json_view))
     }
 
     pub fn available(&self) -> impl Iterator<Item = &task::Queued> {

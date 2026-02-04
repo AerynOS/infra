@@ -15,7 +15,7 @@ pub(super) async fn create(
     repository: &Repository,
     task @ MissingTask { profile, meta, .. }: &MissingTask<'_>,
     queue: &impl TaskQueue,
-) -> Result<()> {
+) -> Result<bool> {
     let build_id = format!(
         "{} / {} / {}-{}-{}_{}-{}",
         project.slug,
@@ -48,7 +48,7 @@ pub(super) async fn create(
     // Task already created, do nothing
     if exists.is_some() {
         warn!("Task already created, skipping");
-        return Ok(());
+        return Ok(false);
     }
 
     let source_path = meta.uri.clone().ok_or_eyre("missing relative recipe path")?;
@@ -142,5 +142,5 @@ pub(super) async fn create(
 
     info!(%task_id, "Task created");
 
-    Ok(())
+    Ok(true)
 }

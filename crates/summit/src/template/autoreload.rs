@@ -1,11 +1,10 @@
 use std::sync::LazyLock;
 
 use camino::Utf8Path;
-use http::StatusCode;
 use minijinja::path_loader;
 use minijinja_autoreload::AutoReloader;
 
-use super::{Response, env};
+use super::env;
 
 static AUTO_RELOADER: LazyLock<AutoReloader> = LazyLock::new(|| {
     let cargo_manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect(
@@ -26,13 +25,8 @@ static AUTO_RELOADER: LazyLock<AutoReloader> = LazyLock::new(|| {
 });
 
 #[allow(clippy::result_large_err)]
-pub(super) fn with_environment(f: impl FnOnce(&minijinja::Environment<'_>) -> Response) -> Response {
-    let env = AUTO_RELOADER.acquire_env().map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to reload MiniJinja templates: {e}"),
-        )
-    })?;
+pub(super) fn with_environment<T>(f: impl FnOnce(&minijinja::Environment<'_>) -> T) -> T {
+    let env = AUTO_RELOADER.acquire_env().expect("env built successfully");
 
     f(&env)
 }

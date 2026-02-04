@@ -1,0 +1,14 @@
+<div class="overview-recent">
+    <h3>Recent Events</h3>
+    <ul class="overview-recent__list">
+        {% for task in tasks %}
+            {% set status = task.status|capitalize %}
+            <li class="overview-recent__list__item overview-recent__list__item--{{ task.status }}">
+                {% set endpoint = endpoints | endpoint(task.allocated_builder) %}
+                <h4>{{ status }} #{{ task.id}} {{task.source_path}}{{ ' on ' ~ endpoint.description }}</h4>
+                <p>{{ task.description }}</p>
+                <div>{{ task.updated }}</div>
+            </li>
+        {% endfor %}
+    </ul>
+</div>
