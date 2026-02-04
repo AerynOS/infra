@@ -1,25 +1,21 @@
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
     path::PathBuf,
-    sync::{Arc, LazyLock},
+    sync::Arc,
 };
 
-use arc_swap::ArcSwap;
 use color_eyre::eyre::{self, Context, OptionExt, Report, Result};
 use itertools::Itertools;
 use moss::db::meta;
-use service::{Account, Endpoint, State, crypto::EncodedPublicKey, database::Transaction, endpoint, error};
+use service::{Account, Endpoint, crypto::EncodedPublicKey, database::Transaction, endpoint, error};
 use sqlx::{Sqlite, pool::PoolConnection};
 use tokio::task::spawn_blocking;
 use tracing::{Span, debug, error, info, warn};
 
-use crate::{Builder, Config, Project, Queue, builder, config::Size, profile, project, repository, task};
-
-/// Current view of builder info
-pub static BUILDERS: LazyLock<Arc<ArcSwap<Vec<builder::Info>>>> = LazyLock::new(Default::default);
+use crate::{Builder, Config, Project, Queue, State, builder, config::Size, profile, project, repository, task};
 
 pub struct Manager {
-    pub state: State,
+    pub state: Arc<State>,
     pub paused: bool,
     pub queue: Queue,
     builders: BTreeMap<builder::Key, Builder>,
@@ -30,8 +26,8 @@ pub struct Manager {
 
 impl Manager {
     #[tracing::instrument(name = "load_manager", skip_all)]
-    pub async fn load(config: Config, state: State) -> Result<Self> {
-        let mut conn = state.service_db.acquire().await?;
+    pub async fn load(config: Config, state: Arc<State>) -> Result<Self> {
+        let mut conn = state.service_db().acquire().await?;
 
         let projects = project::list(conn.as_mut()).await?;
 
@@ -211,15 +207,15 @@ impl Manager {
     }
 
     pub async fn begin(&self) -> Result<Transaction> {
-        Ok(self.state.service_db.begin().await?)
+        Ok(self.state.service_db().begin().await?)
     }
 
     pub async fn acquire(&self) -> Result<PoolConnection<Sqlite>> {
-        Ok(self.state.service_db.acquire().await?)
+        Ok(self.state.service_db().acquire().await?)
     }
 
     pub async fn projects(&self) -> Result<Vec<Project>> {
-        Ok(project::list(&mut *self.state.service_db.acquire().await?).await?)
+        Ok(project::list(&mut *self.state.service_db().acquire().await?).await?)
     }
 
     pub fn profile_db(&self, profile: &profile::Id) -> Result<&meta::Database> {
@@ -235,10 +231,13 @@ impl Manager {
 
         let projects = project::list(&mut conn).await.context("list projects")?;
 
-        self.queue
+        let json_view = self
+            .queue
             .recompute(&mut conn, &projects, &self.repository_dbs, &self.config.build_sizes)
             .await
             .context("recompute queue")?;
+
+        self.state.queue_json_view.store(Arc::new(json_view));
 
         let mut available_tasks = self
             .queue
@@ -325,7 +324,7 @@ impl Manager {
 
                     match builder.build(task).await {
                         Ok(_) => {
-                            let mut tx = self.state.service_db.begin().await?;
+                            let mut tx = self.state.service_db().begin().await?;
 
                             task::transition(
                                 &mut tx,
@@ -505,7 +504,7 @@ impl Manager {
                     // Check for stuck / stale builds on this builder that dont
                     // match the current status and rebuild them.
                     {
-                        let mut tx = self.state.service_db.begin().await?;
+                        let mut tx = self.state.service_db().begin().await?;
 
                         let query = task::query(
                             tx.as_mut(),
@@ -554,7 +553,7 @@ impl Manager {
                 } => {
                     let stashed_build_logs = stash_log(&self.state, log_path).await.context("stash logs")?;
 
-                    let mut tx = self.state.service_db.begin().await?;
+                    let mut tx = self.state.service_db().begin().await?;
 
                     task::transition(
                         &mut tx,
@@ -578,7 +577,7 @@ impl Manager {
                             "Failed to send upload request to builder"
                         );
 
-                        let mut tx = self.state.service_db.begin().await?;
+                        let mut tx = self.state.service_db().begin().await?;
 
                         task::transition(
                             &mut tx,
@@ -595,7 +594,7 @@ impl Manager {
                     }
                 }
                 builder::Event::BuildFailed { task_id, log_path } => {
-                    let mut tx = self.state.service_db.begin().await?;
+                    let mut tx = self.state.service_db().begin().await?;
 
                     let stashed_build_logs = if let Some(path) = log_path {
                         Some(stash_log(&self.state, path).await.context("stash logs")?)
@@ -615,7 +614,7 @@ impl Manager {
                     tx.commit().await?;
                 }
                 builder::Event::BuildRejected { task_id } => {
-                    let mut tx = self.state.service_db.begin().await?;
+                    let mut tx = self.state.service_db().begin().await?;
 
                     task::transition(&mut tx, task_id, task::Transition::Requeue, &self.queue)
                         .await
@@ -640,7 +639,9 @@ impl Manager {
     }
 
     pub fn refresh_cached_builder_info(&self) {
-        BUILDERS.store(Arc::new(self.builders.values().map(Builder::info).collect()));
+        self.state
+            .builders
+            .store(Arc::new(self.builders.values().map(Builder::info).collect()));
     }
 
     #[tracing::instrument(skip_all)]
@@ -657,7 +658,7 @@ impl Manager {
 fn connect_profile_db(state: &State, profile: &profile::Id) -> Result<meta::Database> {
     use std::fs;
 
-    let parent = state.db_dir.join("profile");
+    let parent = state.service.db_dir.join("profile");
 
     fs::create_dir_all(&parent).context("create profile db directory")?;
 
@@ -670,7 +671,7 @@ fn connect_profile_db(state: &State, profile: &profile::Id) -> Result<meta::Data
 fn connect_repository_db(state: &State, repository: &repository::Id) -> Result<meta::Database> {
     use std::fs;
 
-    let parent = state.db_dir.join("repository");
+    let parent = state.service.db_dir.join("repository");
 
     fs::create_dir_all(&parent).context("create repository db directory")?;
 
@@ -707,7 +708,7 @@ async fn stash_log(state: &State, path: PathBuf) -> Result<PathBuf> {
     .context("compress log file")?;
 
     let relative_path = compressed_path
-        .strip_prefix(&state.state_dir)
+        .strip_prefix(state.state_dir())
         .context("log is descendent of state dir")?;
 
     Ok(relative_path.to_owned())

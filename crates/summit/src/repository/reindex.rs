@@ -2,13 +2,14 @@ use std::path::{Path, PathBuf};
 
 use color_eyre::eyre::{Context, OptionExt, Result};
 use moss::{db::meta, package::Meta};
-use service::{State, git};
+use service::git;
 use sqlx::SqliteConnection;
 use stone::StoneDecodedPayload;
 use tokio::{fs, task};
 use tracing::{info, trace};
 
 use super::{Repository, Status, set_description, set_status};
+use crate::State;
 
 #[tracing::instrument(name = "reindex_repository", skip_all, fields(repository = %repo.name, commit_ref = repo.commit_ref))]
 pub async fn reindex(
@@ -23,7 +24,7 @@ pub async fn reindex(
         .await
         .context("set status to indexing")?;
 
-    let repo_dir = state.cache_dir.join("repository").join(repo.id.to_string());
+    let repo_dir = state.cache_dir().join("repository").join(repo.id.to_string());
     let clone_dir = repo_dir.join("clone");
     let work_dir = repo_dir.join("work");
 

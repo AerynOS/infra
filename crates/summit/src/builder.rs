@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use color_eyre::eyre::{Context, OptionExt, Result};
 use serde::{Deserialize, Serialize};
 use service::{
-    Endpoint, State,
+    Endpoint,
     client::{AuthClient, EndpointAuth, VesselServiceClient},
     crypto::PublicKey,
     endpoint,
@@ -18,7 +18,7 @@ use service::{
 use tokio::{sync::mpsc, time::Instant};
 use tracing::{debug, info, warn};
 
-use crate::{Task, config::Size, task};
+use crate::{State, Task, config::Size, task};
 
 const REQUESTED_BUILD_ACK_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -359,7 +359,7 @@ impl Builder {
     pub async fn request_upload(&self, state: &State, task_id: task::Id, collectables: Vec<Collectable>) -> Result<()> {
         let connection = self.connection.as_ref().ok_or_eyre("builder not connected")?;
 
-        let mut conn = state.service_db.acquire().await.context("acquire db connection")?;
+        let mut conn = state.service_db().acquire().await.context("acquire db connection")?;
 
         let task = task::get(conn.as_mut(), task_id).await.context("get task")?;
 
@@ -378,7 +378,7 @@ impl Builder {
         let mut client = VesselServiceClient::connect_with_auth(
             vessel.host_address.clone(),
             None,
-            EndpointAuth::new(&vessel, state.service_db.clone(), state.key_pair.clone()),
+            EndpointAuth::new(&vessel, state.service_db().clone(), state.service.key_pair.clone()),
         )
         .await
         .context("connect vessel client")?;
