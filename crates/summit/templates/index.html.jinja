@@ -1,48 +1,22 @@
 {% extends "skel.html.jinja" %}
 {% block body %}
-    <div class="overview">
-        <div class="overview-info">
-            <h3>Getting started</h3>
-            <div class="overview-info__content">
-                <p>This is the dashboard for the <a href="https://aerynos.com">AerynOS</a> build infrastructure. In order to contribute, visit the <a href="https://aerynos.dev">documentation</a> and open a PR to the <a href="https://github.com/AerynOS/recipes">recipes</a> repository on GitHub.</p>
-                <h4>Current status: Alpha3</h4>
-                <p>Work in Progress, Minimum Viable Product Rust infrastructure port, which is currently in development and is undergoing Alpha integration testing as of December 2025.</p>
-                <p>The term "Minimum Viable Product" means that the user interface you see here is effectively a rough sketch, not a finished product. It is only surfacing just enough information for packagers and distro engineers to be able to use it.</p>
+    <div hx-ext="sse" sse-connect="/sse" style="display: contents;">
+        <div class="overview">
+            <div class="overview-info">
+                <h3>Getting started</h3>
+                <div class="overview-info__content">
+                    <p>This is the dashboard for the <a href="https://aerynos.com">AerynOS</a> build infrastructure. In order to contribute, visit the <a href="https://aerynos.dev">documentation</a> and open a PR to the <a href="https://github.com/AerynOS/recipes">recipes</a> repository on GitHub.</p>
+                    <h4>Current status: Alpha3</h4>
+                    <p>Work in Progress, Minimum Viable Product Rust infrastructure port, which is currently in development and is undergoing Alpha integration testing as of December 2025.</p>
+                    <p>The term "Minimum Viable Product" means that the user interface you see here is effectively a rough sketch, not a finished product. It is only surfacing just enough information for packagers and distro engineers to be able to use it.</p>
+                </div>
             </div>
-        </div>
-        <div class="overview-recent">
-            <h3>Recent Events</h3>
-            <ul class="overview-recent__list">
-                {% for task in tasks %}
-                    {% set status = task.status|capitalize %}
-                    <li class="overview-recent__list__item overview-recent__list__item--{{ task.status }}">
-                        {% set endpoint = endpoints | endpoint(task.allocated_builder) %}
-                        <h4>{{ status }} #{{ task.id}} {{task.source_path}}{{ ' on ' ~ endpoint.description }}</h4>
-                        <p>{{ task.description }}</p>
-                        <div>{{ task.updated }}</div>
-                    </li>
-                {% endfor %}
-            </ul>
-        </div>
-        <div class="overview-builders">
-            <h3>Builders</h3>
-            <ul class="overview-builders__list">
-                {% for endpoint in endpoints %}
-                    {% set builder = builders | builder(endpoint.id) %}
-                    {% if builder %}
-                        <li class="overview-builders__list__item overview-builders__list__item--{{ builder.status }}">
-                            <h4>{{ endpoint.description }} ({{builder.size}})</h4>
-                            {% if builder.building %}
-                                {% set task = building_tasks | task(builder.building) %}
-                                <p>{{ task.description }}</p>
-                                <div>{{ task.duration | format_duration }}</div>
-                            {% else %}
-                                <p>{{ builder.status }}</p>
-                            {% endif %}
-                        </li>
-                    {% endif %}
-                {% endfor %}
-            </ul>
+            <div sse-swap="recent-events" style="display: contents;">
+                {% include 'index-recent-events.html.jinja' %}
+            </div>
+            <div sse-swap="builders" style="display: contents;">
+                {% include 'index-builders.html.jinja' %}
+            </div>
         </div>
     </div>
 {% endblock %}

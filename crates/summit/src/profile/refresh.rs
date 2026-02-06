@@ -8,7 +8,7 @@ use moss::{
     package::{self, Meta},
     request,
 };
-use service::State;
+use stone::StoneDecodedPayload;
 use tokio::{
     fs::{self, File},
     io::AsyncWriteExt,
@@ -17,14 +17,15 @@ use tokio::{
 use tracing::{Span, info};
 
 use super::{Profile, Status, set_status};
+use crate::State;
 
 #[tracing::instrument(name = "refresh_profile", skip_all, fields(profile = profile.name))]
 pub async fn refresh(state: &State, profile: &mut Profile, db: meta::Database) -> Result<()> {
-    let profile_dir = state.cache_dir.join("profile").join(profile.id.to_string());
+    let profile_dir = state.cache_dir().join("profile").join(profile.id.to_string());
     let index_path = profile_dir.join("index");
 
     set_status(
-        &mut *state.service_db.acquire().await.context("acquire db conn")?,
+        &mut *state.service_db().acquire().await.context("acquire db conn")?,
         profile,
         Status::Refreshing,
     )
@@ -47,7 +48,7 @@ pub async fn refresh(state: &State, profile: &mut Profile, db: meta::Database) -
         .context("update index db")?;
 
     set_status(
-        &mut *state.service_db.acquire().await.context("acquire db conn")?,
+        &mut *state.service_db().acquire().await.context("acquire db conn")?,
         profile,
         Status::Indexed,
     )
@@ -60,7 +61,7 @@ pub async fn refresh(state: &State, profile: &mut Profile, db: meta::Database) -
 }
 
 async fn fetch_index(uri: &Uri, index_path: &Path) -> Result<()> {
-    let mut stream = request::get(uri.to_string().parse().context("invalid url")?)
+    let mut stream = request::stream(uri.to_string().parse().context("invalid url")?)
         .await
         .context("request index file")?;
 
@@ -94,7 +95,7 @@ fn update_db(db: meta::Database, index_path: &Path) -> Result<()> {
     let packages = payloads
         .into_iter()
         .filter_map(|payload| {
-            if let stone::read::PayloadKind::Meta(meta) = payload {
+            if let StoneDecodedPayload::Meta(meta) = payload {
                 Some(meta)
             } else {
                 None
@@ -104,7 +105,7 @@ fn update_db(db: meta::Database, index_path: &Path) -> Result<()> {
             let meta = Meta::from_stone_payload(&payload.body).context("convert meta payload")?;
 
             let span = Span::current();
-            span.record("package", meta.name.as_ref());
+            span.record("package", meta.name.as_str());
 
             // Create id from hash of meta
             let hash = meta.hash.clone().ok_or_eyre("missing package hash")?;

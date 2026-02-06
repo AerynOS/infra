@@ -1,0 +1,239 @@
+{% extends "skel.html.jinja" %}
+{% block body %}
+    <div hx-ext="sse" sse-connect="/sse" style="display: contents;">
+        <div id="queueOptions" class="queue-options">
+            <div>
+                <span id="graphCount">{{ nodes|length }} tasks</span>
+                <span>|</span>
+                <input type="text" id="queueFindNode" class="queue-options__search" placeholder="Search Queue..." value="">
+            </div>
+            <label><input id="queueShowDeps" type="checkbox" checked />Deps</label>
+            <label><input id="queueShowRevdeps" type="checkbox" checked />Revdeps</label>
+        </div>
+        <div id="queueGraph" class="queue-graph">
+        </div>
+        <div sse-swap="queue-json" hidden />
+    </div>
+{% endblock %}
+
+{% block javascript %}
+    <script type="module">
+        import * as d3 from "https://cdn.jsdelivr.net/npm/d3@7/+esm";
+
+        const style = getComputedStyle(document.documentElement);
+        const colors = {
+            border: style.getPropertyValue('--link-hover-color'),
+            lightBorder: style.getPropertyValue('--light-border-color'),
+        };
+        const rect = queueGraph.getBoundingClientRect();
+        const nodeRadius = 5;
+        const hMargin = 50;
+        const width = rect.width;
+        const height = window.innerHeight - rect.y;
+        const rainbow = d3.interpolateHslLong("red", "violet");
+
+        let links = JSON.parse('{{ links|safe }}');
+        let nodes = JSON.parse('{{ nodes|safe }}');
+        let maxDepth;
+        let xPerDepth;
+        let node;
+        let link; 
+        let selected;
+        let showDeps = queueShowDeps.checked;
+        let showRevdeps = queueShowRevdeps.checked;
+
+        const svg = d3.create("svg")
+            .attr("viewBox", [-hMargin, -height / 2, width, height])
+            .attr("style", "")
+            .attr("cursor", "crosshair")
+            .on("click", onCanvasClick);
+        const svgGlobalTransform = svg.append("g");
+        const svgLinks = svgGlobalTransform.append("g")
+            .attr("stroke", "#999")
+            .attr("stroke-opacity", 0.3);
+        const svgNodes = svgGlobalTransform.append("g")
+            .attr("stroke", colors.border)
+            .attr("stroke-width", 1.5);
+
+        link = svgLinks.selectAll();
+        node = svgNodes.selectAll();
+
+        const forceLink = d3.forceLink([]).id(d => d.id).strength(0);
+        const simulation = d3.forceSimulation([])
+            // No force applied, only for connecting lines
+            .force("link", forceLink)
+            .force("charge", d3.forceManyBody().strength(-1))
+            .force("collide", d3.forceCollide(nodeRadius))
+            .force("position", d3.forceX(d => d.depth * xPerDepth).strength(1))
+            .alphaDecay(0.1)
+            .on("tick", () => {
+                node
+                    .attr("cx", d => d.x)
+                    .attr("cy", d => d.y);
+                link
+                    .attr("x1", d => d.source.x)
+                    .attr("y1", d => d.source.y)
+                    .attr("x2", d => d.target.x)
+                    .attr("y2", d => d.target.y);
+            });
+        const zoom = d3.zoom().on("zoom", e => {
+            svgGlobalTransform.attr("transform", e.transform);
+        });
+
+        // Simulation 
+        simulation.stop();
+
+        // Add zoom to SVG
+        svg
+          .call(zoom)
+          .call(zoom.transform, d3.zoomIdentity);
+
+        // Add SVG to page
+        queueGraph.append(svg.node());
+
+        // Add event handlers
+        queueShowDeps.addEventListener('click', onShowDepsClicked);
+        queueShowRevdeps.addEventListener('click', onShowRevepsClicked);
+        queueFindNode.addEventListener('keyup', onFindNodeSubmit);
+        document.body.addEventListener('htmx:sseBeforeMessage', (event) => {
+            // Prevent swapping / we don't swap in an htmx element, we just
+            // need the data for this script
+            event.preventDefault();
+
+            const data = JSON.parse(event.detail.data);
+
+            updateTaskCount(data.nodes.length);
+            run(data.nodes, data.links);
+        });
+
+        // Run the simulation
+        run(nodes, links);
+
+        function run(newNodes, newLinks) {
+            // Preserve previous node placement
+            nodes = newNodes.map((newNode) => {
+                const oldNode = node.nodes().find(n => n.__data__.id == newNode.id);
+
+                return Object.assign(oldNode?.__data__ || {}, newNode);
+            });
+            links = newLinks;
+
+            maxDepth = Math.max(...nodes.map(a => a.depth));
+            xPerDepth = (width - hMargin * 2) / maxDepth;
+
+            node = node
+                .data(nodes, (n) => n.id)
+                .join(
+                    (enter) => {
+                        const circle = enter.append("circle");
+
+                        circle
+                            .on("click", onNodeClick)
+                            .append("title")
+                            .text(d => `${d.depth} - ${d.package}`);
+
+                        return circle;
+                    },
+                    update => update,
+                    exit => exit.remove()
+                )
+                .attr("r", nodeRadius)
+                .attr("fill", d => rainbow(d.depth / maxDepth));
+            link = link
+                .data(links, (l) => `${l.source}x${l.target}`)
+                .join("line")
+                .attr("stroke-width", 0.5);
+
+            simulation.nodes([...node.nodes().map(n => n.__data__)]);
+            forceLink.links([...link.nodes().map(l => l.__data__)]);
+
+            if(selected) {
+                selectNode(selected);
+            }
+
+            simulation.alpha(1).restart();
+        }
+        function selectNode(targetId) {
+            const targetNode = nodes.find(n => n.id == targetId);
+
+            if(!targetNode) {
+                deselectNode(targetId);
+                return;
+            }
+
+            const deps = showDeps ? targetNode.dependencies : [];
+            const revdeps = showRevdeps ? nodes.filter(n => n.dependencies.includes(targetId)).map(n => n.id) : [];
+            const visibleNodes = [
+                targetId,
+                ...deps,
+                ...revdeps,
+            ];
+            const showLink = (link) => {
+                return deps.includes(link.source.id) && deps.includes(link.target.id)
+                    || revdeps.includes(link.source.id) && revdeps.includes(link.target.id)
+                    || showDeps && link.source.id == targetId
+                    || showRevdeps && link.target.id == targetId;
+            };
+            node.attr("stroke", n => n.id == targetId ? colors.border : colors.lightBorder);
+            node.attr("visibility", n => visibleNodes.includes(n.id) ? "visible" : "hidden");
+            link.attr("visibility", l => showLink(l) ? "visible" : "hidden");
+            selected = targetId;
+            queueFindNode.value = targetNode.name;
+        }
+        function deselectNode() {
+            node.attr("stroke", null);
+            node.attr("visibility", "visible");
+            link.attr("visibility", "visible");
+            selected = undefined;
+            queueFindNode.value = "";
+        }
+        function onNodeClick(event) {
+            event.stopPropagation();
+
+            const targetId = event.target.__data__.id;
+
+            if (selected === targetId) {
+                deselectNode();
+            } else {
+                selectNode(targetId);
+            }
+        }
+        function onCanvasClick() {
+            if(selected) {
+                deselectNode();
+            }
+        }
+        function onShowDepsClicked(e) {
+            showDeps = e.target.checked;
+            if(selected) {
+                const prev = selected;
+                deselectNode();
+                selectNode(prev);
+            }
+        }
+        function onShowRevepsClicked(e) {
+            showRevdeps = e.target.checked;
+            if(selected) {
+                const prev = selected;
+                deselectNode();
+                selectNode(prev);
+            }
+        }
+        function onFindNodeSubmit(e) {
+            if(event.key == "Enter") {
+                if(e.target.value !== "") {
+                    const lookup = e.target.value.trim().toLowerCase();
+                    const node = nodes.find(n => n.name.toLowerCase() == lookup);
+                    if(node) {
+                        selectNode(node.id);
+                    }
+                } else {
+                    deselectNode();
+                }
+            }
+        }
+        function updateTaskCount(count) {
+            graphCount.innerText = `${count} tasks`;
+        }
+    </script>
+{% endblock %}

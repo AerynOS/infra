@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use color_eyre::eyre::{self, Context, OptionExt, Result, bail, ensure, eyre};
 use itertools::Itertools;
 use service::database::Transaction;
+use stone::{StoneDecodedPayload, StoneHeader, StoneHeaderV1FileType, StoneWriter};
 use tokio::time::Instant;
 use tracing::{debug, info, info_span, warn};
 
@@ -228,10 +229,10 @@ fn import_package(
 
     let mut reader = stone::read(&mut file).context("create stone reader")?;
 
-    let stone::Header::V1(header) = reader.header;
+    let StoneHeader::V1(header) = reader.header;
 
     ensure!(
-        matches!(header.file_type, stone::header::v1::FileType::Binary),
+        matches!(header.file_type, StoneHeaderV1FileType::Binary),
         "{file:?}: Invalid archive, expected binary stone",
     );
 
@@ -243,7 +244,7 @@ fn import_package(
 
     let meta_payload = payloads
         .iter()
-        .find_map(stone::read::PayloadKind::meta)
+        .find_map(StoneDecodedPayload::meta)
         .ok_or(eyre!("{:?}: Invalid archive, missing meta payload", &file))?;
 
     let mut meta = moss::package::Meta::from_stone_payload(&meta_payload.body)
@@ -272,7 +273,7 @@ fn import_package(
             tx.as_mut(),
             channel,
             &Version::Volatile,
-            name.as_ref(),
+            name.as_str(),
             &meta.architecture,
         ))
         .context("lookup existing collection entry")?;
@@ -392,7 +393,7 @@ async fn reindex(state: &State, channel: &str, version: &Version) -> Result<()> 
                     info!(?temp_path, ?path, "Indexing");
 
                     let mut file = File::create(&temp_path).context("create index file")?;
-                    let mut writer = stone::Writer::new(&mut file, stone::header::v1::FileType::Repository)
+                    let mut writer = StoneWriter::new(&mut file, StoneHeaderV1FileType::Repository)
                         .context("create stone writer")?;
 
                     for entry in entries {

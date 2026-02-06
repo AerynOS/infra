@@ -28,6 +28,10 @@ logs *ARGS:
 restart *ARGS:
 	docker compose restart {{ARGS}}
 
+# Stop docker containers
+stop *ARGS:
+	docker compose stop {{ARGS}}
+
 # Bring down docker containers
 down *ARGS:
 	docker compose down -v {{ARGS}}

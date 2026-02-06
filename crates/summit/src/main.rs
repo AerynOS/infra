@@ -9,7 +9,8 @@ use axum::{
 use clap::Parser;
 use color_eyre::eyre::Context;
 use service::endpoint;
-use service::{Server, State, endpoint::Role};
+use service::{Server, endpoint::Role};
+use tokio::sync::{broadcast, mpsc};
 use tower_http::{services::ServeDir, set_header::SetResponseHeader};
 
 pub use self::builder::Builder;
@@ -20,6 +21,7 @@ pub use self::project::Project;
 pub use self::queue::Queue;
 pub use self::repository::Repository;
 pub use self::seed::seed;
+pub use self::state::State;
 pub use self::task::Task;
 
 pub type Result<T, E = color_eyre::eyre::Error> = std::result::Result<T, E>;
@@ -34,6 +36,7 @@ mod queue;
 mod repository;
 mod route;
 mod seed;
+mod state;
 mod task;
 mod template;
 mod worker;
@@ -64,18 +67,19 @@ async fn main() -> Result<()> {
 
     service::tracing::init(&config.tracing);
 
-    let state = State::load(root)
-        .await?
-        .with_migrations(sqlx::migrate!("./migrations"))
-        .await?;
-    let issuer = config.issuer(state.key_pair.clone());
+    let (manager_events_tx, manager_events_rx) = mpsc::channel(100);
+    let (sse_events_tx, sse_events_rx) = broadcast::channel(100);
+
+    let state = State::load(root, sse_events_rx).await.context("load state")?;
+
+    let issuer = config.issuer(state.service.key_pair.clone());
     let downstreams = config.downstreams();
 
     if let Some(from_path) = seed_from {
         seed(&state, from_path).await.context("seeding")?;
     }
 
-    let manager = Manager::load(config.clone(), state.clone())
+    let manager = Manager::load(config.clone(), state.clone(), manager_events_tx)
         .await
         .context("load manager")?;
 
@@ -83,31 +87,37 @@ async fn main() -> Result<()> {
 
     let serve_static = ServeDir::new(static_dir.as_deref().unwrap_or(Path::new("static")));
     let serve_logs = SetResponseHeader::overriding(
-        ServeDir::new(state.state_dir.join("logs")).precompressed_gzip(),
+        ServeDir::new(state.state_dir().join("logs")).precompressed_gzip(),
         http::header::CONTENT_TYPE,
         const { http::HeaderValue::from_static("text/plain; charset=utf-8") },
     );
 
-    Server::new(Role::Hub, &state, config.admin.clone())
+    Server::new(Role::Hub, &state.service, config.admin.clone())
         .with_task("worker", worker_task)
+        .with_task(
+            "sse worker",
+            route::sse_worker(state.clone(), manager_events_rx, sse_events_tx),
+        )
         .with_grpc((host, grpc_port), |routes| {
             routes
                 // Allow other services to enroll w/ summit
-                .add_service(endpoint::service(issuer, state.service_db.clone(), downstreams))
-                .add_service(grpc::service(state.clone(), worker_sender));
+                .add_service(endpoint::service(issuer, state.service_db().clone(), downstreams))
+                .add_service(grpc::service(&state, worker_sender));
         })
         .with_http(
             (host, http_port),
             axum::Router::new()
                 .route("/", get(route::index))
                 .route("/tasks", get(route::tasks))
+                .route("/queue", get(route::queue))
+                .route("/sse", get(route::sse))
                 .route_layer(middleware::from_fn(move |request: Request, next: Next| {
                     USE_MOCK_DATA.scope(use_mock_data, next.run(request))
                 }))
                 .nest_service("/static", serve_static)
                 .nest_service("/logs", serve_logs)
                 .fallback(get(route::fallback))
-                .with_state(route::state(state.clone())),
+                .with_state(state.clone()),
         )
         .start()
         .await?;

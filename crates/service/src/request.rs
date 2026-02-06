@@ -10,7 +10,7 @@ use url::Url;
 /// Downloads the file at [`Url`] to destination [`Path`] and validates it matches
 /// the provided sha256sum
 pub async fn download_and_verify(url: Url, dest: impl AsRef<Path>, sha256sum: &str) -> Result<(), Error> {
-    let mut stream = moss::request::get(url).await?;
+    let mut stream = moss::request::stream(url).await?;
 
     let mut file = File::create(dest).await.map_err(Error::CreateFile)?;
     let mut hasher = Sha256::default();

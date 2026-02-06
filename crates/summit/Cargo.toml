@@ -29,6 +29,7 @@ itertools.workspace = true
 minijinja.workspace = true
 moss.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 sha2.workspace = true
 snafu.workspace = true
 sqlx.workspace = true
@@ -43,6 +44,7 @@ tower.workspace = true
 tower-http.workspace = true
 tracing.workspace = true
 uuid.workspace = true
+petgraph.workspace = true
 
 camino = { workspace = true, optional = true }
 include_dir = { workspace = true, optional = true }

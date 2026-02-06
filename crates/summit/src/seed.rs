@@ -3,11 +3,11 @@ use std::path::Path;
 use color_eyre::eyre::{Context, Result};
 use http::Uri;
 use serde::Deserialize;
-use service::{State, database::Transaction};
+use service::database::Transaction;
 use tokio::fs;
 use tracing::{Span, debug, info};
 
-use crate::{profile, project, repository};
+use crate::{State, profile, project, repository};
 
 #[tracing::instrument(
     skip_all,
@@ -17,7 +17,7 @@ use crate::{profile, project, repository};
     )
 )]
 pub async fn seed(state: &State, path: impl AsRef<Path>) -> Result<()> {
-    let mut tx = state.service_db.begin().await.context("begin db tx")?;
+    let mut tx = state.service_db().begin().await.context("begin db tx")?;
 
     let existing_projects = project::list(tx.as_mut()).await.context("list projects")?;
 
