@@ -315,10 +315,10 @@ impl Received {
 
         let endpoint_id = self.endpoint;
 
-        let mut endpoint = Endpoint {
+        let endpoint = Endpoint {
             id: endpoint_id,
             host_address: self.remote.host_address.clone(),
-            status: endpoint::Status::AwaitingAcceptance,
+            status: endpoint::Status::Operational,
             error: None,
             account: account_id,
             remote_account: self.remote.bearer_token.decoded.payload.account_id.into(),
@@ -355,9 +355,6 @@ impl Received {
             "Bearer token created",
         );
 
-        endpoint.status = endpoint::Status::Operational;
-        endpoint.save(&mut tx).await.map_err(Error::UpdateEndpointStatus)?;
-
         tx.commit().await?;
 
         info!("Accepted endpoint now operational");
@@ -391,9 +388,6 @@ pub(crate) enum Error {
     /// Setting the account token given to an endpoint failed
     #[error("set account token")]
     SetAccountToken(#[source] account::Error),
-    /// Updating the endpoint status failed
-    #[error("update endpoint status")]
-    UpdateEndpointStatus(#[source] database::Error),
     /// Invalid public key
     #[error("Invalid public key")]
     InvalidPublicKey,
