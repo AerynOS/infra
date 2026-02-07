@@ -109,6 +109,7 @@ impl Manager {
         };
 
         manager.refresh(true).await.context("refresh")?;
+        manager.refresh_cached_builder_info();
 
         Ok(manager)
     }
