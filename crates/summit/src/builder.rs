@@ -371,11 +371,8 @@ impl Builder {
             .await
             .context("list endpoints")?
             .into_iter()
-            .find(|endpoint| {
-                matches!(endpoint.status, endpoint::Status::Operational)
-                    && matches!(endpoint.role, endpoint::Role::RepositoryManager)
-            })
-            .ok_or_eyre("no operational vessel instance")?;
+            .find(|endpoint| matches!(endpoint.role, endpoint::Role::RepositoryManager))
+            .ok_or_eyre("no vessel instance")?;
 
         drop(conn);
 

@@ -130,9 +130,7 @@ async fn connect_inner(
         .await
         .context("list endpoints")?
         .into_iter()
-        .find(|e| {
-            e.role == Role::Hub && e.status == endpoint::Status::Operational && e.host_address == target.host_address
-        })
+        .find(|e| e.role == Role::Hub && e.host_address == target.host_address)
         .ok_or_eyre("no enrolled hub")?;
 
     let mut client = SummitServiceClient::connect_with_auth(
