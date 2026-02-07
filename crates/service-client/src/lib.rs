@@ -26,7 +26,7 @@ use tonic::metadata::MetadataValue;
 use tonic::service::Interceptor;
 use tonic::transport::{self, Certificate, Channel, ClientTlsConfig, Identity};
 use tower::Service;
-use tracing::error;
+use tracing::{error, warn};
 
 pub use service_grpc::account::account_service_client::AccountServiceClient;
 pub use service_grpc::endpoint::endpoint_service_client::EndpointServiceClient;
@@ -224,10 +224,32 @@ where
                                 encoded_bearer = Some(refreshed.bearer_token);
                                 encoded_access = Some(refreshed.access_token);
                             }
-                            Err(error) => provider
-                                .token_refresh_failed(&error)
-                                .await
-                                .map_err(Error::AuthProvider)?,
+                            Err(error) => {
+                                if let Some(credentials) = provider.credentials() {
+                                    warn!(%error, "Token refresh failed. Attempting to reauthenticate.");
+
+                                    match authenticate(channel.clone(), credentials).await {
+                                        Ok(refreshed) => {
+                                            provider
+                                                .tokens_refreshed(&refreshed)
+                                                .await
+                                                .map_err(Error::AuthProvider)?;
+
+                                            encoded_bearer = Some(refreshed.bearer_token);
+                                            encoded_access = Some(refreshed.access_token);
+                                        }
+                                        Err(error) => provider
+                                            .token_refresh_failed(&error)
+                                            .await
+                                            .map_err(Error::AuthProvider)?,
+                                    }
+                                } else {
+                                    provider
+                                        .token_refresh_failed(&error)
+                                        .await
+                                        .map_err(Error::AuthProvider)?;
+                                }
+                            }
                         }
                     }
                 }
