@@ -117,7 +117,7 @@ impl Queue {
                         index_uri: profile.index_uri.clone(),
                         remotes,
                         size,
-                        // Calulated via DAG
+                        // Calculated via DAG
                         dependencies: vec![],
                         depth: 0,
                     },
