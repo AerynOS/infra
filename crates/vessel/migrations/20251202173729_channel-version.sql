@@ -23,5 +23,5 @@ CREATE TABLE IF NOT EXISTS channel_version_entry (
   FOREIGN KEY (channel_version_id) REFERENCES channel_version (channel_version_id) ON DELETE CASCADE
 );
 
--- Will get handled at runtime to migrate this to new format
+-- Will get handled at runtime to migate this to new format
 ALTER TABLE collection RENAME TO pending_migration_collection;
