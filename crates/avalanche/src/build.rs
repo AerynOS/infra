@@ -92,9 +92,16 @@ async fn run(request: BuilderBuild, state: &State, stream: stream::Handle) -> Re
         .await
         .context("create boulder config")?;
 
-    build_recipe(&work_dir, &asset_dir, &worktree_dir, &request.relative_path, stream)
-        .await
-        .context("build recipe")?;
+    build_recipe(
+        &work_dir,
+        &asset_dir,
+        &worktree_dir,
+        &request.relative_path,
+        &request.build_architecture,
+        stream,
+    )
+    .await
+    .context("build recipe")?;
 
     let collectables = scan_collectables(&asset_dir).await.context("scan collectables")?;
 
@@ -160,7 +167,8 @@ async fn build_recipe(
     work_dir: &Path,
     asset_dir: &Path,
     worktree_dir: &Path,
-    relative_path: &str,
+    recipe_relative_path: &str,
+    arch: &str,
     stream: stream::Handle,
 ) -> Result<()> {
     info!("Building recipe");
@@ -173,6 +181,8 @@ async fn build_recipe(
             stream.build_log(bytes.into()).await;
         }
     };
+
+    let manifest_path = Path::new(recipe_relative_path).with_file_name(format!("manifest.{arch}.bin"));
 
     // By running with nice like this, we ensure that avalanche can run on
     // systems that also host other services (or are workstations).
@@ -196,8 +206,10 @@ async fn build_recipe(
                 .arg(asset_dir)
                 .arg("--config-dir")
                 .arg(work_dir.join("etc/boulder"))
+                .arg("--verify")
+                .arg(&manifest_path)
                 .arg("--")
-                .arg(relative_path)
+                .arg(recipe_relative_path)
                 .current_dir(worktree_dir)
         },
         write_logs,
