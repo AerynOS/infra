@@ -104,7 +104,8 @@ macro_rules! service_client {
             {
                 let mut endpoint = ::tonic::transport::Endpoint::new(uri)?
                     .http2_keep_alive_interval(Duration::from_secs(60))
-                    .keep_alive_timeout(Duration::from_secs(20));
+                    .keep_alive_timeout(Duration::from_secs(20))
+                    .connect_timeout(Duration::from_secs(5));
 
                 if let Some(config) = tls_config {
                     endpoint = endpoint.tls_config(config.load().await?)?;
@@ -130,7 +131,8 @@ macro_rules! service_client {
             > {
                 let mut endpoint = ::tonic::transport::Endpoint::new(uri)?
                     .http2_keep_alive_interval(Duration::from_secs(60))
-                    .keep_alive_timeout(Duration::from_secs(20));
+                    .keep_alive_timeout(Duration::from_secs(20))
+                    .connect_timeout(Duration::from_secs(5));
 
                 if let Some(config) = tls_config {
                     endpoint = endpoint.tls_config(config.load().await?)?;
