@@ -679,6 +679,24 @@ impl Manager {
                     // Task needs to be queued up on a new builder
                     return Ok(true);
                 }
+                builder::Event::UploadFailed { task_id } => {
+                    let mut tx = self.state.service_db().begin().await?;
+
+                    task::transition(
+                        &mut tx,
+                        task_id,
+                        task::Transition::Failed {
+                            stashed_build_logs: None,
+                        },
+                        &self.queue,
+                    )
+                    .await
+                    .context(format!("transition task {task_id} to failed"))?;
+
+                    tx.commit().await?;
+
+                    let _ = self.event_sender.try_send(Event::TasksUpdated);
+                }
             }
         }
 

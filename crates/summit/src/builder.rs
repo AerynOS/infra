@@ -46,6 +46,9 @@ pub enum Message {
         requested: task::Id,
         in_progress: Option<task::Id>,
     },
+    UploadFailed {
+        task_id: task::Id,
+    },
 }
 
 #[derive(Debug)]
@@ -63,6 +66,9 @@ pub enum Event {
         log_path: Option<PathBuf>,
     },
     BuildRejected {
+        task_id: task::Id,
+    },
+    UploadFailed {
         task_id: task::Id,
     },
 }
@@ -354,6 +360,11 @@ impl Builder {
                 }
 
                 return Some(Event::BuildRejected { task_id: requested });
+            }
+            Message::UploadFailed { task_id } => {
+                info!(%task_id, "Upload failed");
+
+                return Some(Event::UploadFailed { task_id });
             }
         }
 

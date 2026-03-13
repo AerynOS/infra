@@ -420,6 +420,15 @@ async fn builder(
                         },
                     ));
                 }
+                builder_stream_incoming::Event::UploadFailed(task_id) => {
+                    let _ = state.worker.send(worker::Message::Builder(
+                        endpoint_id,
+                        public_key.clone(),
+                        builder::Message::UploadFailed {
+                            task_id: (task_id as i64).into(),
+                        },
+                    ));
+                }
             }
         }
 
