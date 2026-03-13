@@ -208,14 +208,22 @@ async fn connect_inner(
                         }
                         builder_stream_outgoing::Event::Upload(BuilderUpload { build, token, uri }) => {
                             let build = build.ok_or_eyre("missing build message")?;
+                            let task_id = build.task_id;
 
                             tokio::spawn({
                                 let state = state.clone();
+                                let sender = sender.clone();
 
                                 async move {
                                     if let Err(e) = upload(state, build, token, &uri).await {
                                         let error = error::chain(&*e);
-                                        error!(uri, %error, "Failed to upload packages to vessel");
+                                        error!(uri, task_id, %error, "Failed to upload packages to vessel");
+
+                                        let _ = sender
+                                            .send(BuilderStreamIncoming {
+                                                event: Some(builder_stream_incoming::Event::UploadFailed(task_id)),
+                                            })
+                                            .await;
                                     }
                                 }
                             });

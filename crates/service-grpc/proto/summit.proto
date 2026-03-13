@@ -27,6 +27,7 @@ message BuilderStreamIncoming {
     BuilderFinished build_succeeded = 4;
     uint64 build_failed = 5;
     BuilderBusy busy = 6;
+    uint64 upload_failed = 7;
   }
 }
 
