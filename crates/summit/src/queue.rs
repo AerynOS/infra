@@ -8,7 +8,7 @@ use dag::Dag;
 use futures_util::{StreamExt, TryStreamExt, stream};
 use itertools::Itertools;
 use moss::db::meta;
-use petgraph::{algo::dijkstra, graph::DiGraph, visit::EdgeRef};
+use petgraph::visit::EdgeRef;
 use serde::Serialize;
 use serde_json::json;
 use service::error;
@@ -180,13 +180,27 @@ impl Queue {
                 });
         }
 
+        // Transpose to order dependencies before dependents
+        // in the batched topo graph. This is used to get "depth"
+        // of the task.
+        let batched_topo = dag.transpose().batched_topo();
+
         self.0 = mapped_tasks
             .into_values()
             .map(|mut queued| {
-                let (deps, depth) = deps_and_depth(queued.task.id, dag.as_ref());
+                let task_id = &queued.task.id;
 
-                queued.dependencies = deps;
-                queued.depth = depth;
+                queued.dependencies = dag
+                    .dfs(dag.get_index(task_id).expect("exists in dag"))
+                    // DFS starts at the supplied node, skip it
+                    .skip(1)
+                    .copied()
+                    .collect();
+                queued.depth = batched_topo
+                    .iter()
+                    .enumerate()
+                    .find_map(|(idx, tasks)| tasks.contains(task_id).then_some(idx + 1))
+                    .expect("exists in dag");
 
                 queued
             })
@@ -218,18 +232,6 @@ impl TaskQueue for Queue {
             .map(|queued| queued.task.id)
             .collect()
     }
-}
-
-fn deps_and_depth(node: task::Id, graph: &DiGraph<task::Id, ()>) -> (Vec<task::Id>, usize) {
-    let node_idx = graph.node_indices().find(|i| graph[*i] == node).unwrap();
-
-    let mut map = dijkstra(graph, node_idx, None, |_| 1);
-    map.remove(&node_idx);
-
-    let depth = map.values().copied().max().unwrap_or_default() as usize;
-    let deps = map.into_keys().map(|i| graph[i]).collect::<Vec<_>>();
-
-    (deps, depth)
 }
 
 fn cache_json_view(nodes: &[task::Queued], dag: &Dag<task::Id>) -> JsonView {
