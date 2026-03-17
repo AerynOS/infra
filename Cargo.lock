@@ -142,7 +142,7 @@ checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
 [[package]]
 name = "astr"
 version = "0.26.1"
-source = "git+https://github.com/AerynOS/os-tools.git#a5dbc6c8d25ea75b7e81881cf2743b2145c3ee38"
+source = "git+https://github.com/AerynOS/os-tools.git#c36c4b61811d201a0f61dad42d656fddcb649820"
 dependencies = [
  "diesel",
  "stable_deref_trait",
@@ -643,7 +643,7 @@ dependencies = [
 [[package]]
 name = "config"
 version = "0.26.1"
-source = "git+https://github.com/AerynOS/os-tools.git#a5dbc6c8d25ea75b7e81881cf2743b2145c3ee38"
+source = "git+https://github.com/AerynOS/os-tools.git#c36c4b61811d201a0f61dad42d656fddcb649820"
 dependencies = [
  "dirs",
  "fs-err",
@@ -680,7 +680,7 @@ checksum = "7c74b8349d32d297c9134b8c88677813a227df8f779daa29bfc29c183fe3dca6"
 [[package]]
 name = "container"
 version = "0.26.1"
-source = "git+https://github.com/AerynOS/os-tools.git#a5dbc6c8d25ea75b7e81881cf2743b2145c3ee38"
+source = "git+https://github.com/AerynOS/os-tools.git#c36c4b61811d201a0f61dad42d656fddcb649820"
 dependencies = [
  "fs-err",
  "nc",
@@ -858,7 +858,7 @@ dependencies = [
 [[package]]
 name = "dag"
 version = "0.26.1"
-source = "git+https://github.com/AerynOS/os-tools.git#a5dbc6c8d25ea75b7e81881cf2743b2145c3ee38"
+source = "git+https://github.com/AerynOS/os-tools.git#c36c4b61811d201a0f61dad42d656fddcb649820"
 dependencies = [
  "petgraph 0.8.2",
 ]
@@ -1257,7 +1257,7 @@ dependencies = [
 [[package]]
 name = "fnmatch"
 version = "0.26.1"
-source = "git+https://github.com/AerynOS/os-tools.git#a5dbc6c8d25ea75b7e81881cf2743b2145c3ee38"
+source = "git+https://github.com/AerynOS/os-tools.git#c36c4b61811d201a0f61dad42d656fddcb649820"
 dependencies = [
  "regex",
  "serde_core",
@@ -1302,9 +1302,9 @@ dependencies = [
 
 [[package]]
 name = "fs-err"
-version = "3.1.1"
+version = "3.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "88d7be93788013f265201256d58f04936a8079ad5dc898743aa20525f503b683"
+checksum = "73fde052dbfc920003cfd2c8e2c6e6d4cc7c1091538c3a24226cec0665ab08c0"
 dependencies = [
  "autocfg",
  "tokio",
@@ -2305,7 +2305,7 @@ dependencies = [
 [[package]]
 name = "moss"
 version = "0.26.1"
-source = "git+https://github.com/AerynOS/os-tools.git#a5dbc6c8d25ea75b7e81881cf2743b2145c3ee38"
+source = "git+https://github.com/AerynOS/os-tools.git#c36c4b61811d201a0f61dad42d656fddcb649820"
 dependencies = [
  "astr",
  "blsforme",
@@ -3921,9 +3921,10 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 [[package]]
 name = "stone"
 version = "0.26.1"
-source = "git+https://github.com/AerynOS/os-tools.git#a5dbc6c8d25ea75b7e81881cf2743b2145c3ee38"
+source = "git+https://github.com/AerynOS/os-tools.git#c36c4b61811d201a0f61dad42d656fddcb649820"
 dependencies = [
  "astr",
+ "fs-err",
  "strum",
  "thiserror",
  "xxhash-rust",
@@ -3933,7 +3934,7 @@ dependencies = [
 [[package]]
 name = "stone_recipe"
 version = "0.26.1"
-source = "git+https://github.com/AerynOS/os-tools.git#a5dbc6c8d25ea75b7e81881cf2743b2145c3ee38"
+source = "git+https://github.com/AerynOS/os-tools.git#c36c4b61811d201a0f61dad42d656fddcb649820"
 dependencies = [
  "nom",
  "serde",
@@ -4431,7 +4432,7 @@ dependencies = [
 [[package]]
 name = "tools_buildinfo"
 version = "0.26.1"
-source = "git+https://github.com/AerynOS/os-tools.git#a5dbc6c8d25ea75b7e81881cf2743b2145c3ee38"
+source = "git+https://github.com/AerynOS/os-tools.git#c36c4b61811d201a0f61dad42d656fddcb649820"
 dependencies = [
  "chrono",
  "thiserror",
@@ -4609,7 +4610,7 @@ dependencies = [
 [[package]]
 name = "tracing_common"
 version = "0.26.1"
-source = "git+https://github.com/AerynOS/os-tools.git#a5dbc6c8d25ea75b7e81881cf2743b2145c3ee38"
+source = "git+https://github.com/AerynOS/os-tools.git#c36c4b61811d201a0f61dad42d656fddcb649820"
 dependencies = [
  "tracing",
  "tracing-subscriber",
@@ -4618,7 +4619,7 @@ dependencies = [
 [[package]]
 name = "triggers"
 version = "0.26.1"
-source = "git+https://github.com/AerynOS/os-tools.git#a5dbc6c8d25ea75b7e81881cf2743b2145c3ee38"
+source = "git+https://github.com/AerynOS/os-tools.git#c36c4b61811d201a0f61dad42d656fddcb649820"
 dependencies = [
  "dag",
  "fnmatch",
@@ -4641,7 +4642,7 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 [[package]]
 name = "tui"
 version = "0.26.1"
-source = "git+https://github.com/AerynOS/os-tools.git#a5dbc6c8d25ea75b7e81881cf2743b2145c3ee38"
+source = "git+https://github.com/AerynOS/os-tools.git#c36c4b61811d201a0f61dad42d656fddcb649820"
 dependencies = [
  "crossterm",
  "dialoguer",
@@ -4837,7 +4838,7 @@ dependencies = [
 [[package]]
 name = "vfs"
 version = "0.1.0"
-source = "git+https://github.com/AerynOS/os-tools.git#a5dbc6c8d25ea75b7e81881cf2743b2145c3ee38"
+source = "git+https://github.com/AerynOS/os-tools.git#c36c4b61811d201a0f61dad42d656fddcb649820"
 dependencies = [
  "astr",
  "derive_more",
