@@ -1,7 +1,6 @@
 use std::path::Path;
 
 use color_eyre::eyre::{Context, OptionExt, Result};
-use futures_util::StreamExt;
 use http::Uri;
 use moss::{
     db::meta,
@@ -9,11 +8,7 @@ use moss::{
     request,
 };
 use stone::StoneDecodedPayload;
-use tokio::{
-    fs::{self, File},
-    io::AsyncWriteExt,
-    task,
-};
+use tokio::{fs, task};
 use tracing::{Span, info};
 
 use super::{Profile, Status, set_status};
@@ -61,21 +56,9 @@ pub async fn refresh(state: &State, profile: &mut Profile, db: meta::Database) -
 }
 
 async fn fetch_index(uri: &Uri, index_path: &Path) -> Result<()> {
-    let mut stream = request::stream(uri.to_string().parse().context("invalid url")?)
+    request::download(uri.to_string().parse().context("invalid url")?, index_path)
         .await
-        .context("request index file")?;
-
-    let mut out = File::create(index_path).await?;
-
-    while let Some(chunk) = stream.next().await {
-        out.write_all(&chunk.context("download index file")?)
-            .await
-            .context("write index file")?;
-    }
-
-    out.flush().await.context("flush index file")?;
-
-    Ok(())
+        .context("download index file")
 }
 
 fn update_db(db: meta::Database, index_path: &Path) -> Result<()> {

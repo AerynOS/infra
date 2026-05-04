@@ -9,10 +9,10 @@ edition = "2024"
 rust-version = "1.88"
 
 [workspace.dependencies]
-dag = { git = "https://github.com/AerynOS/os-tools.git" }
-moss = { git = "https://github.com/AerynOS/os-tools.git" }
-stone = { git = "https://github.com/AerynOS/os-tools.git" }
-stone_recipe = { git = "https://github.com/AerynOS/os-tools.git" }
+dag = { git = "https://github.com/AerynOS/os-tools.git", rev = "d59820d0e735767166891f0def6e9ccb79f145f8" }
+moss = { git = "https://github.com/AerynOS/os-tools.git", rev = "d59820d0e735767166891f0def6e9ccb79f145f8" }
+stone = { git = "https://github.com/AerynOS/os-tools.git", rev = "d59820d0e735767166891f0def6e9ccb79f145f8" }
+stone_recipe = { git = "https://github.com/AerynOS/os-tools.git", rev = "d59820d0e735767166891f0def6e9ccb79f145f8" }
 
 arc-swap = "1.8.0"
 async-trait = "0.1.88"
@@ -125,3 +125,4 @@ opt-level = 2
 
 [patch.crates-io]
 sqlx = { git = "https://github.com/tarkah/sqlx", branch = "task/sqlite3-version" }
+kdl = { git = "https://github.com/kdl-org/kdl-rs", rev = "e9df058c25cd4486df8fe568d2ff24ea2c4ed0e8" }
