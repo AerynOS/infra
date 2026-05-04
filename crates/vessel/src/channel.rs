@@ -486,9 +486,9 @@ async fn symlink_version_to_history(
         let _ = fs::remove_file(&dest).await;
     }
 
-    fs::symlink(source, dest)
+    fs::symlink(&source, &dest)
         .await
-        .context("link from {source:?} to {dest:?}")?;
+        .context(format!("link from {source:?} to {dest:?}"))?;
 
     Ok(())
 }

@@ -108,7 +108,7 @@ pub struct HistoryVersion {
     #[sqlx(try_from = "String")]
     pub version: Version,
     #[sqlx(try_from = "&'a str")]
-    format: Format,
+    pub format: Format,
 }
 
 /// Finds the related history for the incoming version
