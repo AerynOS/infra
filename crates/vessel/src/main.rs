@@ -85,4 +85,9 @@ pub mod test {
         db.migrate(sqlx::migrate!("./migrations")).await.unwrap();
         db
     }
+
+    #[tokio::test]
+    async fn test_migrations() {
+        database().await;
+    }
 }

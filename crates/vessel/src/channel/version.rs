@@ -1,5 +1,6 @@
 use std::fmt;
 
+use moss::repository::Format;
 use snafu::Snafu;
 use sqlx::FromRow;
 
@@ -149,6 +150,8 @@ pub struct Entry {
     pub source_version: String,
     pub source_release: i64,
     pub build_release: i64,
+    #[sqlx(try_from = "&'a str")]
+    pub format: Format,
 }
 
 impl Entry {
@@ -161,6 +164,7 @@ impl Entry {
             source_version: meta.version_identifier.clone(),
             source_release: meta.source_release as i64,
             build_release: meta.build_release as i64,
+            format: todo!("hook up format"),
         }
     }
 

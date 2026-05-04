@@ -1,8 +1,9 @@
 use std::{collections::HashSet, time::Duration};
 
 use chrono::{DateTime, Utc};
-use color_eyre::eyre::{Result, ensure};
+use color_eyre::eyre::{OptionExt, Result, ensure};
 use futures_util::TryStreamExt;
+use moss::repository::Format;
 use service::database::Transaction;
 use sqlx::{FromRow, SqliteConnection};
 use tokio::time;
@@ -31,7 +32,8 @@ pub async fn lookup_entry(
           source_id,
           source_version,
           source_release,
-          build_release
+          build_release,
+          format
         FROM
           channel_version_entry
         WHERE
@@ -62,7 +64,8 @@ pub async fn entries(conn: &mut SqliteConnection, channel: &str, version: &Versi
           source_id,
           source_version,
           source_release,
-          build_release
+          build_release,
+          format
         FROM
           channel_version_entry
         WHERE
@@ -85,7 +88,8 @@ pub async fn all_entries(conn: &mut SqliteConnection, channel: &str) -> sqlx::Re
           source_id,
           source_version,
           source_release,
-          build_release
+          build_release,
+          format
         FROM
           channel_version_entry
         WHERE
@@ -103,6 +107,8 @@ pub struct HistoryVersion {
     channel_version_id: i64,
     #[sqlx(try_from = "String")]
     pub version: Version,
+    #[sqlx(try_from = "&'a str")]
+    format: Format,
 }
 
 /// Finds the related history for the incoming version
@@ -131,7 +137,8 @@ pub async fn find_related_history(
         "
         SELECT
           channel_version_id,
-          version
+          version,
+          format
         FROM
           channel_version
         {where_clause}
@@ -150,6 +157,10 @@ pub async fn find_related_history(
 pub async fn record_history(tx: &mut Transaction, channel: &str, entries: &[Entry]) -> Result<Version> {
     let prev_history = find_related_history(tx.as_mut(), channel, &Version::Volatile).await?;
     let prev_version = prev_history.as_ref().map(|h| h.version.to_string()).unwrap_or_default();
+    let prev_format = prev_history
+        .as_ref()
+        .map(|h| h.format.clone())
+        .unwrap_or(Format::LATEST);
 
     let (new_identifier, new_version) = loop {
         let now = Utc::now().timestamp();
@@ -187,14 +198,16 @@ pub async fn record_history(tx: &mut Transaction, channel: &str, entries: &[Entr
         INSERT INTO channel_version
         (
           channel,
-          version
+          version,
+          format
         )
-        VALUES (?,?)
+        VALUES (?,?,?)
         RETURNING channel_version_id;
         ",
     )
     .bind(channel)
     .bind(new_version.slug())
+    .bind(prev_format.to_string())
     .fetch_one(tx.as_mut())
     .await?;
 
@@ -211,7 +224,8 @@ pub async fn record_history(tx: &mut Transaction, channel: &str, entries: &[Entr
               source_id,
               source_version,
               source_release,
-              build_release
+              build_release,
+              format
             )
             SELECT
               ?,
@@ -221,7 +235,8 @@ pub async fn record_history(tx: &mut Transaction, channel: &str, entries: &[Entr
               source_id,
               source_version,
               source_release,
-              build_release
+              build_release,
+              format
             FROM
               channel_version_entry
             WHERE
@@ -236,7 +251,7 @@ pub async fn record_history(tx: &mut Transaction, channel: &str, entries: &[Entr
 
     // Update new version with incoming entries
     for chunk in entries.chunks(32766 / 8) {
-        let values_binds = ",(?,?,?,?,?,?,?,?)"
+        let values_binds = ",(?,?,?,?,?,?,?,?,?)"
             .repeat(chunk.len())
             .chars()
             .skip(1)
@@ -253,7 +268,8 @@ pub async fn record_history(tx: &mut Transaction, channel: &str, entries: &[Entr
               source_id,
               source_version,
               source_release,
-              build_release
+              build_release,
+              format
             )
             VALUES {values_binds}
             ON CONFLICT(channel_version_id, name, arch) DO UPDATE SET
@@ -261,7 +277,8 @@ pub async fn record_history(tx: &mut Transaction, channel: &str, entries: &[Entr
               source_id=excluded.source_id,
               source_version=excluded.source_version,
               source_release=excluded.source_release,
-              build_release=excluded.build_release;
+              build_release=excluded.build_release,
+              format=excluded.format;
             "
         );
 
@@ -276,7 +293,8 @@ pub async fn record_history(tx: &mut Transaction, channel: &str, entries: &[Entr
                 .bind(&entry.source_id)
                 .bind(&entry.source_version)
                 .bind(entry.source_release)
-                .bind(entry.build_release);
+                .bind(entry.build_release)
+                .bind(entry.format.to_string());
         }
 
         query.execute(tx.as_mut()).await?;
@@ -298,15 +316,21 @@ pub async fn link_version_to_history(
         identifier: history.clone(),
     };
 
+    let history = find_related_history(tx.as_mut(), channel, &history_version)
+        .await?
+        .ok_or_eyre(format!("{history_version} doesn't exist in db"))?;
+
     let result = sqlx::query(
         "
         INSERT INTO channel_version
         (
           channel,
           version,
+          format,
           history_id
         )
         SELECT
+          ?,
           ?,
           ?,
           channel_version_id
@@ -316,11 +340,13 @@ pub async fn link_version_to_history(
           channel = ?
           AND version = ?
         ON CONFLICT(channel, version) DO UPDATE SET
+          format=excluded.format,
           history_id=excluded.history_id;
         ",
     )
     .bind(channel)
     .bind(version.slug())
+    .bind(history.format.to_string())
     .bind(channel)
     .bind(history_version.slug())
     .execute(tx.as_mut())
@@ -529,6 +555,7 @@ mod test {
             source_release,
             source_version: source_version.to_owned(),
             build_release,
+            format: Format::Legacy,
         }
     }
 
