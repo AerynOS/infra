@@ -34,7 +34,7 @@ stop *ARGS:
 
 # Bring down docker containers
 down *ARGS:
-	docker compose down -v {{ARGS}}
+	docker compose down {{ARGS}}
 
 # Quickly view summit front-end changes (DX feature)
 summit-dev *ARGS:

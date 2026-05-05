@@ -4,11 +4,13 @@ use std::path::{Path, PathBuf};
 
 use color_eyre::eyre::{self, Context, OptionExt, Result, bail, ensure, eyre};
 use itertools::Itertools;
+use moss::repository::Format;
 use service::database::Transaction;
 use stone::{StoneDecodedPayload, StoneHeader, StoneHeaderV1FileType, StoneWriter};
 use tokio::time::Instant;
 use tracing::{debug, info, info_span, warn};
 
+use crate::channel::version::LegacyVersion;
 use crate::{Package, State, package};
 
 pub use self::prune::prune;
@@ -73,7 +75,7 @@ pub async fn handle_command(state: &State, channel: &str, command: Command) -> R
                 .context("link version to history in db")?;
 
             // Update filesystem
-            symlink_version_to_history(state, channel, &stream_version, &history)
+            legacy_symlink_version_to_history(state, channel, &stream_version, &history)
                 .await
                 .context("symlink stream to history folder")?;
 
@@ -97,7 +99,7 @@ pub async fn handle_command(state: &State, channel: &str, command: Command) -> R
                 .context("link version to history in db")?;
 
             // Update filesystem
-            symlink_version_to_history(state, channel, &tag, &history)
+            legacy_symlink_version_to_history(state, channel, &tag, &history)
                 .await
                 .context("symlink stream to history folder")?;
 
@@ -114,7 +116,7 @@ pub async fn handle_command(state: &State, channel: &str, command: Command) -> R
                 .context("delete tag in db")?;
 
             // Update filesystem
-            remove_version_symlink(state, channel, &tag)
+            legacy_remove_version_symlink(state, channel, &tag)
                 .await
                 .context("remove symlink to history folder")?;
 
@@ -133,10 +135,7 @@ pub async fn handle_command(state: &State, channel: &str, command: Command) -> R
 pub async fn import_directory(state: &State, channel: &str, directory: PathBuf) -> Result<()> {
     info!("Import started");
 
-    let stones = tokio::task::spawn_blocking(move || package::enumerate(&directory))
-        .await
-        .context("spawn blocking")?
-        .context("enumerate stones")?;
+    let stones = package::enumerate(&directory).await.context("enumerate stones")?;
 
     let num_stones = stones.len();
 
@@ -166,7 +165,7 @@ pub async fn import_packages(
     destructive_move: bool,
 ) -> Result<()> {
     // Stone is read in blocking manner
-    let (mut tx, mut entries) = tokio::task::spawn_blocking({
+    let (mut tx, format, mut entries) = tokio::task::spawn_blocking({
         let span = tracing::Span::current();
         let state = state.clone();
         let channel = channel.to_owned();
@@ -174,12 +173,22 @@ pub async fn import_packages(
         // Rollback any collection DB inserts if we encounter any failures
         let mut tx = state.service_db().begin().await.context("start db tx")?;
 
+        // Default to the current format (format of volatile) or if this is our first
+        // import, default to the latest format
+        let format = {
+            let volatile = db::find_related_history(tx.as_mut(), &channel, &Version::Volatile)
+                .await
+                .context("find volatile history")?;
+
+            volatile.map(|h| h.format).unwrap_or(Format::LATEST)
+        };
+
         move || {
             span.in_scope(|| {
                 let entries = packages
                     .iter()
                     .map(|package| {
-                        import_package(&state, &mut tx, package, destructive_move, &channel)
+                        import_package(&state, &mut tx, package, destructive_move, &channel, &format)
                             .context(format!("import package {}", package.name))
                     })
                     .collect::<Result<Vec<_>, _>>()?
@@ -187,7 +196,7 @@ pub async fn import_packages(
                     .flatten()
                     .collect::<Vec<_>>();
 
-                eyre::Ok((tx, entries))
+                eyre::Ok((tx, format, entries))
             })
         }
     })
@@ -201,14 +210,16 @@ pub async fn import_packages(
             .then_with(|| a.source_release.cmp(&b.source_release))
     });
 
-    // Record entries as new version
-    let new_version = db::record_history(&mut tx, channel, &entries).await?;
+    // Record entries as new history version
+    let new_version = db::record_history(&mut tx, channel, &entries, &format).await?;
 
     // No failures, commit it all to collection DB
     tx.commit().await.context("commit collection db tx")?;
 
     // Reindex the new history version
-    reindex(state, channel, &new_version).await.context("reindex history")?;
+    reindex(state, channel, &new_version.version, &format)
+        .await
+        .context("reindex history")?;
 
     Ok(())
 }
@@ -219,6 +230,7 @@ fn import_package(
     package: &Package,
     destructive_move: bool,
     channel: &str,
+    format: &Format,
 ) -> Result<Option<version::Entry>> {
     use std::fs::{self, File};
 
@@ -259,10 +271,10 @@ fn import_package(
     meta.download_size = Some(file_size);
 
     let id = moss::package::Id::from(package.sha256sum.clone());
-    let entry = version::Entry::new(&id, &meta);
+    let entry = version::Entry::new(&id, &meta, format.clone());
 
     let filename = entry.filename();
-    let full_path = state.public_dir().join(channel).join(entry.relative_path());
+    let full_path = state.public_dir().join(channel).join(entry.relative_path(format));
 
     if let Some(parent) = full_path.parent() {
         fs::create_dir_all(parent).context("create pool directory")?;
@@ -311,7 +323,7 @@ fn import_package(
     Ok(Some(entry))
 }
 
-/// Reindex the latest `history` version & relink `volatile` to it
+/// Reindex the latest `history` version & rebuild on-disk format links
 #[tracing::instrument(skip_all, fields(%channel))]
 pub async fn reindex_latest(state: &State, channel: &str) -> Result<()> {
     match db::find_related_history(
@@ -323,9 +335,11 @@ pub async fn reindex_latest(state: &State, channel: &str) -> Result<()> {
     .context("find latest volatile history")?
     {
         Some(history) => {
-            reindex(state, channel, &history.version).await?;
+            reindex(state, channel, &history.version, &history.format).await?;
         }
         None => {
+            // First time booting vessel, force a new `volatile` index by
+            // importing an empty package set
             import_packages(state, channel, vec![], false).await?;
         }
     }
@@ -334,8 +348,8 @@ pub async fn reindex_latest(state: &State, channel: &str) -> Result<()> {
 }
 
 #[tracing::instrument(skip_all, fields(%channel, %version))]
-async fn reindex(state: &State, channel: &str, version: &Version) -> Result<()> {
-    let Version::History { identifier } = version else {
+async fn reindex(state: &State, channel: &str, version: &Version, format: &Format) -> Result<()> {
+    let Version::History { identifier: history } = version else {
         bail!("reindex called on non-history version");
     };
 
@@ -359,8 +373,9 @@ async fn reindex(state: &State, channel: &str, version: &Version) -> Result<()> 
     tokio::task::spawn_blocking({
         let span = tracing::Span::current();
         let state = state.clone();
-        let version = version.clone();
+        let history = history.clone();
         let channel = channel.to_owned();
+        let format = format.clone();
 
         move || {
             let index_arch = |arch: &str, entries: &[&version::Entry]| {
@@ -372,14 +387,14 @@ async fn reindex(state: &State, channel: &str, version: &Version) -> Result<()> 
                     let temp_path = state
                         .work_dir()
                         .join(&channel)
-                        .join(version.relative_index_path("x86_64"));
+                        .join(history.relative_index_path("x86_64"));
                     let temp_dir = temp_path.parent().unwrap();
 
                     // TODO: Replace w/ configurable index path
                     let path = state
                         .public_dir()
                         .join(&channel)
-                        .join(version.relative_index_path("x86_64"));
+                        .join(history.relative_index_path("x86_64"));
                     let dir = path.parent().unwrap();
 
                     if !temp_dir.exists() {
@@ -402,7 +417,7 @@ async fn reindex(state: &State, channel: &str, version: &Version) -> Result<()> 
                             .get(&entry.package_id.clone().into())
                             .context("get package from meta db")?;
 
-                        meta.uri = Some(version.relative_index_to_entry_path(entry));
+                        meta.uri = Some(history.relative_index_to_entry_path(entry, &format));
 
                         writer
                             .add_payload(meta.to_stone_payload().as_slice())
@@ -437,10 +452,16 @@ async fn reindex(state: &State, channel: &str, version: &Version) -> Result<()> 
     .await
     .context("spawn blocking")??;
 
-    // Symlink volatile to new history version
-    symlink_version_to_history(state, channel, &Version::Volatile, identifier)
-        .await
-        .context("symlink volatile")?;
+    match format {
+        Format::Legacy => {
+            // Symlink volatile to new history version
+            legacy_symlink_version_to_history(state, channel, &Version::Volatile, history)
+                .await
+                .context("symlink volatile")?;
+        }
+        Format::V0 => todo!("Write out root-index.json"),
+        Format::Unsupported(_) => bail!("Unsupported format specified during reindex: {format}"),
+    }
 
     let elapsed = format!("{}ms", now.elapsed().as_millis());
 
@@ -463,7 +484,7 @@ fn hardlink_or_copy(from: &Path, to: &Path) -> Result<()> {
     Ok(())
 }
 
-async fn symlink_version_to_history(
+async fn legacy_symlink_version_to_history(
     state: &State,
     channel: &str,
     version: &Version,
@@ -471,11 +492,9 @@ async fn symlink_version_to_history(
 ) -> Result<()> {
     use tokio::fs;
 
-    let history = Version::History {
-        identifier: history.clone(),
-    };
+    let version = LegacyVersion { version };
 
-    let source = Path::new("..").join(history.relative_base_dir());
+    let source = version.relative_symlink_to_history(history);
 
     let dest = state.public_dir().join(channel).join(version.relative_base_dir());
     let dest_parent = dest.parent().unwrap();
@@ -493,8 +512,10 @@ async fn symlink_version_to_history(
     Ok(())
 }
 
-async fn remove_version_symlink(state: &State, channel: &str, version: &Version) -> Result<()> {
+async fn legacy_remove_version_symlink(state: &State, channel: &str, version: &Version) -> Result<()> {
     use tokio::fs;
+
+    let version = LegacyVersion { version };
 
     let path = state.public_dir().join(channel).join(version.relative_base_dir());
 

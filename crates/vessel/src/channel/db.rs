@@ -154,13 +154,22 @@ pub async fn find_related_history(
 /// the [`Version`] for that new history.
 ///
 /// This also updates `volatile` to link to this newer version
-pub async fn record_history(tx: &mut Transaction, channel: &str, entries: &[Entry]) -> Result<Version> {
+pub async fn record_history(
+    tx: &mut Transaction,
+    channel: &str,
+    entries: &[Entry],
+    format: &Format,
+) -> Result<HistoryVersion> {
     let prev_history = find_related_history(tx.as_mut(), channel, &Version::Volatile).await?;
     let prev_version = prev_history.as_ref().map(|h| h.version.to_string()).unwrap_or_default();
-    let prev_format = prev_history
-        .as_ref()
-        .map(|h| h.format.clone())
-        .unwrap_or(Format::LATEST);
+    let prev_format = prev_history.as_ref().map(|h| &h.format);
+
+    if let Some(prev_format) = prev_format {
+        ensure!(
+            format >= prev_format,
+            "cannot downgrade format from volatile {prev_format} to {format}"
+        );
+    }
 
     let (new_identifier, new_version) = loop {
         let now = Utc::now().timestamp();
@@ -207,7 +216,7 @@ pub async fn record_history(tx: &mut Transaction, channel: &str, entries: &[Entr
     )
     .bind(channel)
     .bind(new_version.slug())
-    .bind(prev_format.to_string())
+    .bind(format.to_string())
     .fetch_one(tx.as_mut())
     .await?;
 
@@ -303,7 +312,11 @@ pub async fn record_history(tx: &mut Transaction, channel: &str, entries: &[Entr
     // Link volatile to new history entry
     link_version_to_history(tx, channel, &Version::Volatile, &new_identifier).await?;
 
-    Ok(new_version)
+    Ok(HistoryVersion {
+        channel_version_id: new_id,
+        version: new_version,
+        format: format.clone(),
+    })
 }
 
 pub async fn link_version_to_history(
@@ -366,14 +379,8 @@ pub async fn delete_stale_history(
     tx: &mut Transaction,
     channel: &str,
     created_before: DateTime<Utc>,
-) -> sqlx::Result<HashSet<Version>> {
-    #[derive(FromRow)]
-    struct Row {
-        #[sqlx(try_from = "String")]
-        version: Version,
-    }
-
-    Ok(sqlx::query_as::<_, Row>(
+) -> sqlx::Result<Vec<HistoryVersion>> {
+    sqlx::query_as::<_, HistoryVersion>(
         "
         WITH referenced_history AS (
           SELECT DISTINCT
@@ -391,17 +398,17 @@ pub async fn delete_stale_history(
           AND version LIKE 'history/%'
           AND channel_version_id NOT IN (SELECT * FROM referenced_history)
           AND created < ?
-        RETURNING version
+        RETURNING
+          channel_version_id,
+          version,
+          format
         ",
     )
     .bind(channel)
     .bind(channel)
     .bind(created_before.timestamp())
     .fetch_all(tx.as_mut())
-    .await?
-    .into_iter()
-    .map(|row| row.version)
-    .collect())
+    .await
 }
 
 /// Delete a tag
@@ -439,6 +446,8 @@ mod test {
     use test_case::test_case;
     use url::Url;
 
+    use crate::channel::version::LegacyVersion;
+
     use super::*;
 
     #[test]
@@ -458,41 +467,46 @@ mod test {
         }
     }
 
-    #[test_case(volatile(), "x86_64", "stream/volatile/x86_64/stone.index", "../../..")]
-    #[test_case(unstable(), "aarch64", "stream/unstable/aarch64/stone.index", "../../..")]
-    #[test_case(history("12345"), "x86_64", "history/12345/x86_64/stone.index", "../../..")]
-    #[test_case(tag("some-tag"), "aarch64", "tag/some-tag/aarch64/stone.index", "../../..")]
-    fn test_version_paths(version: Version, arch: &str, expected_index_path: &str, expected_root_path: &str) {
-        let index_path = version.relative_index_path(arch);
-        let index_to_root = version.relative_index_to_channel_root();
+    #[test_case(volatile(), "legacy/stream/volatile", "../../history/0")]
+    #[test_case(unstable(), "legacy/stream/unstable", "../../history/0")]
+    #[test_case(tag("some-tag"), "legacy/tag/some-tag", "../../history/0")]
+    fn test_legacy_symlinks(version: Version, expected_base_dir: &str, expected_symlink_source: &str) {
+        let history = HistoryIdentifier::from(Identifier::new("0").unwrap());
+        let version = LegacyVersion { version: &version };
 
-        assert_eq!(index_path, expected_index_path);
-        assert_eq!(index_to_root, expected_root_path);
+        let base_dir = version.relative_base_dir();
+        let symlink_source = version.relative_symlink_to_history(&history);
 
-        let url = Url::from_file_path(format!("/public/{index_path}")).unwrap();
-        let root_url = url.join(index_to_root).unwrap();
+        assert_eq!(base_dir, expected_base_dir);
+        assert_eq!(symlink_source, expected_symlink_source);
 
-        assert_eq!(root_url.path(), "/public/");
+        let url = Url::from_file_path(format!("/{base_dir}")).unwrap();
+        let history_url = url.join(&symlink_source).unwrap();
+
+        assert_eq!(history_url.path(), "/history/0");
     }
 
     #[test_case(
         entry("nano", "nano", "x86_64", "0.1.0", 1, 1),
         "nano-0.1.0-1-1-x86_64.stone",
-        "pool/n/nano"
+        "legacy/pool/n/nano",
+        Format::Legacy
     )]
     #[test_case(
         entry("less", "less", "x86_64", "2.0", 1, 1),
         "less-2.0-1-1-x86_64.stone",
-        "pool/l/less"
+        "pool/v0/l/less",
+        Format::V0
     )]
     #[test_case(
         entry("libzip", "libzip", "aarch64", "abdefg.1-alpha", 99, 50),
         "libzip-abdefg.1-alpha-99-50-aarch64.stone",
-        "pool/libz/libzip"
+        "pool/v0/libz/libzip",
+        Format::V0
     )]
-    fn test_entry_paths(entry: Entry, expected_filename: &str, expected_relative_base: &str) {
+    fn test_entry_paths(entry: Entry, expected_filename: &str, expected_relative_base: &str, format: Format) {
         let filename = entry.filename();
-        let relative_path = entry.relative_path();
+        let relative_path = entry.relative_path(&format);
 
         assert_eq!(filename, expected_filename);
         assert_eq!(relative_path, format!("{expected_relative_base}/{expected_filename}"));
@@ -500,20 +514,22 @@ mod test {
         // Confirm we can construct a relative path to the file from the index by joining
         // the relative path to pool dir + relative path under pool to file
 
-        let version = volatile();
-        let index_url = Url::from_file_path(format!("/public/{}", version.relative_index_path("x86_64"))).unwrap();
-        let root_url = index_url.join(version.relative_index_to_channel_root()).unwrap();
+        let history = HistoryIdentifier::from(Identifier::new("0").unwrap());
+        let index_url = Url::from_file_path(format!("/{}", history.relative_index_path("x86_64"))).unwrap();
+        let root_url = index_url
+            .join(HistoryIdentifier::RELATIVE_INDEX_TO_CHANNEL_ROOT)
+            .unwrap();
         let file_path = root_url.join(&format!("./{relative_path}")).unwrap();
 
         assert_eq!(
             file_path.path(),
-            format!("/public/{expected_relative_base}/{expected_filename}",)
+            format!("/{expected_relative_base}/{expected_filename}",)
         );
         // Manually constructed equals helper function
         assert_eq!(
             file_path.path(),
             index_url
-                .join(&version.relative_index_to_entry_path(&entry))
+                .join(&history.relative_index_to_entry_path(&entry, &format))
                 .unwrap()
                 .path(),
         );
@@ -525,12 +541,6 @@ mod test {
 
     fn unstable() -> Version {
         Version::Unstable
-    }
-
-    fn history(s: &str) -> Version {
-        Version::History {
-            identifier: Identifier::new(s).unwrap().into(),
-        }
     }
 
     fn tag(s: &str) -> Version {
@@ -562,6 +572,7 @@ mod test {
     #[tokio::test]
     async fn test_delete_stale_history() {
         const CHANNEL: &str = "test";
+        const FORMAT: Format = Format::Legacy;
 
         let db = crate::test::database().await;
 
@@ -569,7 +580,7 @@ mod test {
         let mut deletable = HashSet::new();
 
         // Record before cutoff
-        deletable.insert(record_history(&mut tx, CHANNEL, &[]).await.unwrap());
+        deletable.insert(record_history(&mut tx, CHANNEL, &[], &FORMAT).await.unwrap().version);
 
         // Wait 1 second
         time::sleep(Duration::from_secs(1)).await;
@@ -577,14 +588,48 @@ mod test {
         let cutoff = Utc::now();
 
         // Record after cutoff
-        record_history(&mut tx, CHANNEL, &[]).await.unwrap();
+        record_history(&mut tx, CHANNEL, &[], &FORMAT).await.unwrap();
 
         // Record new state, links volatile to this
-        record_history(&mut tx, CHANNEL, &[]).await.unwrap();
+        record_history(&mut tx, CHANNEL, &[], &FORMAT).await.unwrap();
 
         // Previous 3 states should be removable
-        let deleted = delete_stale_history(&mut tx, CHANNEL, cutoff).await.unwrap();
+        let deleted = delete_stale_history(&mut tx, CHANNEL, cutoff)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|h| h.version)
+            .collect::<HashSet<_>>();
 
         assert_eq!(deleted, deletable);
+    }
+
+    #[tokio::test]
+    async fn test_record_history_format_mismatch() {
+        const CHANNEL: &str = "test";
+
+        let db = crate::test::database().await;
+
+        let mut tx = db.begin().await.unwrap();
+
+        // Record volatile as `v0`
+        record_history(&mut tx, CHANNEL, &[], &Format::V0).await.unwrap();
+
+        // Upgrading is allowed
+        record_history(
+            &mut tx,
+            CHANNEL,
+            &[],
+            &Format::Unsupported("some-new-version".to_owned()),
+        )
+        .await
+        .unwrap();
+
+        // Downgrading is an error
+        let err = record_history(&mut tx, CHANNEL, &[], &Format::Legacy)
+            .await
+            .expect_err("format mismatch is error");
+
+        assert!(err.to_string().contains("cannot downgrade format"));
     }
 }

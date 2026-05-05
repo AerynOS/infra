@@ -234,6 +234,10 @@ async fn upload(state: Arc<State>, request: tonic::Request<tonic::Streaming<Uplo
 
         packages.push(Package {
             name: collectable.name,
+            relative_path: path
+                .strip_prefix(&state.service.state_dir)
+                .expect("lives under state dir")
+                .to_owned(),
             path,
             sha256sum: hash,
         });

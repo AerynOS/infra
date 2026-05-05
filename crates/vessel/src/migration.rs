@@ -1,7 +1,7 @@
 use std::{collections::HashSet, path::Path};
 
 use color_eyre::eyre::{self, Context, Result};
-use moss::{db::meta, package};
+use moss::{db::meta, package, repository::Format};
 use tokio::fs;
 use tracing::{debug, info};
 
@@ -70,7 +70,7 @@ async fn migrate_collection_model(state: &State, meta_db: &meta::Database) -> Re
                     .get(&id)
                     .with_context(|| format!("lookup metadata for package {id}"))?;
 
-                entries.push(channel::version::Entry::new(&id, &meta));
+                entries.push(channel::version::Entry::new(&id, &meta, Format::Legacy));
             }
 
             eyre::Ok(entries)
@@ -80,7 +80,7 @@ async fn migrate_collection_model(state: &State, meta_db: &meta::Database) -> Re
     .context("spawn blocking")?
     .context("lookup package metadata")?;
 
-    channel::db::record_history(&mut tx, DEFAULT_CHANNEL, &entries)
+    channel::db::record_history(&mut tx, DEFAULT_CHANNEL, &entries, &Format::Legacy)
         .await
         .context("record entries")?;
 

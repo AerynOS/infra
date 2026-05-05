@@ -1,12 +1,38 @@
 :80 {
-	handle_path /vessel* {
+	# Prepend /vessel to all potential root
+	# vessel paths (historical & current)
+	rewrite /main* /vessel{uri}
+	rewrite /pool* /vessel/main{uri}
+	rewrite /history* /vessel/main{uri}
+	rewrite /stream* /vessel/main{uri}
+	rewrite /tag* /vessel/main{uri}
+	rewrite /volatile* /vessel/main{uri}
+	rewrite /legacy* /vessel/main{uri}
+	rewrite /moss-root-index.json /vessel/main{uri}
+
+	handle_path /vessel/main* {
 		root * /vessel/public/main
-		file_server {
-			browse {
-				reveal_symlinks
+
+		@legacy_pool {
+			not path */legacy* 
+			path_regexp pool\/(?:[a-z]|lib[a-z])\/
+		}
+
+		uri @legacy_pool path_regexp "pool\/" "legacy/$0"
+
+		rewrite /volatile/* /legacy/stream{uri}
+		rewrite /stream/* /legacy{uri}
+		rewrite /tag/* /legacy{uri}
+
+		handle {
+			file_server {
+				browse {
+					reveal_symlinks
+				}
 			}
 		}
 	}
+
 	reverse_proxy summit:5000 {
 	}
 }
