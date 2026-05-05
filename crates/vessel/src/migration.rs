@@ -80,9 +80,15 @@ async fn migrate_collection_model(state: &State, meta_db: &meta::Database) -> Re
     .context("spawn blocking")?
     .context("lookup package metadata")?;
 
-    channel::db::record_history(&mut tx, DEFAULT_CHANNEL, &entries, &Format::Legacy)
-        .await
-        .context("record entries")?;
+    let mut reindex = false;
+
+    if !entries.is_empty() {
+        channel::db::record_history(&mut tx, DEFAULT_CHANNEL, &entries, &Format::Legacy)
+            .await
+            .context("record entries")?;
+
+        reindex = true;
+    }
 
     sqlx::query(
         "
@@ -106,6 +112,12 @@ async fn migrate_collection_model(state: &State, meta_db: &meta::Database) -> Re
     .await;
 
     tx.commit().await.context("commit db tx")?;
+
+    if reindex {
+        channel::reindex_latest(state, DEFAULT_CHANNEL)
+            .await
+            .context("reindex latest")?;
+    }
 
     info!("Migration complete");
 
