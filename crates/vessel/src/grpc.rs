@@ -358,8 +358,8 @@ async fn add_tag(state: Arc<State>, request: tonic::Request<AddTagRequest>) -> R
     let (sender, receiver) = oneshot::channel();
 
     let validate = || -> Result<_, Report> {
-        let tag = channel::version::Identifier::new(body.tag)?.into();
-        let history = channel::version::Identifier::new(body.history)?.into();
+        let tag = channel::version::Identifier::new(&body.tag)?.into();
+        let history = channel::version::Identifier::new(&body.history)?.into();
 
         Ok(worker::Message::ChannelCommand {
             channel: body.channel,
@@ -418,7 +418,7 @@ async fn remove_tag(state: Arc<State>, request: tonic::Request<RemoveTagRequest>
     let (sender, receiver) = oneshot::channel();
 
     let validate = || -> Result<_, Report> {
-        let tag = channel::version::Identifier::new(body.tag)?.into();
+        let tag = channel::version::Identifier::new(&body.tag)?.into();
 
         Ok(worker::Message::ChannelCommand {
             channel: body.channel,

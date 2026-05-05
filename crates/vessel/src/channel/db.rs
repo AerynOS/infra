@@ -1,7 +1,7 @@
 use std::{collections::HashSet, time::Duration};
 
 use chrono::{DateTime, Utc};
-use color_eyre::eyre::{OptionExt, Result, ensure};
+use color_eyre::eyre::{OptionExt, Result, ensure, eyre};
 use futures_util::TryStreamExt;
 use moss::repository::Format;
 use service::database::Transaction;
@@ -102,6 +102,62 @@ pub async fn all_entries(conn: &mut SqliteConnection, channel: &str) -> sqlx::Re
     .await
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VersionRow {
+    pub version: Version,
+    pub format: Format,
+    pub history: Option<Version>,
+}
+
+/// List all versions for the provided channel with most recently updated versions returned first
+pub async fn all_versions(conn: &mut SqliteConnection, channel: &str) -> Result<Vec<VersionRow>> {
+    #[derive(Debug, FromRow)]
+    struct Row {
+        #[sqlx(try_from = "String")]
+        version: Version,
+        #[sqlx(try_from = "&'a str")]
+        format: Format,
+        history: Option<String>,
+    }
+
+    let rows = sqlx::query_as::<_, Row>(
+        "
+        SELECT
+          a.version,
+          a.format,
+          b.version as history
+        FROM
+          channel_version a
+          LEFT JOIN channel_version b ON a.history_id = b.channel_version_id
+        WHERE
+          a.channel = ?
+        ORDER BY
+          a.updated DESC,
+          a.channel_version_id
+        ",
+    )
+    .bind(channel)
+    .fetch(conn)
+    .try_collect::<Vec<_>>()
+    .await?;
+
+    rows.into_iter()
+        .map(|row| {
+            let history = row
+                .history
+                .map(Version::try_from)
+                .transpose()
+                .map_err(|e| eyre!("parse channel_version.version as Version: {e}"))?;
+
+            Ok(VersionRow {
+                version: row.version,
+                format: row.format,
+                history,
+            })
+        })
+        .collect()
+}
+
 #[derive(Debug, FromRow)]
 pub struct HistoryVersion {
     channel_version_id: i64,
@@ -173,7 +229,7 @@ pub async fn record_history(
 
     let (new_identifier, new_version) = loop {
         let now = Utc::now().timestamp();
-        let identifier = HistoryIdentifier::from(Identifier::new(now).expect("numeric identifier"));
+        let identifier = HistoryIdentifier::from(Identifier::new(&now.to_string()).expect("numeric identifier"));
         let new_version = Version::History {
             identifier: identifier.clone(),
         };
@@ -354,7 +410,8 @@ pub async fn link_version_to_history(
           AND version = ?
         ON CONFLICT(channel, version) DO UPDATE SET
           format=excluded.format,
-          history_id=excluded.history_id;
+          history_id=excluded.history_id,
+          updated=unixepoch();
         ",
     )
     .bind(channel)
@@ -463,7 +520,7 @@ mod test {
             '!', '@', '#', '$', '%', '^', '&', '*', '(', ')', '_', '+', '=', '[', ']', '{', '}', '|', '\\', '/', ';',
             ':', '\'', '"', ',', '.', '<', '>', '?', '`', '~', '\n', '\t',
         ] {
-            assert!(Identifier::new(format!("abc123{char}789xyz")).is_err());
+            assert!(Identifier::new(&format!("abc123{char}789xyz")).is_err());
         }
     }
 
@@ -631,5 +688,46 @@ mod test {
             .expect_err("format mismatch is error");
 
         assert!(err.to_string().contains("cannot downgrade format"));
+    }
+
+    #[tokio::test]
+    async fn test_all_versions() {
+        const CHANNEL: &str = "test";
+        const FORMAT: Format = Format::Legacy;
+
+        let db = crate::test::database().await;
+
+        let mut tx = db.begin().await.unwrap();
+
+        let a = record_history(&mut tx, CHANNEL, &[], &Format::Legacy).await.unwrap();
+        let b = record_history(&mut tx, CHANNEL, &[], &Format::Legacy).await.unwrap();
+        let c = record_history(&mut tx, CHANNEL, &[], &Format::Legacy).await.unwrap();
+
+        let expected_versions = vec![
+            VersionRow {
+                version: volatile(),
+                format: FORMAT.clone(),
+                history: Some(c.version.clone()),
+            },
+            VersionRow {
+                version: c.version,
+                format: FORMAT.clone(),
+                history: None,
+            },
+            VersionRow {
+                version: b.version,
+                format: FORMAT.clone(),
+                history: None,
+            },
+            VersionRow {
+                version: a.version,
+                format: FORMAT.clone(),
+                history: None,
+            },
+        ];
+
+        let versions = all_versions(tx.as_mut(), CHANNEL).await.unwrap();
+
+        assert_eq!(versions, expected_versions);
     }
 }

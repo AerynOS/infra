@@ -1,10 +1,12 @@
 use std::collections::HashMap;
+use std::io;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use color_eyre::eyre::{self, Context, OptionExt, Result, bail, ensure, eyre};
+use indexmap::IndexMap;
 use itertools::Itertools;
-use moss::repository::Format;
+use moss::repository::{Format, format};
 use service::database::Transaction;
 use stone::{StoneDecodedPayload, StoneHeader, StoneHeaderV1FileType, StoneWriter};
 use tokio::time::Instant;
@@ -459,7 +461,9 @@ async fn reindex(state: &State, channel: &str, version: &Version, format: &Forma
                 .await
                 .context("symlink volatile")?;
         }
-        Format::V0 => todo!("Write out root-index.json"),
+        Format::V0 => update_root_index_json(state, channel)
+            .await
+            .context("update root index json")?,
         Format::Unsupported(_) => bail!("Unsupported format specified during reindex: {format}"),
     }
 
@@ -520,6 +524,121 @@ async fn legacy_remove_version_symlink(state: &State, channel: &str, version: &V
     let path = state.public_dir().join(channel).join(version.relative_base_dir());
 
     fs::remove_file(&path).await?;
+
+    Ok(())
+}
+
+async fn update_root_index_json(state: &State, channel: &str) -> Result<()> {
+    use moss::repository::format::root_index::{FormatV0Meta, FormatsMeta, HistoryMeta, StreamMeta, TagMeta};
+    use tokio::fs;
+
+    let all_versions = db::all_versions(
+        state
+            .service_db()
+            .acquire()
+            .await
+            .context("acquire database connection")?
+            .as_mut(),
+        channel,
+    )
+    .await
+    .context("list all versions")?;
+
+    let mut streams = IndexMap::default();
+    let mut tags = IndexMap::default();
+    let mut history = IndexMap::default();
+
+    for version in all_versions {
+        match version.version {
+            Version::History { identifier } => {
+                history.insert(identifier.into(), HistoryMeta { format: version.format });
+            }
+            Version::Tag { identifier } => {
+                let Some(Version::History { identifier: history }) = version.history else {
+                    bail!("tag {identifier} has no linked history");
+                };
+
+                tags.insert(
+                    identifier.into(),
+                    TagMeta {
+                        format: version.format,
+                        history: history.into(),
+                    },
+                );
+            }
+            Version::Volatile => {
+                let Some(Version::History { identifier: history }) = version.history else {
+                    bail!("stream volatile has no linked history");
+                };
+
+                streams.insert(
+                    "volatile".try_into().expect("valid identifier"),
+                    StreamMeta {
+                        format: version.format,
+                        history: history.into(),
+                        // TODO: Capture metadata when a stream is linked via a tag
+                        tag: None,
+                    },
+                );
+            }
+            Version::Unstable => {
+                let Some(Version::History { identifier: history }) = version.history else {
+                    bail!("stream unstable has no linked history");
+                };
+
+                streams.insert(
+                    "unstable".try_into().expect("valid identifier"),
+                    StreamMeta {
+                        format: version.format,
+                        history: history.into(),
+                        // TODO: Capture metadata when a stream is linked via a tag
+                        tag: None,
+                    },
+                );
+            }
+        }
+    }
+
+    let root_index = format::RootIndex {
+        formats: FormatsMeta {
+            // TODO: This will get hooked up once v1 is added & we have
+            // an upgrade path setup for it. We will need to record this
+            // value somewhere and populate it here.
+            v0: FormatV0Meta { upgrade_via: None },
+            unsupported: IndexMap::default(),
+        },
+        streams,
+        tags,
+        history,
+    };
+
+    let json = serde_json::to_string_pretty(&root_index).context("serialize root index json")?;
+
+    let temp_path = tempfile::NamedTempFile::with_prefix("vessel-moss-root-index")
+        .context("open temp file")?
+        .into_temp_path();
+
+    fs::write(&temp_path, json)
+        .await
+        .context("write moss-root-index.json")?;
+
+    let path = state.public_dir().join(channel).join("moss-root-index.json");
+
+    // Attempt atomic rename or fallback to copy
+    match fs::rename(&temp_path, &path).await {
+        Ok(_) => {}
+        Err(err) if err.kind() == io::ErrorKind::CrossesDevices => {
+            fs::copy(&temp_path, &path)
+                .await
+                .context("copy moss-root-index.json temp to final")?;
+            fs::remove_file(&temp_path)
+                .await
+                .context("remove moss-root-index.json temp path")?;
+        }
+        Err(err) => {
+            return Err(err).context("rename moss-root-index.json temp to final");
+        }
+    }
 
     Ok(())
 }

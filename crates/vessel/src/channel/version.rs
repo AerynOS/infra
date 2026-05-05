@@ -4,6 +4,8 @@ use moss::repository::Format;
 use snafu::Snafu;
 use sqlx::FromRow;
 
+pub use moss::repository::format::Identifier;
+
 /// A specific version of packages within a channel
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Version {
@@ -77,26 +79,18 @@ impl Stream {
     }
 }
 
-/// A URL safe identifier which matches `[a-zA-Z0-9][a-zA-Z0-9-]*`
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, derive_more::Display, derive_more::AsRef)]
-pub struct Identifier(String);
-
-impl Identifier {
-    pub fn new(s: impl ToString) -> Result<Self, InvalidIdentifier> {
-        let s = s.to_string();
-
-        if !s.is_empty() && s.as_bytes()[0] != b'-' && s.chars().all(|char| char.is_alphanumeric() || char == '-') {
-            Ok(Self(s.to_owned()))
-        } else {
-            Err(InvalidIdentifier {
-                identifier: s.to_owned(),
-            })
-        }
-    }
-}
-
 #[derive(
-    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, derive_more::From, derive_more::Display, derive_more::AsRef,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    derive_more::From,
+    derive_more::Into,
+    derive_more::Display,
+    derive_more::AsRef,
 )]
 #[as_ref(forward)]
 pub struct HistoryIdentifier(Identifier);
@@ -134,7 +128,17 @@ impl HistoryIdentifier {
 }
 
 #[derive(
-    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, derive_more::From, derive_more::Display, derive_more::AsRef,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    derive_more::From,
+    derive_more::Into,
+    derive_more::Display,
+    derive_more::AsRef,
 )]
 #[as_ref(forward)]
 pub struct TagIdentifier(Identifier);
