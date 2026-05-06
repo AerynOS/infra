@@ -1,7 +1,7 @@
 use std::{collections::HashSet, time::Duration};
 
 use chrono::{DateTime, Utc};
-use color_eyre::eyre::{OptionExt, Result, ensure, eyre};
+use color_eyre::eyre::{Context, Result, bail, ensure, eyre};
 use futures_util::TryStreamExt;
 use moss::repository::Format;
 use service::database::Transaction;
@@ -227,7 +227,7 @@ pub async fn record_history(
         );
     }
 
-    let (new_identifier, new_version) = loop {
+    let new_version = loop {
         let now = Utc::now().timestamp();
         let identifier = HistoryIdentifier::from(Identifier::new(&now.to_string()).expect("numeric identifier"));
         let new_version = Version::History {
@@ -246,7 +246,7 @@ pub async fn record_history(
             continue;
         }
 
-        break (identifier, new_version);
+        break new_version;
     };
 
     debug!(
@@ -365,30 +365,24 @@ pub async fn record_history(
         query.execute(tx.as_mut()).await?;
     }
 
-    // Link volatile to new history entry
-    link_version_to_history(tx, channel, &Version::Volatile, &new_identifier).await?;
-
-    Ok(HistoryVersion {
+    let history = HistoryVersion {
         channel_version_id: new_id,
         version: new_version,
         format: format.clone(),
-    })
+    };
+
+    // Link volatile to new history entry
+    link_version_to_history(tx, channel, &Version::Volatile, &history).await?;
+
+    Ok(history)
 }
 
 pub async fn link_version_to_history(
     tx: &mut Transaction,
     channel: &str,
     version: &Version,
-    history: &HistoryIdentifier,
+    history: &HistoryVersion,
 ) -> Result<()> {
-    let history_version = Version::History {
-        identifier: history.clone(),
-    };
-
-    let history = find_related_history(tx.as_mut(), channel, &history_version)
-        .await?
-        .ok_or_eyre(format!("{history_version} doesn't exist in db"))?;
-
     let result = sqlx::query(
         "
         INSERT INTO channel_version
@@ -418,13 +412,14 @@ pub async fn link_version_to_history(
     .bind(version.slug())
     .bind(history.format.to_string())
     .bind(channel)
-    .bind(history_version.slug())
+    .bind(history.version.slug())
     .execute(tx.as_mut())
     .await?;
 
     ensure!(
         result.rows_affected() == 1,
-        "{history_version} doesn't exist in channel {channel}"
+        "{} doesn't exist in channel {channel}",
+        history.version
     );
 
     Ok(())
@@ -466,6 +461,26 @@ pub async fn delete_stale_history(
     .bind(created_before.timestamp())
     .fetch_all(tx.as_mut())
     .await
+}
+
+/// Add a tag
+pub async fn add_tag(tx: &mut Transaction, channel: &str, tag: TagIdentifier, history: &HistoryVersion) -> Result<()> {
+    let tag = Version::Tag { identifier: tag };
+
+    // Ensure tag doesn't already exist
+    if find_related_history(tx.as_mut(), channel, &tag)
+        .await
+        .context("find related history")?
+        .is_some()
+    {
+        bail!("{tag} already exists");
+    }
+
+    link_version_to_history(tx, channel, &tag, history)
+        .await
+        .context("link version to history")?;
+
+    Ok(())
 }
 
 /// Delete a tag
