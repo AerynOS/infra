@@ -118,12 +118,8 @@ impl HistoryIdentifier {
     /// This is the value we store as the associated meta URI so moss knows
     /// how to concatenate index URI + this to download the respective stone
     /// for this entry
-    pub fn relative_index_to_entry_path(&self, entry: &Entry, format: &Format) -> String {
-        format!(
-            "{}/{}",
-            Self::RELATIVE_INDEX_TO_CHANNEL_ROOT,
-            entry.relative_path(format)
-        )
+    pub fn relative_index_to_entry_path(&self, entry: &Entry) -> String {
+        format!("{}/{}", Self::RELATIVE_INDEX_TO_CHANNEL_ROOT, entry.relative_path())
     }
 }
 
@@ -186,8 +182,8 @@ impl Entry {
     }
 
     /// Relative path under channel root that this entry lives at
-    pub fn relative_path(&self, format: &Format) -> String {
-        let prefix = match format {
+    pub fn relative_path(&self) -> String {
+        let prefix = match &self.format {
             Format::Legacy => "legacy/pool".to_owned(),
             Format::V0 => "pool/v0".to_owned(),
             Format::Unsupported(format) => format!("pool/{format}"),

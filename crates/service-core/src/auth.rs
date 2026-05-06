@@ -58,6 +58,7 @@ impl Role {
                 UpdateStream,
                 AddTag,
                 RemoveTag,
+                UpgradeFormat,
             ]
             .into_iter()
             .collect(),
@@ -97,4 +98,6 @@ pub enum Permission {
     AddTag,
     /// Remove a channel tag
     RemoveTag,
+    /// Upgrade repository format
+    UpgradeFormat,
 }

@@ -1,12 +1,16 @@
 use std::{path::PathBuf, process};
 
 use clap::{Parser, Subcommand, ValueEnum};
-use color_eyre::eyre::Result;
+use color_eyre::eyre::{Result, bail};
+use moss::repository::Format;
 use service_client::{AuthClient, CredentialsAuth, SummitServiceClient, TlsConfig, VesselServiceClient};
 use service_core::crypto::KeyPair;
 use service_grpc::{
     summit::{CancelRequest, RetryRequest},
-    vessel::{AddTagRequest, RemoveTagRequest, Stream as ProtoStream, UpdateStreamRequest},
+    vessel::{
+        AddTagRequest, RemoveTagRequest, Stream as ProtoStream, UpdateStreamRequest, UpgradeFormat,
+        UpgradeFormatLegacy, UpgradeFormatRequest, upgrade_format,
+    },
 };
 use tokio::{fs, io};
 use tonic::transport::Uri;
@@ -93,6 +97,24 @@ async fn main() -> Result<()> {
                     client.add_tag(AddTagRequest { channel, tag, history }).await?
                 }
                 Vessel::RemoveTag { channel, tag } => client.remove_tag(RemoveTagRequest { channel, tag }).await?,
+                Vessel::UpgradeFormat { channel, format, tag } => {
+                    let format = Format::from(format.as_str());
+
+                    let upgrade_format = match format {
+                        Format::Legacy => UpgradeFormat {
+                            format: Some(upgrade_format::Format::Legacy(UpgradeFormatLegacy { tag_name: tag })),
+                        },
+                        Format::V0 => bail!("format upgrade not available for v0"),
+                        Format::Unsupported(s) => bail!("unknown format: {s}"),
+                    };
+
+                    client
+                        .upgrade_format(UpgradeFormatRequest {
+                            channel,
+                            format: Some(upgrade_format),
+                        })
+                        .await?
+                }
             }
             .into_inner();
 
@@ -240,6 +262,15 @@ enum Vessel {
         /// Channel name
         channel: String,
         /// Tag identifier
+        tag: String,
+    },
+    /// Upgrade format
+    UpgradeFormat {
+        /// Channel name
+        channel: String,
+        /// Format to upgrade from
+        format: String,
+        /// Tag to create as part of the upgrade process
         tag: String,
     },
 }

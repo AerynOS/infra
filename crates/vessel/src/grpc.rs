@@ -5,7 +5,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use color_eyre::eyre::{Report, bail, eyre};
+use color_eyre::eyre::{OptionExt as _, Report, bail, eyre};
 use futures_util::TryStreamExt;
 use prost::Message;
 use service::{
@@ -15,8 +15,8 @@ use service::{
     grpc::{
         self, collectable,
         vessel::{
-            AddTagRequest, CommandResponse, RemoveTagRequest, UpdateStreamRequest, UploadRequest, UploadTokenRequest,
-            UploadTokenResponse,
+            AddTagRequest, CommandResponse, RemoveTagRequest, UpdateStreamRequest, UpgradeFormatRequest, UploadRequest,
+            UploadTokenRequest, UploadTokenResponse, upgrade_format,
             vessel_service_server::{VesselService, VesselServiceServer},
         },
     },
@@ -30,9 +30,13 @@ use tokio::{
     io::AsyncWriteExt,
     sync::{mpsc, oneshot},
 };
-use tracing::{Span, debug, info, warn};
+use tracing::{Span, debug, error, info, warn};
 
-use crate::{Package, channel, worker};
+use crate::{
+    Package,
+    channel::{self, FormatUpgrade},
+    worker,
+};
 
 pub type Server = VesselServiceServer<Service>;
 
@@ -98,6 +102,15 @@ impl VesselService for Service {
         let state = self.state.clone();
 
         grpc::handle(request, async move |request| remove_tag(state, request).await).await
+    }
+
+    async fn upgrade_format(
+        &self,
+        request: tonic::Request<UpgradeFormatRequest>,
+    ) -> Result<tonic::Response<CommandResponse>, tonic::Status> {
+        let state = self.state.clone();
+
+        grpc::handle(request, async move |request| upgrade_format(state, request).await).await
     }
 }
 
@@ -448,6 +461,73 @@ async fn remove_tag(state: Arc<State>, request: tonic::Request<RemoveTagRequest>
             success: false,
             error: Some(format!("{error:#}")),
         }),
+    }
+}
+
+#[tracing::instrument(
+    skip_all,
+    fields(
+        channel = %request.get_ref().channel,
+        format,
+    )
+)]
+async fn upgrade_format(
+    state: Arc<State>,
+    request: tonic::Request<UpgradeFormatRequest>,
+) -> Result<CommandResponse, Error> {
+    let body = request.into_inner();
+
+    let format_upgrade = body.format.and_then(|f| match f.format? {
+        upgrade_format::Format::Legacy(request) => Some(FormatUpgrade::Legacy {
+            tag_name: request.tag_name,
+        }),
+    });
+
+    if let Some(format) = format_upgrade.as_ref() {
+        Span::current().record("format", format.to_string());
+    }
+
+    info!("Upgrade format request received");
+
+    let (sender, receiver) = oneshot::channel();
+
+    let validate = || -> Result<_, Report> {
+        let format_upgrade = format_upgrade.ok_or_eyre("missing format")?;
+
+        Ok(worker::Message::ChannelCommand {
+            channel: body.channel,
+            command: channel::Command::FormatUpgrade(format_upgrade),
+            response: sender,
+        })
+    };
+
+    match validate() {
+        Ok(command) => {
+            let _ = state.worker.send(command);
+        }
+        Err(err) => {
+            error!(error = format!("{err:#}"), "Upgrade format request validation failed");
+
+            return Ok(CommandResponse {
+                success: false,
+                error: Some(format!("{err:#}")),
+            });
+        }
+    }
+
+    match receiver.await? {
+        Ok(_) => Ok(CommandResponse {
+            success: true,
+            error: None,
+        }),
+        Err(err) => {
+            error!(error = format!("{err:#}"), "Upgrade format command failed");
+
+            Ok(CommandResponse {
+                success: false,
+                error: Some(format!("{err:#}")),
+            })
+        }
     }
 }
 

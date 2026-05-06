@@ -544,26 +544,23 @@ mod test {
     }
 
     #[test_case(
-        entry("nano", "nano", "x86_64", "0.1.0", 1, 1),
+        entry("nano", "nano", "x86_64", "0.1.0", 1, 1, Format::Legacy),
         "nano-0.1.0-1-1-x86_64.stone",
-        "legacy/pool/n/nano",
-        Format::Legacy
+        "legacy/pool/n/nano"
     )]
     #[test_case(
-        entry("less", "less", "x86_64", "2.0", 1, 1),
+        entry("less", "less", "x86_64", "2.0", 1, 1, Format::V0),
         "less-2.0-1-1-x86_64.stone",
-        "pool/v0/l/less",
-        Format::V0
+        "pool/v0/l/less"
     )]
     #[test_case(
-        entry("libzip", "libzip", "aarch64", "abdefg.1-alpha", 99, 50),
+        entry("libzip", "libzip", "aarch64", "abdefg.1-alpha", 99, 50, Format::V0),
         "libzip-abdefg.1-alpha-99-50-aarch64.stone",
-        "pool/v0/libz/libzip",
-        Format::V0
+        "pool/v0/libz/libzip"
     )]
-    fn test_entry_paths(entry: Entry, expected_filename: &str, expected_relative_base: &str, format: Format) {
+    fn test_entry_paths(entry: Entry, expected_filename: &str, expected_relative_base: &str) {
         let filename = entry.filename();
-        let relative_path = entry.relative_path(&format);
+        let relative_path = entry.relative_path();
 
         assert_eq!(filename, expected_filename);
         assert_eq!(relative_path, format!("{expected_relative_base}/{expected_filename}"));
@@ -586,7 +583,7 @@ mod test {
         assert_eq!(
             file_path.path(),
             index_url
-                .join(&history.relative_index_to_entry_path(&entry, &format))
+                .join(&history.relative_index_to_entry_path(&entry))
                 .unwrap()
                 .path(),
         );
@@ -613,6 +610,7 @@ mod test {
         source_version: &str,
         source_release: i64,
         build_release: i64,
+        format: Format,
     ) -> Entry {
         Entry {
             package_id: "123456".to_owned(),
@@ -622,7 +620,7 @@ mod test {
             source_release,
             source_version: source_version.to_owned(),
             build_release,
-            format: Format::Legacy,
+            format,
         }
     }
 

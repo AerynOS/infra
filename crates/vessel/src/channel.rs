@@ -41,6 +41,15 @@ pub enum Command {
     RemoveTag {
         tag: version::TagIdentifier,
     },
+    #[strum(serialize = "format-upgrade({0})")]
+    FormatUpgrade(FormatUpgrade),
+}
+
+#[derive(Debug, strum::Display)]
+#[strum(serialize_all = "kebab-case")]
+pub enum FormatUpgrade {
+    /// Upgrade `legacy` to `v0`
+    Legacy { tag_name: String },
 }
 
 #[tracing::instrument(skip_all, fields(%channel, %command))]
@@ -82,30 +91,19 @@ pub async fn handle_command(state: &State, channel: &str, command: Command) -> R
                 .context("symlink stream to history folder")?;
 
             info!(%stream, %history, "Stream updated");
+
+            tx.commit().await.context("commit db tx")?;
+
+            Ok(())
         }
         Command::AddTag { tag, history } => {
-            let tag = Version::Tag { identifier: tag };
-
-            // Ensure tag doesn't already exist
-            if db::find_related_history(tx.as_mut(), channel, &tag)
+            add_tag(state, &mut tx, channel, tag, &history)
                 .await
-                .context("find related history")?
-                .is_some()
-            {
-                bail!("{tag} already exists");
-            }
+                .context("add tag")?;
 
-            // Update database
-            db::link_version_to_history(&mut tx, channel, &tag, &history)
-                .await
-                .context("link version to history in db")?;
+            tx.commit().await.context("commit db tx")?;
 
-            // Update filesystem
-            legacy_symlink_version_to_history(state, channel, &tag, &history)
-                .await
-                .context("symlink stream to history folder")?;
-
-            info!(%tag, %history, "Tag added");
+            Ok(())
         }
         Command::RemoveTag { tag: tag_identifier } => {
             let tag = Version::Tag {
@@ -123,12 +121,73 @@ pub async fn handle_command(state: &State, channel: &str, command: Command) -> R
                 .context("remove symlink to history folder")?;
 
             info!(%tag, "Tag removed");
+
+            tx.commit().await.context("commit db tx")?;
+
+            Ok(())
+        }
+        Command::FormatUpgrade(format_upgrade) => {
+            match &format_upgrade {
+                // For legacy to v0, we simply create a tag to volatile while
+                // its still legacy, effectively pinning that as the last legacy
+                // version and then upgrade volatile to v0. We can then reindex
+                // that new v0 version which will create its v0 index file &
+                // also write out the new `moss-root-index.json` file
+                FormatUpgrade::Legacy { tag_name } => {
+                    let tag = version::TagIdentifier::from(
+                        version::Identifier::new(tag_name).context(format!("invalid tag identifier: {tag_name}"))?,
+                    );
+
+                    // Find history identifier for `volatile` so we can create a tag for it
+                    let tagged_history = {
+                        let volatile = db::find_related_history(tx.as_mut(), channel, &Version::Volatile)
+                            .await
+                            .context("find volatile version")?
+                            .ok_or_eyre("volatile must exist to upgrade from legacy to v0")?;
+
+                        // Ensure volatile is currently set to legacy
+                        ensure!(
+                            volatile.format == Format::Legacy,
+                            "volatile is a non-legacy format: {}",
+                            volatile.format
+                        );
+
+                        let Version::History { identifier: history } = volatile.version else {
+                            bail!("volatile links to non-history version");
+                        };
+
+                        history
+                    };
+
+                    // Tag history using the provided tag name
+                    add_tag(state, &mut tx, channel, tag, &tagged_history)
+                        .await
+                        .context("add tag")?;
+
+                    // Permanently link legacy/stream/volatile to the tag we created to give
+                    // legacy moss clients targeting these streams a permanent version
+                    legacy_symlink_version_to_history(state, channel, &Version::Volatile, &tagged_history).await?;
+
+                    // Record history as v0 to upgrade it
+                    let new_history = db::record_history(&mut tx, channel, &[], &Format::V0)
+                        .await
+                        .context("record v0 history")?;
+
+                    tx.commit().await.context("commit db tx")?;
+
+                    // Index the new v0 history, which will create its index & write out
+                    // the moss-root-index.json file for the first time!
+                    reindex(state, channel, &new_history.version, &Format::V0)
+                        .await
+                        .context("reindex")?;
+                }
+            }
+
+            info!(%format_upgrade, "Format upgrade complete");
+
+            Ok(())
         }
     }
-
-    tx.commit().await.context("commit db tx")?;
-
-    Ok(())
 }
 
 /// Enumerates an external directory of stones & calls [`import_packages`] on them
@@ -276,7 +335,7 @@ fn import_package(
     let entry = version::Entry::new(&id, &meta, format.clone());
 
     let filename = entry.filename();
-    let full_path = state.public_dir().join(channel).join(entry.relative_path(format));
+    let full_path = state.public_dir().join(channel).join(entry.relative_path());
 
     if let Some(parent) = full_path.parent() {
         fs::create_dir_all(parent).context("create pool directory")?;
@@ -377,7 +436,6 @@ async fn reindex(state: &State, channel: &str, version: &Version, format: &Forma
         let state = state.clone();
         let history = history.clone();
         let channel = channel.to_owned();
-        let format = format.clone();
 
         move || {
             let index_arch = |arch: &str, entries: &[&version::Entry]| {
@@ -419,7 +477,7 @@ async fn reindex(state: &State, channel: &str, version: &Version, format: &Forma
                             .get(&entry.package_id.clone().into())
                             .context("get package from meta db")?;
 
-                        meta.uri = Some(history.relative_index_to_entry_path(entry, &format));
+                        meta.uri = Some(history.relative_index_to_entry_path(entry));
 
                         writer
                             .add_payload(meta.to_stone_payload().as_slice())
@@ -470,6 +528,40 @@ async fn reindex(state: &State, channel: &str, version: &Version, format: &Forma
     let elapsed = format!("{}ms", now.elapsed().as_millis());
 
     info!(elapsed, "Index complete");
+
+    Ok(())
+}
+
+#[tracing::instrument(skip_all, fields(%tag, %history))]
+async fn add_tag(
+    state: &State,
+    tx: &mut Transaction,
+    channel: &str,
+    tag: version::TagIdentifier,
+    history: &version::HistoryIdentifier,
+) -> Result<()> {
+    let tag = Version::Tag { identifier: tag };
+
+    // Ensure tag doesn't already exist
+    if db::find_related_history(tx.as_mut(), channel, &tag)
+        .await
+        .context("find related history")?
+        .is_some()
+    {
+        bail!("{tag} already exists");
+    }
+
+    // Update database
+    db::link_version_to_history(tx, channel, &tag, history)
+        .await
+        .context("link version to history in db")?;
+
+    // Update filesystem
+    legacy_symlink_version_to_history(state, channel, &tag, history)
+        .await
+        .context("symlink stream to history folder")?;
+
+    info!(%tag, %history, "Tag added");
 
     Ok(())
 }
