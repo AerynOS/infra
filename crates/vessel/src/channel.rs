@@ -377,10 +377,6 @@ fn import_package(
     let filename = entry.filename();
     let full_path = state.public_dir().join(channel).join(entry.relative_path());
 
-    if let Some(parent) = full_path.parent() {
-        fs::create_dir_all(parent).context("create pool directory")?;
-    }
-
     let existing = tokio::runtime::Handle::current()
         .block_on(db::lookup_entry(
             tx.as_mut(),
@@ -403,6 +399,10 @@ fn import_package(
             return Ok(None);
         }
         _ => {}
+    }
+
+    if let Some(parent) = full_path.parent() {
+        fs::create_dir_all(parent).context("create pool directory")?;
     }
 
     if destructive_move {
