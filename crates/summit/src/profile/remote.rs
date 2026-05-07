@@ -1,13 +1,12 @@
-use http::Uri;
 use serde::{Deserialize, Serialize};
 use service::database::Transaction;
+use sqlx::types::Json;
 
-use crate::profile;
+use crate::profile::{self, Index};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Remote {
-    #[serde(with = "http_serde::uri")]
-    pub index_uri: Uri,
+    pub index: Index,
     pub name: String,
     pub priority: u64,
 }
@@ -15,7 +14,7 @@ pub struct Remote {
 pub async fn create(
     tx: &mut Transaction,
     profile: profile::Id,
-    index_uri: Uri,
+    index: Index,
     name: String,
     priority: u64,
 ) -> Result<Remote, sqlx::Error> {
@@ -24,7 +23,7 @@ pub async fn create(
         INSERT INTO profile_remote
         (
           profile_id,
-          index_uri,
+          index_source,
           name,
           priority
         )
@@ -32,15 +31,11 @@ pub async fn create(
         ",
     )
     .bind(i64::from(profile))
-    .bind(index_uri.to_string())
+    .bind(Json(&index))
     .bind(&name)
     .bind(priority as i64)
     .execute(tx.as_mut())
     .await?;
 
-    Ok(Remote {
-        index_uri,
-        name,
-        priority,
-    })
+    Ok(Remote { index, name, priority })
 }

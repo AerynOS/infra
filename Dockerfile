@@ -8,6 +8,8 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git <<"EOT" /bin/sh
     git clone https://github.com/AerynOS/os-tools /tools
     cd /tools
+    # TODO: Remove
+    git checkout task/moss-repo-format
     cargo install --path ./boulder
 EOT
 ARG RUST_PROFILE="release"

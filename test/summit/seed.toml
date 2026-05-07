@@ -6,11 +6,16 @@ summary = "Test recipes"
 [[project.profile]]
 name = "test-x86_64"
 arch = "x86_64"
-index_uri = "http://caddy/vessel/stream/volatile/x86_64/stone.index"
+
+[project.profile.index]
+base_uri = "http://caddy/vessel"
+channel = "main"
+version = "stream/volatile"
 
 [[project.profile.remote]]
 name = "volatile"
-uri = "https://cdn.aerynos.dev/stream/volatile/x86_64/stone.index"
+# TODO: Update to new index format once its live
+index.uri = "https://cdn.aerynos.dev/stream/volatile/x86_64/stone.index"
 priority = 10
 
 [[project.repository]]

@@ -1,9 +1,8 @@
 use std::path::Path;
 
-use color_eyre::eyre::{Context, OptionExt, Result};
+use color_eyre::eyre::{Context, ContextCompat, OptionExt, Result};
 use futures_util::{TryStreamExt, stream::select};
 use http::Uri;
-use itertools::Itertools;
 use service::{
     State, error, git,
     grpc::{
@@ -88,7 +87,7 @@ async fn run(request: BuilderBuild, state: &State, stream: stream::Handle) -> Re
         .await
         .context("checkout commit as worktree")?;
 
-    create_boulder_config(&work_dir, &request.remotes)
+    create_boulder_config(&work_dir, &request.remotes, &request.build_architecture)
         .await
         .context("create boulder config")?;
 
@@ -125,22 +124,57 @@ async fn recreate_dir(path: &Path) -> Result<()> {
     Ok(fs::create_dir_all(path).await?)
 }
 
-async fn create_boulder_config(work_dir: &Path, remotes: &[Remote]) -> Result<()> {
+async fn create_boulder_config(work_dir: &Path, remotes: &[Remote], arch: &str) -> Result<()> {
+    use std::fmt::Write;
+
     info!("Creating boulder config");
 
     let remotes = remotes
         .iter()
         .map(|remote| {
-            format!(
+            let mut entry = String::default();
+
+            let _ = write!(
+                &mut entry,
                 "
         {}:
-            uri: \"{}\"
             description: \"Remotely configured repository\"
             priority: {}
                 ",
-                remote.name, remote.index_uri, remote.priority,
-            )
+                remote.name, remote.priority
+            );
+
+            match remote
+                .index
+                .as_ref()
+                .and_then(|i| i.index.as_ref())
+                .context("missing remotes[].index")?
+            {
+                service::grpc::remote::index::Index::DirectIndex(index) => {
+                    let _ = write!(
+                        &mut entry,
+                        "
+            uri: \"{index}\"
+                ",
+                    );
+                }
+                service::grpc::remote::index::Index::RootIndex(root_index) => {
+                    let _ = write!(
+                        &mut entry,
+                        "
+            base-uri: \"{}\"
+            channel: \"{}\"
+            version: \"{}\"
+            arch: \"{arch}\"
+                ",
+                        root_index.base_uri, root_index.channel, root_index.version,
+                    );
+                }
+            }
+
+            Ok(entry)
         })
+        .collect::<Result<Vec<_>>>()?
         .join("\n");
 
     let config = format!(

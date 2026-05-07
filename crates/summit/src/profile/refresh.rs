@@ -1,7 +1,6 @@
 use std::path::Path;
 
-use color_eyre::eyre::{Context, OptionExt, Result};
-use http::Uri;
+use color_eyre::eyre::{Context, OptionExt, Result, bail};
 use moss::{
     db::meta,
     package::{self, Meta},
@@ -11,7 +10,7 @@ use stone::StoneDecodedPayload;
 use tokio::{fs, task};
 use tracing::{Span, info};
 
-use super::{Profile, Status, set_status};
+use super::{Index, Profile, Status, set_status};
 use crate::State;
 
 #[tracing::instrument(name = "refresh_profile", skip_all, fields(profile = profile.name))]
@@ -33,7 +32,7 @@ pub async fn refresh(state: &State, profile: &mut Profile, db: meta::Database) -
             .context("create profile cache dir")?;
     }
 
-    fetch_index(&profile.index_uri, &index_path)
+    fetch_index(&profile.index, &profile.arch, &index_path)
         .await
         .context("fetch index file")?;
 
@@ -55,10 +54,28 @@ pub async fn refresh(state: &State, profile: &mut Profile, db: meta::Database) -
     Ok(())
 }
 
-async fn fetch_index(uri: &Uri, index_path: &Path) -> Result<()> {
-    request::download(uri.to_string().parse().context("invalid url")?, index_path)
-        .await
-        .context("download index file")
+async fn fetch_index(index: &Index, arch: &str, index_path: &Path) -> Result<()> {
+    let source = index
+        .as_moss_repo_source(arch)
+        .context("convert index to moss repo source")?;
+
+    let uri = match source {
+        moss::repository::Source::DirectIndex(uri) => uri,
+        moss::repository::Source::RootIndex(root_index) => {
+            match root_index
+                .resolve_history_index_uri()
+                .await
+                .context("resolve history index uri")?
+            {
+                moss::repository::ResolvedHistoryIndexUri::Supported(uri) => uri,
+                moss::repository::ResolvedHistoryIndexUri::Unsupported { format, version, .. } => {
+                    bail!("summit doesn't support moss repo format {format} for version {version}")
+                }
+            }
+        }
+    };
+
+    request::download(uri, index_path).await.context("download index file")
 }
 
 fn update_db(db: meta::Database, index_path: &Path) -> Result<()> {

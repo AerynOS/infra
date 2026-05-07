@@ -2,7 +2,7 @@ use derive_more::derive::{Display, From, Into};
 use http::Uri;
 use serde::{Deserialize, Serialize};
 use service::database::Transaction;
-use sqlx::{FromRow, SqliteConnection};
+use sqlx::{FromRow, SqliteConnection, types::Json};
 
 use crate::{
     Profile, Repository,
@@ -68,8 +68,7 @@ pub async fn list(conn: &mut SqliteConnection) -> Result<Vec<Project>, sqlx::Err
         id: profile::Id,
         name: String,
         arch: String,
-        #[sqlx(try_from = "String")]
-        index_uri: Uri,
+        index_source: Json<profile::Index>,
         #[sqlx(try_from = "&'a str")]
         status: profile::Status,
         #[sqlx(try_from = "i64")]
@@ -80,8 +79,7 @@ pub async fn list(conn: &mut SqliteConnection) -> Result<Vec<Project>, sqlx::Err
     struct ProfileRemoteRow {
         #[sqlx(rename = "profile_id", try_from = "i64")]
         profile_id: profile::Id,
-        #[sqlx(try_from = "String")]
-        index_uri: Uri,
+        index_source: Json<profile::Index>,
         name: String,
         priority: i64,
     }
@@ -135,7 +133,7 @@ pub async fn list(conn: &mut SqliteConnection) -> Result<Vec<Project>, sqlx::Err
           profile_id,
           name,
           arch,
-          index_uri,
+          index_source,
           status,
           project_id
         FROM
@@ -150,7 +148,7 @@ pub async fn list(conn: &mut SqliteConnection) -> Result<Vec<Project>, sqlx::Err
                 id: row.id,
                 name: row.name,
                 arch: row.arch,
-                index_uri: row.index_uri,
+                index: row.index_source.0,
                 status: row.status,
                 remotes: vec![],
             });
@@ -161,7 +159,7 @@ pub async fn list(conn: &mut SqliteConnection) -> Result<Vec<Project>, sqlx::Err
         "
         SELECT
           profile_id,
-          index_uri,
+          index_source,
           name,
           priority
         FROM
@@ -176,7 +174,7 @@ pub async fn list(conn: &mut SqliteConnection) -> Result<Vec<Project>, sqlx::Err
             .find_map(|p| p.profiles.iter_mut().find(|p| p.id == row.profile_id))
         {
             profile.remotes.push(Remote {
-                index_uri: row.index_uri,
+                index: row.index_source.0,
                 name: row.name,
                 priority: row.priority as u64,
             });

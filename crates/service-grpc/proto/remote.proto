@@ -3,7 +3,22 @@ syntax = "proto3";
 package remote;
 
 message Remote {
-  string index_uri = 1;
+  // Deprecated, use `source` instead
+  string index_uri = 1 [deprecated = true];
   string name = 2;
   uint64 priority = 3;
+  Index index = 4;
+}
+
+message Index {
+  oneof index {
+    string direct_index = 1;
+    RootIndex root_index = 2;
+  }
+}
+
+message RootIndex {
+  string base_uri = 1;
+  string channel = 2;
+  string version = 3;
 }
