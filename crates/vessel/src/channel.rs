@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::io;
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use color_eyre::eyre::{self, Context, OptionExt, Result, bail, ensure, eyre};
@@ -710,7 +710,10 @@ async fn update_root_index_json(state: &State, channel: &str) -> Result<()> {
 
     let json = serde_json::to_string_pretty(&root_index).context("serialize root index json")?;
 
-    let temp_path = tempfile::NamedTempFile::with_prefix("vessel-moss-root-index")
+    let temp_path = tempfile::Builder::new()
+        .prefix("vessel-moss-root-index")
+        .permissions(std::fs::Permissions::from_mode(0o644))
+        .tempfile()
         .context("open temp file")?
         .into_temp_path();
 
