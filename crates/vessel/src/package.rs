@@ -12,21 +12,21 @@ use sha2::{Digest, Sha256};
 pub struct Package {
     pub name: String,
     pub path: PathBuf,
+    pub relative_path: PathBuf,
     pub sha256sum: String,
 }
 
-/// Enumerates all stone packages under `dir`
-pub async fn async_enumerate(dir: &Path) -> Result<Vec<Package>> {
-    let dir = dir.to_owned();
+/// Enumerates all stone packages under `root_dir`
+pub async fn enumerate(root_dir: &Path) -> Result<Vec<Package>> {
+    let root_dir = root_dir.to_owned();
 
-    tokio::task::spawn_blocking(move || enumerate(&dir))
+    tokio::task::spawn_blocking(move || enumerate_sync(&root_dir))
         .await
         .context("spawn blocking")?
 }
 
-/// Enumerates all stone packages under `dir`
-pub fn enumerate(dir: &Path) -> Result<Vec<Package>> {
-    fn recurse(dir: &Path) -> Result<Vec<Package>> {
+fn enumerate_sync(root_dir: &Path) -> Result<Vec<Package>> {
+    fn recurse(root_dir: &Path, dir: &Path) -> Result<Vec<Package>> {
         let contents = fs::read_dir(dir).context("read directory")?;
 
         // Enumerate in parallel to saturate hashing on all worker threads
@@ -50,9 +50,14 @@ pub fn enumerate(dir: &Path) -> Result<Vec<Package>> {
 
                     let sha256sum = hex::encode(hasher.finalize());
 
-                    acc.push(Package { name, path, sha256sum });
+                    acc.push(Package {
+                        name,
+                        relative_path: path.strip_prefix(root_dir).expect("lives under root dir").to_owned(),
+                        path,
+                        sha256sum,
+                    });
                 } else if meta.is_dir() {
-                    acc.extend(enumerate(&path)?);
+                    acc.extend(recurse(root_dir, &path)?);
                 }
 
                 Ok(acc)
@@ -63,7 +68,7 @@ pub fn enumerate(dir: &Path) -> Result<Vec<Package>> {
             })
     }
 
-    let mut packages = recurse(dir)?;
+    let mut packages = recurse(root_dir, root_dir)?;
 
     // this is where we human sort the packages in ascending order to enable a directory to have
     // multiple stones with the same recipe origin but different versions, source-releases

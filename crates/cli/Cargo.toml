@@ -13,6 +13,7 @@ service-core = { path = "../service-core" }
 
 clap.workspace = true
 color-eyre.workspace = true
+moss.workspace = true
 tonic.workspace = true
 tokio.workspace = true
 

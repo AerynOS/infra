@@ -1,6 +1,6 @@
 //! Service database
 
-use std::path::Path;
+use std::{path::Path, sync::atomic::AtomicUsize};
 
 use sqlx::{Pool, Sqlite, SqliteConnection, pool::PoolConnection};
 use thiserror::Error;
@@ -52,9 +52,16 @@ impl Database {
 
     /// Creates a new in-memory database for testing
     pub async fn in_memory() -> Result<Self, Error> {
+        use std::sync::atomic::Ordering;
+
+        static INDEX: AtomicUsize = AtomicUsize::new(0);
+
         let pool = sqlx::SqlitePool::connect_with(
             sqlx::sqlite::SqliteConnectOptions::new()
-                .filename("file:test")
+                .filename(format!(
+                    "file:service-in-memory-db-{}",
+                    INDEX.fetch_add(1, Ordering::Relaxed)
+                ))
                 .shared_cache(true)
                 .in_memory(true)
                 .read_only(false)

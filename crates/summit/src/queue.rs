@@ -102,8 +102,8 @@ impl Queue {
                     .remotes
                     .iter()
                     .sorted_by_key(|r| r.priority)
-                    .map(|r| &r.index_uri)
-                    .chain(Some(&profile.index_uri))
+                    .map(|r| &r.index)
+                    .chain(Some(&profile.index))
                     .cloned()
                     .collect();
 
@@ -114,7 +114,7 @@ impl Queue {
                         meta,
                         commit_ref: repo.commit_ref.clone().ok_or_eyre("missing repo commit ref")?,
                         origin_uri: repo.origin_uri.clone(),
-                        index_uri: profile.index_uri.clone(),
+                        index: profile.index.clone(),
                         remotes,
                         size,
                         // Calculated via DAG
@@ -160,7 +160,7 @@ impl Queue {
                 .filter(|a| {
                     current.task.id != a.task.id
                         && current.task.arch == a.task.arch
-                        && current.remotes.contains(&a.index_uri)
+                        && current.remotes.contains(&a.index)
                 })
                 // Connect each dependency to this task
                 .for_each(|dependency| {

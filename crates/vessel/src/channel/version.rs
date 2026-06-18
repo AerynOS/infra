@@ -1,7 +1,10 @@
 use std::fmt;
 
+use moss::repository::Format;
 use snafu::Snafu;
 use sqlx::FromRow;
+
+pub use moss::repository::format::Identifier;
 
 /// A specific version of packages within a channel
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -32,33 +35,6 @@ impl Version {
             Version::Volatile => "stream/volatile".to_owned(),
             Version::Unstable => "stream/unstable".to_owned(),
         }
-    }
-
-    /// Relative path to the base directory where all index files associated
-    /// to this version will live
-    pub fn relative_base_dir(&self) -> String {
-        self.slug()
-    }
-
-    /// Relative path to a specific index file for the provided `arch`
-    pub fn relative_index_path(&self, arch: &str) -> String {
-        format!("{}/{arch}/stone.index", self.relative_base_dir())
-    }
-
-    /// Relative path to traverse from an index file to the channel root directory
-    pub fn relative_index_to_channel_root(&self) -> &'static str {
-        match self {
-            Version::History { .. } | Version::Tag { .. } | Version::Volatile | Version::Unstable => "../../..",
-        }
-    }
-
-    /// Relative path to traverse from an index file to an entries file
-    ///
-    /// This is the value we store as the associated meta URI so moss knows
-    /// how to concatenate index URI + this to download the respective stone
-    /// for this entry
-    pub fn relative_index_to_entry_path(&self, entry: &Entry) -> String {
-        format!("{}/{}", self.relative_index_to_channel_root(), entry.relative_path())
     }
 }
 
@@ -103,32 +79,62 @@ impl Stream {
     }
 }
 
-/// A URL safe identifier which matches `[a-zA-Z0-9][a-zA-Z0-9-]*`
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, derive_more::Display, derive_more::AsRef)]
-pub struct Identifier(String);
-
-impl Identifier {
-    pub fn new(s: impl ToString) -> Result<Self, InvalidIdentifier> {
-        let s = s.to_string();
-
-        if !s.is_empty() && s.as_bytes()[0] != b'-' && s.chars().all(|char| char.is_alphanumeric() || char == '-') {
-            Ok(Self(s.to_owned()))
-        } else {
-            Err(InvalidIdentifier {
-                identifier: s.to_owned(),
-            })
-        }
-    }
-}
-
 #[derive(
-    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, derive_more::From, derive_more::Display, derive_more::AsRef,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    derive_more::From,
+    derive_more::Into,
+    derive_more::Display,
+    derive_more::AsRef,
 )]
 #[as_ref(forward)]
 pub struct HistoryIdentifier(Identifier);
 
+impl HistoryIdentifier {
+    /// Relative path to traverse from a history index file to the channel root directory
+    pub const RELATIVE_INDEX_TO_CHANNEL_ROOT: &'static str = "../../..";
+
+    /// Relative path to the base directory where all index files associated
+    /// to this history version will live
+    pub fn relative_base_dir(&self) -> String {
+        Version::History {
+            identifier: self.clone(),
+        }
+        .slug()
+    }
+
+    /// Relative path to a specific history index file for the provided `arch`
+    pub fn relative_index_path(&self, arch: &str) -> String {
+        format!("history/{self}/{arch}/stone.index")
+    }
+
+    /// Relative path to traverse from a history index file to an entries file
+    ///
+    /// This is the value we store as the associated meta URI so moss knows
+    /// how to concatenate index URI + this to download the respective stone
+    /// for this entry
+    pub fn relative_index_to_entry_path(&self, entry: &Entry) -> String {
+        format!("{}/{}", Self::RELATIVE_INDEX_TO_CHANNEL_ROOT, entry.relative_path())
+    }
+}
+
 #[derive(
-    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, derive_more::From, derive_more::Display, derive_more::AsRef,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    derive_more::From,
+    derive_more::Into,
+    derive_more::Display,
+    derive_more::AsRef,
 )]
 #[as_ref(forward)]
 pub struct TagIdentifier(Identifier);
@@ -149,10 +155,12 @@ pub struct Entry {
     pub source_version: String,
     pub source_release: i64,
     pub build_release: i64,
+    #[sqlx(try_from = "&'a str")]
+    pub format: Format,
 }
 
 impl Entry {
-    pub fn new(id: &moss::package::Id, meta: &moss::package::Meta) -> Self {
+    pub fn new(id: &moss::package::Id, meta: &moss::package::Meta, format: Format) -> Self {
         Self {
             package_id: id.to_string(),
             name: meta.name.to_string(),
@@ -161,6 +169,7 @@ impl Entry {
             source_version: meta.version_identifier.clone(),
             source_release: meta.source_release as i64,
             build_release: meta.build_release as i64,
+            format,
         }
     }
 
@@ -174,6 +183,12 @@ impl Entry {
 
     /// Relative path under channel root that this entry lives at
     pub fn relative_path(&self) -> String {
+        let prefix = match &self.format {
+            Format::Legacy => "legacy/pool".to_owned(),
+            Format::V0 => "pool/v0".to_owned(),
+            Format::Unsupported(format) => format!("pool/{format}"),
+        };
+
         let source_id = self.source_id.to_lowercase();
 
         let mut portion = &source_id[0..1];
@@ -182,6 +197,25 @@ impl Entry {
             portion = &source_id[0..4];
         }
 
-        format!("pool/{portion}/{source_id}/{}", self.filename())
+        format!("{prefix}/{portion}/{source_id}/{}", self.filename())
+    }
+}
+
+/// Wrapper around [`Version`] for legacy format aware
+pub struct LegacyVersion<'a> {
+    pub version: &'a Version,
+}
+
+impl LegacyVersion<'_> {
+    /// Relative path to the base directory where all index files associated
+    /// to this legacy version will live
+    pub fn relative_base_dir(&self) -> String {
+        format!("legacy/{}", self.version.slug())
+    }
+
+    /// Relative path to construct a symlink from this version's base dir
+    /// to the supplied history index base dir
+    pub fn relative_symlink_to_history(&self, history: &HistoryIdentifier) -> String {
+        format!("../../{}", history.relative_base_dir())
     }
 }

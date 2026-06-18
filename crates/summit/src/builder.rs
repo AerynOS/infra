@@ -9,6 +9,7 @@ use service::{
     crypto::PublicKey,
     endpoint,
     grpc::{
+        self,
         collectable::{self, Collectable},
         remote::Remote,
         summit::{BuilderBuild, BuilderFinished, BuilderStreamOutgoing, BuilderUpload, builder_stream_outgoing},
@@ -18,7 +19,7 @@ use service::{
 use tokio::{sync::mpsc, time::Instant};
 use tracing::{debug, info, warn};
 
-use crate::{State, Task, config::Size, task};
+use crate::{State, Task, config::Size, profile, task};
 
 const REQUESTED_BUILD_ACK_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -244,10 +245,25 @@ impl Builder {
                         .remotes
                         .iter()
                         .enumerate()
-                        .map(|(idx, uri)| Remote {
-                            index_uri: uri.to_string(),
+                        .map(|(idx, index)| Remote {
+                            #[allow(deprecated)]
+                            index_uri: String::default(),
                             name: format!("repo{idx}"),
                             priority: idx as u64 * 10,
+                            index: Some(grpc::remote::Index {
+                                index: Some(match index {
+                                    profile::Index::DirectIndex(uri) => {
+                                        grpc::remote::index::Index::DirectIndex(uri.to_string())
+                                    }
+                                    profile::Index::RootIndex(root_index) => {
+                                        grpc::remote::index::Index::RootIndex(grpc::remote::RootIndex {
+                                            base_uri: root_index.base_uri.to_string(),
+                                            channel: root_index.channel.to_string(),
+                                            version: root_index.version.to_string(),
+                                        })
+                                    }
+                                }),
+                            }),
                         })
                         .collect(),
                 })),

@@ -1,11 +1,15 @@
-use std::{collections::HashSet, path::Path, time::Duration};
+use std::{collections::HashSet, time::Duration};
 
 use chrono::Utc;
 use color_eyre::eyre::{Context, Result};
 use tokio::fs;
 use tracing::info;
 
-use crate::{Package, State, channel::db, package};
+use crate::{
+    Package, State,
+    channel::{self, db},
+    package,
+};
 
 #[tracing::instrument(skip_all, fields(%channel))]
 pub async fn prune(state: &State, channel: &str) -> Result<()> {
@@ -39,11 +43,16 @@ async fn prune_stale_versions(state: &State, channel: &str) -> Result<()> {
         return Ok(());
     }
 
-    for version in &deleted {
-        // Remove from filesystem
-        let _ = fs::remove_dir_all(state.public_dir().join(channel).join(version.relative_base_dir())).await;
+    for d in &deleted {
+        // Only history versions are returned from prune stale history
+        let channel::Version::History { identifier: history } = &d.version else {
+            continue;
+        };
 
-        info!(%version, "History deleted");
+        // Remove from filesystem
+        let _ = fs::remove_dir_all(state.public_dir().join(channel).join(history.relative_base_dir())).await;
+
+        info!(version = %d.version, "History deleted");
     }
 
     info!("num_deleted" = deleted.len(), "Stale history deleted");
@@ -57,10 +66,17 @@ async fn prune_stale_versions(state: &State, channel: &str) -> Result<()> {
 async fn prune_orphaned_packages(state: &State, channel: &str) -> Result<()> {
     info!("Checking for orphaned stones");
 
-    let pool_dir = state.public_dir().join(channel).join("pool");
-
     // All stones on the filesystem
-    let stones = package::async_enumerate(&pool_dir).await.context("enumerate stones")?;
+    let mut stones = vec![];
+
+    let pool_dir = state.public_dir().join(channel).join("pool");
+    let legacy_pool_dir = state.public_dir().join(channel).join("legacy/pool");
+
+    for path in [&pool_dir, &legacy_pool_dir] {
+        if fs::try_exists(path).await? {
+            stones.extend(package::enumerate(path).await.context("enumerate stones")?);
+        }
+    }
 
     // Packages in any version
     let indexed_packages = db::all_entries(
@@ -94,7 +110,7 @@ async fn prune_orphaned_packages(state: &State, channel: &str) -> Result<()> {
 
     let num_stones = orphaned_stones.len();
 
-    remove_orphaned_packages(state, &pool_dir, orphaned_stones)
+    remove_orphaned_packages(state, orphaned_stones)
         .await
         .context("remove orphaned packages")?;
 
@@ -103,36 +119,31 @@ async fn prune_orphaned_packages(state: &State, channel: &str) -> Result<()> {
     Ok(())
 }
 
-async fn remove_orphaned_packages(state: &State, pool_dir: &Path, packages: Vec<Package>) -> Result<()> {
+async fn remove_orphaned_packages(state: &State, packages: Vec<Package>) -> Result<()> {
     use rayon::prelude::*;
 
     let state = state.clone();
-    let pool_dir = pool_dir.to_owned();
 
     tokio::task::spawn_blocking(move || {
         packages
             .into_par_iter()
-            .try_for_each_with((state, pool_dir), |(state, pool_dir), stone| {
-                remove_orphaned_package(state, pool_dir, stone)
-            })
+            .try_for_each_with(state, |state, stone| remove_orphaned_package(state, stone))
     })
     .await
     .context("join handle")?
 }
 
-fn remove_orphaned_package(state: &State, pool_dir: &Path, stone: Package) -> Result<()> {
+fn remove_orphaned_package(state: &State, stone: Package) -> Result<()> {
     use std::fs;
-
-    let relative_path = stone.path.strip_prefix(pool_dir).expect("lives in pool dir").to_owned();
 
     fs::remove_file(&stone.path).context(format!("remove orphaned stone {:?}", stone.path))?;
 
     state
         .meta_db
-        .remove(&stone.sha256sum.into())
+        .remove(&stone.sha256sum.clone().into())
         .context("remove stone from metadb")?;
 
-    info!(path = ?relative_path, "Orphaned stone removed");
+    info!(path = ?stone.relative_path, "Orphaned stone removed");
 
     Ok(())
 }

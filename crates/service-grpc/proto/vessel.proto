@@ -47,6 +47,26 @@ message CommandResponse {
   optional string error = 2;
 }
 
+message UpgradeFormatRequest {
+  string channel = 1;
+  UpgradeFormat format = 2;
+
+}
+
+message UpgradeFormat {
+  oneof format {
+    /// Upgrade from legacy to v0
+    UpgradeFormatLegacy legacy = 1;
+  }
+}
+
+// Upgrade from legacy to v0
+message UpgradeFormatLegacy {
+  // Tag to create on `legacy` from `volatile`
+  // before upgrading `volatile` to `v0`
+  string tag_name = 1;
+}
+
 service VesselService {
   rpc UploadToken(UploadTokenRequest) returns (UploadTokenResponse) {
     option (options.flags) = "ACCESS_TOKEN | SERVICE_ACCOUNT | NOT_EXPIRED";
@@ -69,5 +89,9 @@ service VesselService {
   rpc RemoveTag(RemoveTagRequest) returns (CommandResponse) {
     option (options.flags) = "ACCESS_TOKEN | NOT_EXPIRED";
     option (options.perm) = "RemoveTag";
+  }
+  rpc UpgradeFormat(UpgradeFormatRequest) returns (CommandResponse) {
+    option (options.flags) = "ACCESS_TOKEN | NOT_EXPIRED";
+    option (options.perm) = "UpgradeFormat";
   }
 }

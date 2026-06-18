@@ -40,15 +40,15 @@ async fn main() -> Result<()> {
 
     migration::run_all(&state).await.context("run migrations")?;
 
-    if let Some(directory) = import {
-        if let Err(err) = channel::import_directory(&state, DEFAULT_CHANNEL, directory).await {
-            error!(error = error::chain(&*err), "Failed to import directory");
-        }
-    } else {
-        channel::reindex_latest(&state, DEFAULT_CHANNEL)
-            .await
-            .context("reindex")?;
+    if let Some(directory) = import
+        && let Err(err) = channel::import_directory(&state, DEFAULT_CHANNEL, directory).await
+    {
+        error!(error = error::chain(&*err), "Failed to import directory");
     }
+
+    channel::reindex_latest(&state, DEFAULT_CHANNEL)
+        .await
+        .context("reindex")?;
 
     let (worker_sender, worker_task) = worker::run(state.clone()).await?;
 
@@ -84,5 +84,10 @@ pub mod test {
         let db = service::Database::in_memory().await.unwrap();
         db.migrate(sqlx::migrate!("./migrations")).await.unwrap();
         db
+    }
+
+    #[tokio::test]
+    async fn test_migrations() {
+        database().await;
     }
 }

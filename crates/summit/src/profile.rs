@@ -1,14 +1,16 @@
 use derive_more::derive::{Display, From, Into};
-use http::Uri;
 use serde::{Deserialize, Serialize};
 use service::database::Transaction;
+use sqlx::types::Json;
 use sqlx::{FromRow, SqliteConnection};
 
 use crate::project;
 
+pub use self::index::Index;
 pub use self::refresh::refresh;
 pub use self::remote::Remote;
 
+pub mod index;
 pub mod refresh;
 pub mod remote;
 
@@ -20,8 +22,7 @@ pub struct Profile {
     pub id: Id,
     pub name: String,
     pub arch: String,
-    #[serde(with = "http_serde::uri")]
-    pub index_uri: Uri,
+    pub index: Index,
     pub status: Status,
     pub remotes: Vec<Remote>,
 }
@@ -44,7 +45,7 @@ pub async fn create(
     project: project::Id,
     name: String,
     arch: String,
-    index_uri: Uri,
+    index: Index,
 ) -> Result<Profile, sqlx::Error> {
     let id: i64 = sqlx::query_scalar(
         "
@@ -52,7 +53,7 @@ pub async fn create(
         (
           name,
           arch,
-          index_uri,
+          index_source,
           status,
           project_id
         )
@@ -62,7 +63,7 @@ pub async fn create(
     )
     .bind(&name)
     .bind(&arch)
-    .bind(index_uri.to_string())
+    .bind(Json(&index))
     .bind(Status::Fresh.to_string())
     .bind(i64::from(project))
     .fetch_one(tx.as_mut())
@@ -72,7 +73,7 @@ pub async fn create(
         id: Id(id),
         name,
         arch,
-        index_uri,
+        index,
         status: Status::Fresh,
         remotes: vec![],
     })

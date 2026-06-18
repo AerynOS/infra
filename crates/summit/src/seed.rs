@@ -64,7 +64,7 @@ async fn seed_profile(tx: &mut Transaction, project: &crate::Project, seed: Prof
 
         profile
     } else {
-        let profile = profile::create(tx, project.id, seed.name, seed.arch, seed.index_uri)
+        let profile = profile::create(tx, project.id, seed.name, seed.arch, seed.index)
             .await
             .context("create profile")?;
 
@@ -85,7 +85,7 @@ async fn seed_remote(tx: &mut Transaction, profile: &crate::Profile, seed: Remot
     if profile.remotes.iter().any(|r| r.name == seed.name) {
         debug!("Remote already exists");
     } else {
-        profile::remote::create(tx, profile.id, seed.uri, seed.name, seed.priority)
+        profile::remote::create(tx, profile.id, seed.index, seed.name, seed.priority)
             .await
             .context("create remote")?;
 
@@ -131,8 +131,7 @@ pub struct Project {
 pub struct Profile {
     pub name: String,
     pub arch: String,
-    #[serde(with = "http_serde::uri")]
-    pub index_uri: Uri,
+    pub index: profile::Index,
     #[serde(default, rename = "remote")]
     pub remotes: Vec<Remote>,
 }
@@ -140,8 +139,7 @@ pub struct Profile {
 #[derive(Debug, Deserialize)]
 pub struct Remote {
     pub name: String,
-    #[serde(with = "http_serde::uri")]
-    pub uri: Uri,
+    pub index: profile::Index,
     pub priority: u64,
 }
 

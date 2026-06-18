@@ -9,10 +9,10 @@ edition = "2024"
 rust-version = "1.88"
 
 [workspace.dependencies]
-dag = { git = "https://github.com/AerynOS/os-tools.git" }
-moss = { git = "https://github.com/AerynOS/os-tools.git" }
-stone = { git = "https://github.com/AerynOS/os-tools.git" }
-stone_recipe = { git = "https://github.com/AerynOS/os-tools.git" }
+dag = { git = "https://github.com/AerynOS/os-tools.git", rev = "d59820d0e735767166891f0def6e9ccb79f145f8" }
+moss = { git = "https://github.com/AerynOS/os-tools.git", rev = "d59820d0e735767166891f0def6e9ccb79f145f8" }
+stone = { git = "https://github.com/AerynOS/os-tools.git", rev = "d59820d0e735767166891f0def6e9ccb79f145f8" }
+stone_recipe = { git = "https://github.com/AerynOS/os-tools.git", rev = "d59820d0e735767166891f0def6e9ccb79f145f8" }
 
 arc-swap = "1.8.0"
 async-trait = "0.1.88"
@@ -28,6 +28,7 @@ hex = "0.4.3"
 http = "1.0"
 http-serde = "2.0"
 include_dir = "0.7.4"
+indexmap  = "2.14.0"
 itertools = "0.14.0"
 minijinja = "2.9.0"
 minijinja-autoreload = "2.9.0"
@@ -41,6 +42,7 @@ rayon = "1.10.0"
 serde_json = "1.0"
 sha2 = "0.10.8"
 snafu = "0.8.5"
+tempfile = "3.20.0"
 test-case = "3.3.1"
 thiserror = "2.0.3"
 tokio-stream = "0.1.14"
@@ -125,3 +127,4 @@ opt-level = 2
 
 [patch.crates-io]
 sqlx = { git = "https://github.com/tarkah/sqlx", branch = "task/sqlite3-version" }
+kdl = { git = "https://github.com/kdl-org/kdl-rs", rev = "e9df058c25cd4486df8fe568d2ff24ea2c4ed0e8" }

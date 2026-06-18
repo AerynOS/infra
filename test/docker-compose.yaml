@@ -10,6 +10,8 @@ services:
       infra-test:
   summit:
     image: serpentos/summit:${RUST_PROFILE:-dev}
+    environment:
+      - RUST_LOG
     volumes:
       - summit-state:/app/state
       - ./summit/.privkey:/app/state/.privkey
@@ -31,6 +33,8 @@ services:
       start_period: 30s
   vessel:
     image: serpentos/vessel:${RUST_PROFILE:-dev}
+    environment:
+      - RUST_LOG
     volumes:
       - vessel-state:/app/state
       - ./vessel/.privkey:/app/state/.privkey
@@ -49,6 +53,8 @@ services:
   avalanche:
     image: serpentos/avalanche:${RUST_PROFILE:-dev}
     privileged: true
+    environment:
+      - RUST_LOG
     volumes:
       - avalanche-state:/app/state
       - ./avalanche/.privkey:/app/state/.privkey

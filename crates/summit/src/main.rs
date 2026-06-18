@@ -144,3 +144,17 @@ struct Args {
     #[arg(long)]
     use_mock_data: bool,
 }
+
+#[cfg(test)]
+pub mod test {
+    pub async fn database() -> service::Database {
+        let db = service::Database::in_memory().await.unwrap();
+        db.migrate(sqlx::migrate!("./migrations")).await.unwrap();
+        db
+    }
+
+    #[tokio::test]
+    async fn test_migrations() {
+        database().await;
+    }
+}
