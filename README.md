@@ -2,6 +2,8 @@
 
 [![docs](https://img.shields.io/badge/docs-passing-brightgreen)](https://serpent-os.github.io/infra-test/)
 
+**NB:** *The AerynOS infra is currently in development ("Alpha"), and is not supported outside of its use internally in the AerynOS project.*
+
 Our infra is comprised of the Summit, Avalanche and Vessel service components built in Rust:
 
 - **Summit:** Package build-controller, build-orchestrator and build-dashboard. Monitors recipes tree and automatically builds new, incoming recipes once they show up.
