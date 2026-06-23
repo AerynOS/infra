@@ -4,7 +4,7 @@ use std::{
     process::{ExitStatus, Stdio},
 };
 
-use tokio::process::{ChildStderr, ChildStdout, Command};
+use tokio::process::{Child, ChildStderr, ChildStdout, Command};
 use tracing::trace;
 
 /// Execute the command and return it's stdout output
@@ -43,18 +43,20 @@ where
 
     let mut process = Command::new(command);
 
-    let mut child = f(&mut process)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|err| Error::Io(command.to_owned(), err))?;
+    let mut child = KillOnDrop(
+        f(&mut process)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|err| Error::Io(command.to_owned(), err))?,
+    );
 
-    let stdout = child.stdout.take().expect("stdout set explicitly");
-    let stderr = child.stderr.take().expect("stderr set explicitly");
+    let stdout = child.0.stdout.take().expect("stdout set explicitly");
+    let stderr = child.0.stderr.take().expect("stderr set explicitly");
 
     let task = tokio::spawn(piped(stdout, stderr));
 
-    let status = child.wait().await.map_err(|err| Error::Io(command.to_owned(), err))?;
+    let status = child.0.wait().await.map_err(|err| Error::Io(command.to_owned(), err))?;
 
     let _ = task.await;
 
@@ -79,4 +81,12 @@ pub enum Error {
     /// Process failed with provided stderr
     #[error("{0} failed: {1}: {2}")]
     FailedWithOutput(String, ExitStatus, String),
+}
+
+struct KillOnDrop(Child);
+
+impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+        let _ = self.0.start_kill();
+    }
 }

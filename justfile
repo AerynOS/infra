@@ -5,14 +5,14 @@ help:
 	@just --list
 
 [private]
-docker-build target profile:
-	@docker build . -t serpentos/{{target}}:{{profile}} --target {{target}} --build-arg RUST_PROFILE={{profile}}
+docker-build target profile *ARGS:
+	@docker build . -t serpentos/{{target}}:{{profile}} --target {{target}} --build-arg RUST_PROFILE={{profile}} {{ARGS}}
 
 # Build docker containers
-build profile="dev": (docker-build "summit" profile) (docker-build "avalanche" profile) (docker-build "vessel" profile)
+build profile="infratest" *ARGS: (docker-build "summit" profile ARGS) (docker-build "avalanche" profile ARGS) (docker-build "vessel" profile ARGS)
 
 # Bring up docker containers
-up *ARGS: (_up "dev" ARGS)
+up *ARGS: (_up "infratest" ARGS)
 
 # Bring up docker containers in release mode
 up-release *ARGS: (_up "release" ARGS)
