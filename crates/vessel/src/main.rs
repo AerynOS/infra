@@ -3,9 +3,8 @@ use std::{net::IpAddr, path::PathBuf};
 use channel::DEFAULT_CHANNEL;
 use clap::Parser;
 use color_eyre::eyre::Context;
-use service::error;
-use service::{Server, endpoint::Role};
-use tracing::error;
+use service::{Server, buildinfo, endpoint::Role, error};
+use tracing::{error, info};
 
 pub use self::config::Config;
 pub use self::package::Package;
@@ -29,11 +28,25 @@ async fn main() -> Result<()> {
         config,
         root,
         import,
+        version,
     } = Args::parse();
+
+    if version {
+        println!("vessel {}", buildinfo::get_full_version());
+        return Ok(());
+    }
 
     let config = Config::load(config.unwrap_or_else(|| root.join("config.toml"))).await?;
 
     service::tracing::init(&config.tracing);
+
+    info!(
+        version = buildinfo::get_version(),
+        git_ref = buildinfo::get_git_full_hash(),
+        git_dirty = !buildinfo::get_git_dirty().is_empty(),
+        build_time = buildinfo::get_build_time(),
+        "vessel started"
+    );
 
     let state = State::load(root).await.context("load state")?;
     let issuer = config.issuer(state.service.key_pair.clone());
@@ -76,6 +89,9 @@ struct Args {
     root: PathBuf,
     #[arg(long)]
     import: Option<PathBuf>,
+    /// Print version and exit
+    #[arg(long)]
+    version: bool,
 }
 
 #[cfg(test)]

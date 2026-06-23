@@ -8,10 +8,13 @@ use axum::{
 };
 use clap::Parser;
 use color_eyre::eyre::Context;
-use service::endpoint;
-use service::{Server, endpoint::Role};
+use service::{
+    Server, buildinfo,
+    endpoint::{self, Role},
+};
 use tokio::sync::{broadcast, mpsc};
 use tower_http::{services::ServeDir, set_header::SetResponseHeader};
+use tracing::info;
 
 pub use self::builder::Builder;
 pub use self::config::Config;
@@ -60,12 +63,26 @@ async fn main() -> Result<()> {
         seed_from,
         static_dir,
         use_mock_data,
+        version,
     } = Args::parse();
+
+    if version {
+        println!("summit {}", buildinfo::get_full_version());
+        return Ok(());
+    }
 
     let config_path = config.unwrap_or_else(|| root.join("config.toml"));
     let config = Config::load(&config_path).await?;
 
     service::tracing::init(&config.tracing);
+
+    info!(
+        version = buildinfo::get_version(),
+        git_ref = buildinfo::get_git_full_hash(),
+        git_dirty = !buildinfo::get_git_dirty().is_empty(),
+        build_time = buildinfo::get_build_time(),
+        "summit started"
+    );
 
     let (manager_events_tx, manager_events_rx) = mpsc::channel(100);
     let (sse_events_tx, sse_events_rx) = broadcast::channel(100);
@@ -143,6 +160,9 @@ struct Args {
     static_dir: Option<PathBuf>,
     #[arg(long)]
     use_mock_data: bool,
+    /// Print version and exit
+    #[arg(long)]
+    version: bool,
 }
 
 #[cfg(test)]

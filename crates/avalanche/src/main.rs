@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 
 use clap::Parser;
-use service::{Server, State, endpoint::Role};
+use service::{Server, State, buildinfo, endpoint::Role};
+use tracing::info;
 
 use self::build::build;
 use self::config::Config;
@@ -16,11 +17,24 @@ mod upload;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let Args { config, root } = Args::parse();
+    let Args { config, root, version } = Args::parse();
+
+    if version {
+        println!("avalanche {}", buildinfo::get_full_version());
+        return Ok(());
+    }
 
     let config = Config::load(config.unwrap_or_else(|| root.join("config.toml"))).await?;
 
     service::tracing::init(&config.tracing);
+
+    info!(
+        version = buildinfo::get_version(),
+        git_ref = buildinfo::get_git_full_hash(),
+        git_dirty = !buildinfo::get_git_dirty().is_empty(),
+        build_time = buildinfo::get_build_time(),
+        "avalanche started"
+    );
 
     let state = State::load(root).await?;
     let issuer = config.issuer(state.key_pair.clone());
@@ -40,4 +54,7 @@ struct Args {
     config: Option<PathBuf>,
     #[arg(long, short, default_value = ".")]
     root: PathBuf,
+    /// Print version and exit
+    #[arg(long)]
+    version: bool,
 }

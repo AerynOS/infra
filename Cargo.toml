@@ -13,6 +13,7 @@ dag = { git = "https://github.com/AerynOS/os-tools.git", rev = "d59820d0e7357671
 moss = { git = "https://github.com/AerynOS/os-tools.git", rev = "d59820d0e735767166891f0def6e9ccb79f145f8" }
 stone = { git = "https://github.com/AerynOS/os-tools.git", rev = "d59820d0e735767166891f0def6e9ccb79f145f8" }
 stone_recipe = { git = "https://github.com/AerynOS/os-tools.git", rev = "d59820d0e735767166891f0def6e9ccb79f145f8" }
+tools_buildinfo = { git = "https://github.com/AerynOS/os-tools.git", rev = "d59820d0e735767166891f0def6e9ccb79f145f8" }
 
 arc-swap = "1.8.0"
 async-trait = "0.1.88"

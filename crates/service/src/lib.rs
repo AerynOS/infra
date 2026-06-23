@@ -13,6 +13,7 @@ mod middleware;
 mod task;
 
 pub mod account;
+pub mod buildinfo;
 pub mod client;
 pub mod database;
 pub mod endpoint;
