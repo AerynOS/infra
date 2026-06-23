@@ -26,6 +26,8 @@
 
 		handle {
 			file_server {
+				precompressed zstd
+				hide *.zst
 				browse {
 					reveal_symlinks
 				}
