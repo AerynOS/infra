@@ -33,6 +33,7 @@ tokio-stream.workspace = true
 tokio-util.workspace = true
 toml.workspace = true
 tonic.workspace = true
+tools_buildinfo.workspace = true
 tower.workspace = true
 tracing.workspace = true
 tracing-futures.workspace = true
