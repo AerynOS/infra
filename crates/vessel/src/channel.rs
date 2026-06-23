@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::io;
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use color_eyre::eyre::{self, Context, OptionExt, Result, bail, ensure, eyre};
@@ -9,6 +9,7 @@ use itertools::Itertools;
 use moss::repository::{Format, format};
 use service::database::Transaction;
 use stone::{StoneDecodedPayload, StoneHeader, StoneHeaderV1FileType, StoneWriter};
+use tokio::task::spawn_blocking;
 use tokio::time::Instant;
 use tracing::{debug, info, info_span, warn};
 
@@ -266,7 +267,7 @@ pub async fn import_packages(
     destructive_move: bool,
 ) -> Result<()> {
     // Stone is read in blocking manner
-    let (mut tx, format, mut entries) = tokio::task::spawn_blocking({
+    let (mut tx, format, mut entries) = spawn_blocking({
         let span = tracing::Span::current();
         let state = state.clone();
         let channel = channel.to_owned();
@@ -471,7 +472,7 @@ async fn reindex(state: &State, channel: &str, version: &Version, format: &Forma
     let now = Instant::now();
 
     // Write stone is blocking
-    tokio::task::spawn_blocking({
+    spawn_blocking({
         let span = tracing::Span::current();
         let state = state.clone();
         let history = history.clone();
@@ -710,34 +711,48 @@ async fn update_root_index_json(state: &State, channel: &str) -> Result<()> {
 
     let json = serde_json::to_string_pretty(&root_index).context("serialize root index json")?;
 
-    let temp_path = tempfile::Builder::new()
-        .prefix("vessel-moss-root-index")
-        .permissions(std::fs::Permissions::from_mode(0o644))
-        .tempfile()
-        .context("open temp file")?
-        .into_temp_path();
+    let json_zstd = spawn_blocking({
+        let json = json.clone();
+        move || zstd::encode_all(json.as_bytes(), -1)
+    })
+    .await
+    .context("spawn blocking")?
+    .context("encode root index json as zstd")?;
 
-    fs::write(&temp_path, json)
+    let temp_dir = tempfile::TempDir::with_prefix("vessel-moss-root-index").context("create temp dir")?;
+
+    let temp_json_path = temp_dir.path().join("moss-root-index.json");
+    let temp_json_zstd_path = temp_json_path.with_extension("json.zst");
+
+    fs::write(&temp_json_path, json)
         .await
         .context("write moss-root-index.json")?;
+    fs::write(&temp_json_zstd_path, json_zstd)
+        .await
+        .context("write moss-root-index.json.zst")?;
 
-    let path = state.public_dir().join(channel).join("moss-root-index.json");
+    let json_path = state.public_dir().join(channel).join("moss-root-index.json");
+    let json_zstd_path = json_path.with_extension("json.zst");
 
-    // Attempt atomic rename or fallback to copy
-    match fs::rename(&temp_path, &path).await {
-        Ok(_) => {}
-        Err(err) if err.kind() == io::ErrorKind::CrossesDevices => {
-            fs::copy(&temp_path, &path)
-                .await
-                .context("copy moss-root-index.json temp to final")?;
-            fs::remove_file(&temp_path)
-                .await
-                .context("remove moss-root-index.json temp path")?;
-        }
-        Err(err) => {
-            return Err(err).context("rename moss-root-index.json temp to final");
+    for (source, dest) in [(temp_json_path, json_path), (temp_json_zstd_path, json_zstd_path)] {
+        let file_name = dest.file_name().unwrap_or_default().to_str().unwrap_or_default();
+
+        // Attempt atomic rename or fallback to copy
+        match fs::rename(&source, &dest).await {
+            Ok(_) => {}
+            Err(err) if err.kind() == io::ErrorKind::CrossesDevices => {
+                fs::copy(&source, &dest)
+                    .await
+                    .with_context(|| format!("copy {file_name} temp to final"))?;
+            }
+            Err(err) => {
+                return Err(err).with_context(|| format!("rename {file_name} temp to final"));
+            }
         }
     }
+
+    // Cleanup temp dir
+    drop(temp_dir);
 
     Ok(())
 }
