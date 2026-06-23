@@ -14,9 +14,12 @@ version = "stream/volatile"
 
 [[project.profile.remote]]
 name = "volatile"
-# TODO: Update to new index format once its live
-index.uri = "https://cdn.aerynos.dev/stream/volatile/x86_64/stone.index"
 priority = 10
+
+[project.profile.remote.index]
+base_uri = "https://cdn.aerynos.dev"
+channel = "main"
+version = "stream/volatile"
 
 [[project.repository]]
 name = "recipes"
