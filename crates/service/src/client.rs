@@ -5,7 +5,7 @@ use thiserror::Error;
 use tracing::{error, info};
 
 use crate::crypto::KeyPair;
-use crate::{Account, Database, Endpoint, Token, account, crypto, database, endpoint, token};
+use crate::{Account, Database, Token, account, crypto, database, endpoint, token};
 
 pub use service_client::*;
 

@@ -5,10 +5,9 @@ use chrono::{DateTime, Duration, Utc};
 use jsonwebtoken::{DecodingKey, EncodingKey};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use uuid::Uuid;
 
 use crate::{
-    account, auth,
+    auth,
     crypto::{self, KeyPair, PublicKey},
 };
 
@@ -31,9 +30,10 @@ impl Token {
         }
     }
 
+    /// Returns a decoded token that isn't verified
     pub fn unverified(token: &str) -> Result<UnverifiedToken, Error> {
         let decoded =
-            jsonwebtoken::decode::<Payload>(token, &DecodingKey::from_secret(&[]), &Validation::unverified().0)
+            jsonwebtoken::decode::<Payload>(token, &DecodingKey::from_ed_der(&[]), &Validation::unverified().0)
                 .map_err(Error::decode)?;
 
         Ok(UnverifiedToken {
@@ -161,7 +161,7 @@ impl Default for Validation {
         // Expiration is evaluated in the authentication layer
         validation.validate_exp = false;
         validation.validate_aud = false;
-        validation.required_spec_claims = ["aud", "exp", "iss", "sub"].into_iter().map(String::from).collect();
+        validation.required_spec_claims = ["exp", "iss"].into_iter().map(String::from).collect();
 
         Self(validation)
     }
@@ -185,26 +185,10 @@ impl Validation {
         Self(validation)
     }
 
-    /// Validation will check that the `aud` field is is equal to
-    /// the provided value
-    pub fn aud(mut self, aud: impl ToString) -> Self {
-        self.0.validate_aud = true;
-        self.0.aud = Some([aud.to_string()].into_iter().collect());
-        self
-    }
-
     /// Validation will check that the `iss` field is is equal to
     /// the provided value
     pub fn iss(mut self, iss: impl ToString) -> Self {
         self.0.iss = Some([iss.to_string()].into_iter().collect());
-        self
-    }
-
-    /// Validation will check that the `sub` field is is equal to
-    /// the provided value
-    #[allow(clippy::should_implement_trait)]
-    pub fn sub(mut self, sub: impl ToString) -> Self {
-        self.0.sub = Some(sub.to_string());
         self
     }
 }
@@ -212,30 +196,22 @@ impl Validation {
 /// Payload of a [`Token`] which defines various claims
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Payload {
-    /// Audience - Recipient for which the JWT is intended
-    pub aud: String,
     /// Expiration - Time after which the JWT expires
     pub exp: i64,
     /// Issued at - Time at which the JWT was issued; can be used to determine age of the JWT
     pub iat: i64,
     /// Issuer - Issuer of the JWT
     pub iss: String,
-    /// Subject - Subject of the JWT (the user)
-    pub sub: String,
     /// Unique identifier
     pub jti: Option<String>,
     /// Token purpose
     #[serde(rename = "pur")]
     pub purpose: Purpose,
-    /// Account id of the holder
-    #[serde(rename = "uid")]
-    pub account_id: Uuid,
-    /// Account type of the holder
-    #[serde(rename = "act")]
-    pub account_type: account::Kind,
     /// Permissions granted to the holder
     #[serde(default, rename = "per")]
     pub permissions: HashSet<auth::Permission>,
+    /// The client granted this token
+    pub client: auth::Client,
 }
 
 /// Purpose of the token
@@ -281,7 +257,7 @@ impl Error {
     fn decode(error: jsonwebtoken::errors::Error) -> Self {
         match error.kind() {
             jsonwebtoken::errors::ErrorKind::InvalidSignature => Self::InvalidSignature,
-            _ => Self::decode(error),
+            _ => Self::DecodeToken(error),
         }
     }
 }
@@ -290,6 +266,8 @@ impl Error {
 mod test {
     use chrono::{Duration, Utc};
     use jsonwebtoken::Algorithm;
+
+    use crate::{Service, auth};
 
     use super::*;
 
@@ -303,16 +281,20 @@ mod test {
         let token = Token {
             header: Header::new(Algorithm::EdDSA),
             payload: Payload {
-                aud: "test".into(),
                 exp: one_hour.timestamp(),
                 iat: now.timestamp(),
                 iss: "test".into(),
-                sub: "test".into(),
                 jti: None,
                 purpose: Purpose::Authorization,
-                account_id: Uuid::new_v4(),
-                account_type: account::Kind::Admin,
                 permissions: Default::default(),
+                client: auth::Client::Service {
+                    service_id: "test".to_owned(),
+                    service: Service::Avalanche,
+                    public_key: "QRpUVLRvtWVfRUTlnen059e5iddhLyStsuzoE8C9yNs"
+                        .to_owned()
+                        .try_into()
+                        .expect("valid public key"),
+                },
             },
         };
 

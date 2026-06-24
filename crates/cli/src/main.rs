@@ -3,11 +3,11 @@ use std::{path::PathBuf, process};
 use clap::{Parser, Subcommand, ValueEnum};
 use color_eyre::eyre::{Result, bail};
 use moss::repository::Format;
-use service_client::{AuthClient, CredentialsAuth, SummitServiceClient, TlsConfig, VesselServiceClient};
+use service_client::{AuthClient, Credentials, CredentialsAuth, SummitServiceClient, TlsConfig, VesselServiceClient};
 use service_core::crypto::KeyPair;
 use service_grpc::{
-    summit::{CancelRequest, RetryRequest},
-    vessel::{
+    proto::summit::{CancelRequest, RetryRequest},
+    proto::vessel::{
         AddTagRequest, RemoveTagRequest, Stream as ProtoStream, UpdateStreamRequest, UpgradeFormat,
         UpgradeFormatLegacy, UpgradeFormatRequest, upgrade_format,
     },
@@ -39,7 +39,7 @@ async fn main() -> Result<()> {
             let mut client = SummitServiceClient::connect_with_auth(
                 uri,
                 tls,
-                CredentialsAuth::with_in_memory_storage(username, key_pair),
+                CredentialsAuth::with_in_memory_storage(Credentials::Account { username, key_pair }),
             )
             .await?;
 
@@ -80,7 +80,7 @@ async fn main() -> Result<()> {
             let mut client = VesselServiceClient::connect_with_auth(
                 uri,
                 tls,
-                CredentialsAuth::with_in_memory_storage(username, key_pair),
+                CredentialsAuth::with_in_memory_storage(Credentials::Account { username, key_pair }),
             )
             .await?;
 

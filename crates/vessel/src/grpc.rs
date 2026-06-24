@@ -1,53 +1,42 @@
-use std::{
-    io,
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use color_eyre::eyre::{OptionExt as _, Report, bail, eyre};
 use futures_util::TryStreamExt;
 use prost::Message;
 use service::{
-    Endpoint, Token,
-    auth::Permission,
-    database, endpoint,
+    Service, crypto,
     grpc::{
-        self, collectable,
-        vessel::{
-            AddTagRequest, CommandResponse, RemoveTagRequest, UpdateStreamRequest, UpgradeFormatRequest, UploadRequest,
-            UploadTokenRequest, UploadTokenResponse, upgrade_format,
-            vessel_service_server::{VesselService, VesselServiceServer},
+        self,
+        proto::{
+            self,
+            summit::builder_stream::BuildFinished,
+            vessel::{
+                AddTagRequest, CommandResponse, RemoveTagRequest, UpdateStreamRequest, UpgradeFormatRequest,
+                UploadRequest, upgrade_format,
+                vessel_service_server::{VesselService as GrpcVesselService, VesselServiceServer},
+            },
         },
     },
-    token::{self, VerifiedToken},
+    token::VerifiedToken,
 };
-use sha2::{Digest, Sha256};
-use snafu::{OptionExt, ResultExt, Snafu, ensure};
-use sqlx::types::chrono::Utc;
-use tokio::{
-    fs::{self, File},
-    io::AsyncWriteExt,
-    sync::{mpsc, oneshot},
-};
-use tracing::{Span, debug, error, info, warn};
+use snafu::{OptionExt, ResultExt, Snafu};
+use tokio::sync::{mpsc, oneshot};
+use tracing::{Span, error, info, warn};
 
 use crate::{
-    Package,
     channel::{self, FormatUpgrade},
-    worker,
+    upload, worker,
 };
 
-pub type Server = VesselServiceServer<Service>;
-
-pub fn service(state: service::State, worker: worker::Sender) -> Server {
-    Server::new(Service {
+pub fn vessel_service(state: service::State, worker: worker::Sender) -> VesselServiceServer<VesselService> {
+    VesselServiceServer::new(VesselService {
         state: Arc::new(State { service: state, worker }),
     })
 }
 
 #[derive(Clone)]
-pub struct Service {
+pub struct VesselService {
     state: Arc<State>,
 }
 
@@ -58,16 +47,7 @@ struct State {
 }
 
 #[async_trait]
-impl VesselService for Service {
-    async fn upload_token(
-        &self,
-        request: tonic::Request<UploadTokenRequest>,
-    ) -> Result<tonic::Response<UploadTokenResponse>, tonic::Status> {
-        let state = self.state.clone();
-
-        grpc::handle(request, async move |request| upload_token(state, request).await).await
-    }
-
+impl GrpcVesselService for VesselService {
     async fn upload(
         &self,
         request: tonic::Request<tonic::Streaming<UploadRequest>>,
@@ -114,42 +94,7 @@ impl VesselService for Service {
     }
 }
 
-#[tracing::instrument(
-    skip_all,
-    fields(
-        task_id = %request.get_ref().task_id,
-    )
-)]
-async fn upload_token(
-    state: Arc<State>,
-    request: tonic::Request<UploadTokenRequest>,
-) -> Result<UploadTokenResponse, Error> {
-    let token = request
-        .extensions()
-        .get::<VerifiedToken>()
-        .cloned()
-        .context(MissingRequestTokenSnafu)?;
-
-    let hash = grpc::upload_request_hash(&request.into_inner());
-
-    let now = Utc::now();
-
-    // Create a single use upload token for vessel
-    // derived from summits token
-    let upload_token = Token::new(token::Payload {
-        iat: now.timestamp(),
-        exp: (now + chrono::Duration::minutes(5)).timestamp(),
-        jti: Some(hash),
-        permissions: [Permission::UploadPackage].into_iter().collect(),
-        ..token.decoded.payload
-    })
-    .sign(&state.service.key_pair)
-    .context(SignUploadTokenSnafu)?;
-
-    Ok(UploadTokenResponse { token: upload_token })
-}
-
-#[tracing::instrument(skip_all, fields(task_id))]
+#[tracing::instrument(skip_all, fields(task_id, builder_id))]
 async fn upload(state: Arc<State>, request: tonic::Request<tonic::Streaming<UploadRequest>>) -> Result<(), Error> {
     let token = request
         .extensions()
@@ -157,104 +102,60 @@ async fn upload(state: Arc<State>, request: tonic::Request<tonic::Streaming<Uplo
         .cloned()
         .context(MissingRequestTokenSnafu)?;
 
-    let endpoint_id = token
-        .decoded
-        .payload
-        .sub
-        .parse::<endpoint::Id>()
-        .context(InvalidEndpointSnafu)?;
-    let endpoint = Endpoint::get(
-        state
-            .service
-            .service_db
-            .acquire()
-            .await
-            .context(DatabaseSnafu)?
-            .as_mut(),
-        endpoint_id,
-    )
-    .await
-    .context(LoadEndpointSnafu)?;
-
     let mut stream = request.into_inner().into_stream();
 
     // First "chunk" will be the proto encoded UploadTokenRequest
     // so we can validate this token matches & we can see what
     // collectables will be uploaded
-    let chunk = stream.try_next().await?.context(MissingUploadTokenRequestSnafu)?;
+    let header_chunk = stream.try_next().await?.context(MissingUploadTokenRequestSnafu)?.chunk;
+    // Second chunk is a signature over the first chunk using the declared builders
+    // public key signing key. This is used to confirm the upload token granted for this upload
+    // is actually used by the builder to make this request.
+    let signature_chunk = stream
+        .try_next()
+        .await?
+        .context(MissingUploadSignatureRequestSnafu)?
+        .chunk;
 
-    let body = UploadTokenRequest::decode(&*chunk.chunk).context(DecodeUploadTokenRequestSnafu)?;
+    let header = BuildFinished::decode(&*header_chunk).context(DecodeUploadTokenRequestSnafu)?;
 
     let span = Span::current();
-    span.record("task_id", body.task_id);
+    span.record("task_id", header.task_id);
 
-    let hash = grpc::upload_request_hash(&body);
+    let hash = upload::upload_request_hash(&header);
 
     if token.decoded.payload.jti.is_none_or(|h| h != hash) {
         return Err(Error::InvalidUploadToken);
     }
 
-    info!(num_packages = body.collectables.len(), "Upload requested");
+    // Validate this request came from the authenticated builder
+    //
+    // This token isn't directly granted to the builder, but is more of a
+    // "step-up" token passed to the builder via summit. This is a sanity
+    // check that summit or something else isn't using the token and its
+    // the intended builder.
+    match token.decoded.payload.client {
+        service::auth::Client::Service {
+            service_id: builder_id,
+            service: Service::Avalanche,
+            public_key: builder_public_key,
+        } => {
+            let signature = crypto::signature_from_bytes(&signature_chunk).context(ParseUploadSignatureSnafu)?;
 
-    let mut bytes = vec![];
-    let mut packages = vec![];
+            builder_public_key
+                .verify(&header_chunk, &signature)
+                .context(UploadSignatureVerificationSnafu)?;
 
-    // Save each package
-    for collectable in body.collectables {
-        ensure!(
-            collectable.kind() == collectable::Kind::Package,
-            InvalidCollectableKindSnafu {
-                kind: collectable.kind()
-            }
-        );
-
-        let path = download_path(&state.service.state_dir, &collectable.sha256sum).await?;
-        let mut file = File::create(&path).await.context(CreateDownloadFileSnafu)?;
-        let mut sha2 = Sha256::default();
-
-        let mut remaining = collectable.size as usize;
-
-        while remaining > 0 {
-            let rest = bytes.split_off(bytes.len().min(remaining));
-
-            remaining -= bytes.len();
-
-            sha2.update(&bytes);
-            file.write_all(&bytes).await.context(WriteDownloadFileSnafu)?;
-
-            bytes = rest;
-
-            if let Some(req) = stream.try_next().await? {
-                bytes.extend(req.chunk);
-            } else {
-                ensure!(remaining == 0, UnexpectedEndOfUploadSnafu);
-            }
+            span.record("builder_id", builder_id);
         }
-
-        file.flush().await.context(WriteDownloadFileSnafu)?;
-
-        let hash = hex::encode(sha2.finalize());
-
-        ensure!(
-            hash == collectable.sha256sum,
-            Sha256MismatchSnafu {
-                expected: collectable.sha256sum,
-                actual: hash
-            }
-        );
-
-        debug!(name = collectable.name, "Package saved");
-
-        packages.push(Package {
-            name: collectable.name,
-            relative_path: path
-                .strip_prefix(&state.service.state_dir)
-                .expect("lives under state dir")
-                .to_owned(),
-            path,
-            sha256sum: hash,
-        });
+        _ => return Err(Error::InvalidUploadToken),
     }
+
+    info!(num_packages = header.collectables.len(), "Upload requested");
+
+    let packages = upload::save_packages(&state.service, &header.collectables, stream)
+        .await
+        .context(SavePackagesSnafu)?;
 
     if packages.is_empty() {
         warn!("No packages sent");
@@ -266,8 +167,7 @@ async fn upload(state: Arc<State>, request: tonic::Request<tonic::Streaming<Uplo
     state
         .worker
         .send(worker::Message::PackagesUploaded {
-            task_id: body.task_id,
-            endpoint,
+            task_id: header.task_id,
             packages,
         })
         .context(SendWorkerSnafu)?;
@@ -293,10 +193,8 @@ async fn update_stream(
         .cloned()
         .ok_or(Error::MissingRequestToken)?;
 
-    let account_id = token.decoded.payload.account_id;
-
     info!(
-        account = %account_id,
+        client = %token.decoded.payload.client,
         "Update stream request received"
     );
 
@@ -306,9 +204,9 @@ async fn update_stream(
 
     let validate = || -> Result<_, Report> {
         let stream = match body.stream() {
-            grpc::vessel::Stream::Unknown => bail!("unknown stream"),
-            grpc::vessel::Stream::Volatile => channel::version::Stream::Volatile,
-            grpc::vessel::Stream::Unstable => channel::version::Stream::Unstable,
+            proto::vessel::Stream::Unknown => bail!("unknown stream"),
+            proto::vessel::Stream::Volatile => channel::version::Stream::Volatile,
+            proto::vessel::Stream::Unstable => channel::version::Stream::Unstable,
         };
         let version =
             channel::Version::try_from(body.version).map_err(|err| eyre!("failed to parse version: {err}"))?;
@@ -359,10 +257,8 @@ async fn add_tag(state: Arc<State>, request: tonic::Request<AddTagRequest>) -> R
         .cloned()
         .ok_or(Error::MissingRequestToken)?;
 
-    let account_id = token.decoded.payload.account_id;
-
     info!(
-        account = %account_id,
+        client = %token.decoded.payload.client,
         "Add tag request received"
     );
 
@@ -419,10 +315,8 @@ async fn remove_tag(state: Arc<State>, request: tonic::Request<RemoveTagRequest>
         .cloned()
         .ok_or(Error::MissingRequestToken)?;
 
-    let account_id = token.decoded.payload.account_id;
-
     info!(
-        account = %account_id,
+        client = %token.decoded.payload.client,
         "Remove tag request received"
     );
 
@@ -537,40 +431,26 @@ enum Error {
     MissingRequestToken,
     #[snafu(display("Invalid upload token"))]
     InvalidUploadToken,
-    #[snafu(display("Invalid endpoint"))]
-    InvalidEndpoint { source: uuid::Error },
-    #[snafu(display("Failed to load endpoint"))]
-    LoadEndpoint { source: database::Error },
     #[snafu(display("Failed to send task to worker"))]
     SendWorker {
         source: mpsc::error::SendError<worker::Message>,
     },
-    #[snafu(display("Database error"))]
-    Database { source: database::Error },
-    #[snafu(display("Failed to sign upload token"))]
-    SignUploadToken { source: token::Error },
-    #[snafu(display("Cannot import collectable type {kind:?}"))]
-    InvalidCollectableKind { kind: collectable::Kind },
     #[snafu(context(false), display("Grpc request error"))]
     GrpcRequest { source: tonic::Status },
-    #[snafu(display("Invalid sha256 length of collectable: {size}"))]
-    InvalidSha256Length { size: usize },
-    #[snafu(display("Failed to create download directory"))]
-    CreateDownloadDir { source: io::Error },
     #[snafu(display("Missing upload token body from upload stream"))]
     MissingUploadTokenRequest,
+    #[snafu(display("Missing upload signature from upload stream"))]
+    MissingUploadSignatureRequest,
     #[snafu(display("Failed to decode upload token body"))]
     DecodeUploadTokenRequest { source: prost::DecodeError },
-    #[snafu(display("Failed to create download file"))]
-    CreateDownloadFile { source: io::Error },
-    #[snafu(display("Failed writing to download file"))]
-    WriteDownloadFile { source: io::Error },
-    #[snafu(display("Unexpected end of stream while downloading packages"))]
-    UnexpectedEndOfUpload,
-    #[snafu(display("Sha256 mismatch of uploaded package, expected {expected} got {actual}"))]
-    Sha256Mismatch { expected: String, actual: String },
     #[snafu(transparent)]
     OneshotRecv { source: oneshot::error::RecvError },
+    #[snafu(display("Failed to save packages"))]
+    SavePackages { source: upload::Error },
+    #[snafu(display("Failed to parse upload signature"))]
+    ParseUploadSignature { source: crypto::Error },
+    #[snafu(display("Upload signature verification failed"))]
+    UploadSignatureVerification { source: crypto::Error },
 }
 
 impl From<Error> for tonic::Status {
@@ -578,34 +458,25 @@ impl From<Error> for tonic::Status {
         match error {
             Error::MissingRequestToken => tonic::Status::unauthenticated(""),
             Error::InvalidUploadToken => tonic::Status::permission_denied(""),
-            Error::InvalidEndpoint { .. }
-            | Error::InvalidCollectableKind { .. }
-            | Error::InvalidSha256Length { .. }
-            | Error::MissingUploadTokenRequest
+            Error::MissingUploadTokenRequest
+            | Error::MissingUploadSignatureRequest
             | Error::DecodeUploadTokenRequest { .. }
-            | Error::UnexpectedEndOfUpload
-            | Error::Sha256Mismatch { .. } => tonic::Status::invalid_argument(""),
-            Error::LoadEndpoint { .. }
-            | Error::SendWorker { .. }
-            | Error::Database { .. }
-            | Error::SignUploadToken { .. }
-            | Error::CreateDownloadDir { .. }
-            | Error::CreateDownloadFile { .. }
-            | Error::WriteDownloadFile { .. }
-            | Error::OneshotRecv { .. } => tonic::Status::internal(""),
+            | Error::ParseUploadSignature { .. }
+            | Error::UploadSignatureVerification { .. } => tonic::Status::invalid_argument(""),
+            Error::SendWorker { .. } | Error::OneshotRecv { .. } => tonic::Status::internal(""),
             Error::GrpcRequest { source } => source,
+            Error::SavePackages { source } => match source {
+                upload::Error::Sha256Mismatch { .. }
+                | upload::Error::InvalidSha256Length { .. }
+                | upload::Error::InvalidCollectableKind { .. } => tonic::Status::invalid_argument(""),
+                upload::Error::SignUploadToken { .. }
+                | upload::Error::ParseBuilderPublicKey { .. }
+                | upload::Error::CreateDownloadDir { .. }
+                | upload::Error::WriteDownloadFile { .. }
+                | upload::Error::UnexpectedEndOfUpload
+                | upload::Error::CreateDownloadFile { .. }
+                | upload::Error::StreamBytes { .. } => tonic::Status::internal(""),
+            },
         }
     }
-}
-
-async fn download_path(state_dir: &Path, hash: &str) -> Result<PathBuf, Error> {
-    ensure!(hash.len() >= 5, InvalidSha256LengthSnafu { size: hash.len() });
-
-    let dir = state_dir.join("staging").join(&hash[..5]).join(&hash[hash.len() - 5..]);
-
-    if !fs::try_exists(&dir).await.unwrap_or_default() {
-        fs::create_dir_all(&dir).await.context(CreateDownloadDirSnafu)?;
-    }
-
-    Ok(dir.join(hash))
 }

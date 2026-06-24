@@ -1,22 +1,15 @@
 //! Batteries included server that provides common service APIs
 //! over grpc, with the ability to handle additional consumer
 //! defined http & grpc APIs
-use std::{
-    convert::Infallible,
-    future::{self, IntoFuture},
-    net::IpAddr,
-    time::Duration,
-};
+use std::{future::IntoFuture, net::IpAddr, time::Duration};
 
-use futures_util::future::join_all;
 use thiserror::Error;
-use tracing::{error, info};
+use tracing::info;
 
 use crate::{
-    State,
+    Service, State,
     account::{self, Admin},
-    endpoint::{Role, enrollment},
-    error, middleware, signal, task, token,
+    middleware, signal, task, token,
 };
 
 pub use crate::task::CancellationToken;
@@ -24,34 +17,32 @@ pub use crate::task::CancellationToken;
 /// Batteries included server which provides http & grpc serving w/ common
 /// middlewares and the ability to spawn & manage tasks.
 pub struct Server<'a> {
+    state: &'a State,
+    admin: Admin,
     http_router: axum::Router,
     http_addr: Option<(IpAddr, u16)>,
     grpc_router: tonic::service::Routes,
     grpc_addr: Option<(IpAddr, u16)>,
-    state: &'a State,
-    role: Role,
-    admin: Admin,
     extract_token: middleware::ExtractToken,
     signals: Vec<signal::Kind>,
     runner: task::Runner,
 }
 
 impl<'a> Server<'a> {
-    /// Create a new [`Server`] with the configured [`Role`]
-    pub fn new(role: Role, state: &'a State, admin: Admin) -> Self {
+    /// Create a new [`Server`]
+    pub fn new(service: Service, state: &'a State, admin: Admin) -> Self {
         let extract_token = middleware::ExtractToken {
             public_key: state.key_pair.public_key(),
-            validation: token::Validation::new().iss(role.service_name()),
+            validation: token::Validation::new().iss(service.name()),
         };
 
         Self {
+            state,
+            admin,
             http_router: axum::Router::new(),
             http_addr: None,
             grpc_router: tonic::service::Routes::default(),
             grpc_addr: None,
-            role,
-            state,
-            admin,
             extract_token,
             signals: vec![signal::Kind::terminate(), signal::Kind::interrupt()],
             runner: task::Runner::new(),
@@ -70,8 +61,6 @@ impl Server<'_> {
     }
 
     /// Enable grpc with the provided binding address & routes
-    ///
-    /// Account service is always added, allowing authentication w/ the service
     pub fn with_grpc(self, addr: (IpAddr, u16), f: impl FnOnce(&mut tonic::service::RoutesBuilder)) -> Self {
         let mut routes = tonic::service::Routes::builder();
 
@@ -82,35 +71,6 @@ impl Server<'_> {
             grpc_router: routes.routes(),
             ..self
         }
-    }
-
-    /// Add task to auto-enroll
-    pub fn with_auto_enroll<T>(self, issuer: enrollment::Issuer, targets: Vec<T>) -> Self
-    where
-        T: Send + Sync + 'static + Into<enrollment::Target>,
-    {
-        debug_assert!(!matches!(self.role, Role::Hub));
-
-        let db = self.state.service_db.clone();
-
-        self.with_task("auto enroll", async move {
-            join_all(targets.into_iter().map(|target| async {
-                let target = target.into();
-
-                if let Err(e) = enrollment::auto_enroll(&db, issuer.clone(), &target).await {
-                    error!(
-                        error = %error::chain(e),
-                        url = %target.host_address,
-                        public_key = %target.public_key,
-                        role = %target.role,
-                        "Auto enrollment failed"
-                    );
-                }
-            }))
-            .await;
-
-            future::pending::<Result<(), Infallible>>().await
-        })
     }
 
     /// Override the default graceful shutdown duration (5s)
@@ -186,11 +146,7 @@ impl Server<'_> {
                 .layer(middleware::Log)
                 .layer(middleware::GrpcMethod)
                 .layer(self.extract_token)
-                .add_routes(self.grpc_router.add_service(account::service(
-                    self.role,
-                    self.state.service_db.clone(),
-                    self.state.key_pair.clone(),
-                )));
+                .add_routes(self.grpc_router);
 
             runner = runner.with_task("grpc server", async move {
                 let (host, port) = addr;

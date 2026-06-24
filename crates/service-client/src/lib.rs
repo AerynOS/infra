@@ -1,3 +1,4 @@
+//! Clients to connect to all grpc services
 use std::convert::Infallible;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -7,32 +8,34 @@ use std::{io, mem};
 
 use async_trait::async_trait;
 use base64::Engine;
-use futures_util::future::BoxFuture;
-use futures_util::{FutureExt, StreamExt};
+use futures_util::{FutureExt, StreamExt, future::BoxFuture};
 use http::{HeaderValue, Request, Response, Uri};
+use rand::Rng as _;
 use serde::Deserialize;
-use service_core::crypto::KeyPair;
-use service_core::token::UnverifiedToken;
-use service_core::{Token, auth, token};
-use service_grpc::Method;
-use service_grpc::account::{
-    AuthenticateRequest, Credentials as GrpcCredentials, authenticate_request, authenticate_response,
+use service_core::crypto::{EncodedSignature, PublicKey};
+use service_core::{
+    Service, Token, auth,
+    crypto::KeyPair,
+    token::{self, UnverifiedToken},
 };
+use service_grpc::{Method, proto};
 use thiserror::Error;
-use tokio::fs;
-use tokio::sync::{Mutex, mpsc};
+use tokio::{
+    fs,
+    sync::{Mutex, mpsc},
+};
 use tokio_stream::wrappers::ReceiverStream;
-use tonic::body::Body;
-use tonic::metadata::MetadataValue;
-use tonic::service::Interceptor;
-use tonic::transport::{self, Certificate, Channel, ClientTlsConfig, Identity};
-use tower::Service;
-use tracing::{error, warn};
+use tonic::{
+    body::Body,
+    metadata::MetadataValue,
+    service::Interceptor,
+    transport::{self, Certificate, Channel, ClientTlsConfig, Identity},
+};
+use tracing::{debug, error, warn};
 
-pub use service_grpc::account::account_service_client::AccountServiceClient;
-pub use service_grpc::endpoint::endpoint_service_client::EndpointServiceClient;
-pub use service_grpc::summit::summit_service_client::SummitServiceClient;
-pub use service_grpc::vessel::vessel_service_client::VesselServiceClient;
+pub use service_grpc::proto::auth::auth_service_client::AuthServiceClient;
+pub use service_grpc::proto::summit::summit_service_client::SummitServiceClient;
+pub use service_grpc::proto::vessel::vessel_service_client::VesselServiceClient;
 
 const TOKEN_VALIDITY: Duration = Duration::from_secs(15 * 60);
 
@@ -158,7 +161,7 @@ pub struct AuthService<A> {
     provider: A,
 }
 
-impl<A> Service<Request<Body>> for AuthService<A>
+impl<A> tower::Service<Request<Body>> for AuthService<A>
 where
     A: AuthProvider,
 {
@@ -198,7 +201,7 @@ where
 
                     if refresh_bearer {
                         if let Some(credentials) = provider.credentials() {
-                            match authenticate(channel.clone(), credentials).await {
+                            match authenticate(channel.clone(), credentials, provider.verify_server()).await {
                                 Ok(refreshed) => {
                                     provider
                                         .tokens_refreshed(&refreshed)
@@ -229,7 +232,7 @@ where
                                 if let Some(credentials) = provider.credentials() {
                                     warn!(%error, "Token refresh failed. Attempting to reauthenticate.");
 
-                                    match authenticate(channel.clone(), credentials).await {
+                                    match authenticate(channel.clone(), credentials, provider.verify_server()).await {
                                         Ok(refreshed) => {
                                             provider
                                                 .tokens_refreshed(&refreshed)
@@ -275,8 +278,7 @@ where
     }
 }
 
-service_client!(AccountServiceClient);
-service_client!(EndpointServiceClient);
+service_client!(AuthServiceClient);
 service_client!(SummitServiceClient);
 service_client!(VesselServiceClient);
 
@@ -300,11 +302,31 @@ pub struct RefreshedTokens {
 
 /// Credentials used to authenticate
 #[derive(Debug, Clone)]
-pub struct Credentials {
-    /// Account username
-    pub username: String,
-    /// Account keypair
-    pub key_pair: KeyPair,
+pub enum Credentials {
+    /// Account based credentials
+    Account {
+        /// Account username
+        username: String,
+        /// Account keypair
+        key_pair: KeyPair,
+    },
+    /// Service based credentials
+    Service {
+        /// Service type
+        service: Service,
+        /// Service keypair
+        key_pair: KeyPair,
+    },
+}
+
+impl Credentials {
+    /// Keypair of the credentials
+    pub fn key_pair(&self) -> &KeyPair {
+        match self {
+            Credentials::Account { key_pair, .. } => key_pair,
+            Credentials::Service { key_pair, .. } => key_pair,
+        }
+    }
 }
 
 /// A provider of tokens and possibly credentials & persistence
@@ -319,6 +341,12 @@ pub trait AuthProvider: Clone + Send + Sync + 'static {
     /// Must be set true for client to call [`AuthProvider::tokens_refreshed`]
     /// after an expired token is refreshed.
     const REFRESH_ENABLED: bool = false;
+
+    /// When set, will enable mutual auth to verify the server
+    /// owns the provided [`PublicKey`]
+    fn verify_server(&self) -> Option<PublicKey> {
+        None
+    }
 
     /// Returns credentials used for authenticating if tokens
     /// are expired
@@ -387,22 +415,34 @@ impl TokenStorage for InMemoryTokenStorage {
 pub struct CredentialsAuth<Storage> {
     credentials: Credentials,
     storage: Storage,
+    verify_server: Option<PublicKey>,
 }
 
 impl<Storage> CredentialsAuth<Storage> {
-    pub fn new(username: String, key_pair: KeyPair, storage: Storage) -> Self {
+    pub fn new(credentials: Credentials, storage: Storage) -> Self {
         Self {
-            credentials: Credentials { username, key_pair },
+            credentials,
             storage,
+            verify_server: None,
+        }
+    }
+
+    /// When set, will enable mutual auth to verify the server
+    /// owns the provided [`PublicKey`]
+    pub fn verify_server(self, public_key: PublicKey) -> Self {
+        Self {
+            verify_server: Some(public_key),
+            ..self
         }
     }
 }
 
 impl CredentialsAuth<InMemoryTokenStorage> {
-    pub fn with_in_memory_storage(username: String, key_pair: KeyPair) -> Self {
+    pub fn with_in_memory_storage(credentials: Credentials) -> Self {
         Self {
-            credentials: Credentials { username, key_pair },
+            credentials,
             storage: InMemoryTokenStorage::default(),
+            verify_server: None,
         }
     }
 }
@@ -415,6 +455,10 @@ where
     type Error = Infallible;
 
     const REFRESH_ENABLED: bool = true;
+
+    fn verify_server(&self) -> Option<PublicKey> {
+        self.verify_server
+    }
 
     fn credentials(&self) -> Option<Credentials> {
         Some(self.credentials.clone())
@@ -487,13 +531,15 @@ where
     /// Decode JWT token
     #[error("decode JWT token")]
     DecodeJWT(#[source] token::Error),
+    #[error("mutual auth with server failed: {reason}")]
+    MutualAuthFailed { reason: &'static str },
 }
 
 async fn refresh_tokens<A>(channel: Channel, bearer_token: &str) -> Result<RefreshedTokens, Error<A>>
 where
     A: std::error::Error,
 {
-    let mut account_client = AccountServiceClient::with_interceptor(channel, |mut req: tonic::Request<()>| {
+    let mut account_client = AuthServiceClient::with_interceptor(channel, |mut req: tonic::Request<()>| {
         req.metadata_mut().insert(
             "authorization",
             MetadataValue::from_str(&format!("Bearer {bearer_token}")).expect("JWT bearer token"),
@@ -517,68 +563,117 @@ where
     })
 }
 
-async fn authenticate<A>(channel: Channel, credentials: Credentials) -> Result<RefreshedTokens, Error<A>>
+async fn authenticate<A>(
+    channel: Channel,
+    credentials: Credentials,
+    verify_server: Option<PublicKey>,
+) -> Result<RefreshedTokens, Error<A>>
 where
     A: std::error::Error,
 {
-    let mut account_client = AccountServiceClient::new(channel);
+    use service_grpc::proto::auth::authenticate_stream::{incoming as client, outgoing as server};
+    use service_grpc::proto::auth::{self, AccountCredentials, ServiceCredentials};
 
-    let (request_tx, request_rx) = mpsc::channel(1);
-    let (challenge_tx, mut challenge_rx) = mpsc::channel::<String>(1);
+    let mut account_client = AuthServiceClient::new(channel);
 
-    let request = ReceiverStream::new(request_rx);
+    let (sink, request_rx) = mpsc::channel(1);
 
-    tokio::spawn(async move {
-        let _ = request_tx
-            .send(AuthenticateRequest {
-                body: Some(authenticate_request::Body::Credentials(GrpcCredentials {
-                    username: credentials.username,
-                    public_key: credentials.key_pair.public_key().encode().to_string(),
-                })),
-            })
-            .await;
-
-        let Some(challenge) = challenge_rx.recv().await else {
-            return;
+    macro_rules! recv {
+        ($stream:expr, $body:pat) => {
+            let Some($body) = $stream
+                .next()
+                .await
+                .ok_or(Error::StreamClosed)?
+                .map_err(Error::AuthenticateRequest)?
+                .body
+            else {
+                return Err(Error::MalformedRequest);
+            };
         };
+    }
+    macro_rules! send {
+        ($sink:expr, $body:expr) => {
+            let _ = $sink
+                .send(proto::auth::authenticate_stream::Incoming { body: Some($body) })
+                .await;
+        };
+    }
 
-        let signature =
-            base64::prelude::BASE64_URL_SAFE_NO_PAD.encode(credentials.key_pair.sign(challenge.as_bytes()).to_bytes());
-
-        let _ = request_tx
-            .send(AuthenticateRequest {
-                body: Some(authenticate_request::Body::Signature(signature)),
-            })
-            .await;
-    });
-
-    let mut resp = account_client
-        .authenticate(request)
+    let mut stream = account_client
+        .authenticate(ReceiverStream::new(request_rx))
         .await
         .map_err(Error::AuthenticateRequest)?
         .into_inner();
 
-    let Some(authenticate_response::Body::Challenge(challenge)) = resp
-        .next()
-        .await
-        .ok_or(Error::StreamClosed)?
-        .map_err(Error::AuthenticateRequest)?
-        .body
-    else {
-        return Err(Error::MalformedRequest);
-    };
+    // First message sent from server is now always its advertised public key
+    recv!(stream, server::Body::PublicKey(advertised_server_public));
 
-    let _ = challenge_tx.send(challenge).await;
+    if let Some(verify_server_public) = verify_server {
+        // Advertised public doesn't match the public we want to verify, bail
+        if verify_server_public.to_string() != advertised_server_public {
+            return Err(Error::MutualAuthFailed {
+                reason: "advertised public key mismatch",
+            });
+        }
 
-    let Some(authenticate_response::Body::Tokens(tokens)) = resp
-        .next()
-        .await
-        .ok_or(Error::StreamClosed)?
-        .map_err(Error::AuthenticateRequest)?
-        .body
-    else {
-        return Err(Error::MalformedRequest);
-    };
+        // If they do match, we need to ensure the server actual has the private key half, so
+        // we issue it a one-time random challenge and verify its signature matches the
+        // advertised public key
+        let mut challenge = String::default();
+
+        base64::prelude::BASE64_URL_SAFE_NO_PAD.encode_string(rand::thread_rng().r#gen::<[u8; 16]>(), &mut challenge);
+
+        send!(sink, client::Body::Challenge(challenge.clone()));
+
+        recv!(stream, server::Body::Signature(signature));
+
+        let signature = EncodedSignature::decode(&signature).map_err(|_| Error::MutualAuthFailed {
+            reason: "malformed challenge signature",
+        })?;
+
+        verify_server_public
+            .verify(challenge.as_bytes(), &signature)
+            .map_err(|_| Error::MutualAuthFailed {
+                reason: "signature verification failed,",
+            })?;
+
+        debug!(
+            server_public = %verify_server_public,
+            "Server public key verified"
+        );
+    }
+
+    // After confirming server public, we commence w/ normal auth flow by sending our credentials
+    send!(
+        sink,
+        client::Body::Credentials(auth::Credentials {
+            credentials: Some(match &credentials {
+                Credentials::Account { username, key_pair } => {
+                    auth::credentials::Credentials::Account(AccountCredentials {
+                        username: username.clone(),
+                        public_key: key_pair.public_key().encode().to_string(),
+                    })
+                }
+                Credentials::Service { service, key_pair } => {
+                    auth::credentials::Credentials::Service(ServiceCredentials {
+                        service: proto::common::Service::from(service) as i32,
+                        public_key: key_pair.public_key().encode().to_string(),
+                    })
+                }
+            }),
+        },)
+    );
+
+    recv!(stream, server::Body::Challenge(challenge));
+
+    let signature =
+        base64::prelude::BASE64_URL_SAFE_NO_PAD.encode(credentials.key_pair().sign(challenge.as_bytes()).to_bytes());
+
+    send!(sink, client::Body::Signature(signature));
+
+    recv!(stream, server::Body::Tokens(tokens));
+
+    debug!("Authentication successful");
 
     let bearer_token = Token::unverified(&tokens.bearer_token).map_err(Error::DecodeJWT)?;
     let access_token = Token::unverified(&tokens.access_token).map_err(Error::DecodeJWT)?;

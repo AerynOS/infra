@@ -6,13 +6,11 @@ use derive_more::derive::{Display, From, Into};
 use http::Uri;
 use moss::{db::meta, dependency, package::Meta};
 use serde::{Deserialize, Serialize};
-use service::database::Transaction;
-use service::endpoint;
+use service::{crypto::PublicKey, database::Transaction};
 use sqlx::{SqliteConnection, prelude::FromRow};
 use strum::IntoEnumIterator;
 use tokio::task::spawn_blocking;
 use tracing::{Instrument, Span, debug, error, info, trace, warn};
-use uuid::Uuid;
 
 use crate::{Manager, Profile, Project, Repository, builder, config::Size, profile, project, repository};
 
@@ -42,7 +40,7 @@ pub struct Task {
     pub commit_ref: String,
     pub source_path: String,
     pub status: Status,
-    pub allocated_builder: Option<endpoint::Id>,
+    pub allocated_builder: Option<AllocatedBuilder>,
 
     /// Path to the compressed log file.
     ///
@@ -131,13 +129,13 @@ pub enum Transition {
     /// Task is building
     ///
     /// Must transition from `new`
-    Building { builder: endpoint::Id },
+    Building { builder: PublicKey },
     /// Task is publishing
     ///
     /// Must transition from `building`
     /// where we have stashed the build logs
     Publishing {
-        builder: endpoint::Id,
+        builder: PublicKey,
         stashed_build_logs: PathBuf,
     },
     /// Task is complete
@@ -255,10 +253,12 @@ pub async fn transition(
         // Must transition from a building task
         Transition::Publishing { builder, .. } => {
             // Ensure is transitioning on the correct builder
-            if matches!(task.status, Status::Building) && task.allocated_builder.is_none_or(|b| b != *builder) {
+            if matches!(task.status, Status::Building)
+                && task.allocated_builder.as_ref().is_none_or(|b| b.public_key != *builder)
+            {
                 error!(
                     requested_builder = %builder,
-                    allocated_builder = task.allocated_builder.as_ref().map(ToString::to_string),
+                    allocated_builder = task.allocated_builder.as_ref().map(|b| b.public_key.to_string()),
                     "Attempting to transition from building to publishing, but received request from non-allocated builder"
                 );
 
@@ -495,8 +495,8 @@ async fn fix_stuck_building(
     let mut tasks_updated = false;
 
     for task in building_tasks {
-        let requeue = if let Some(endpoint) = task.allocated_builder {
-            match manager.builder_status(&endpoint) {
+        let requeue = if let Some(builder) = task.allocated_builder {
+            match manager.builder_status(&builder.public_key) {
                 Some(builder::Status::Building { task: id }) => {
                     if task.id == id {
                         false
@@ -504,7 +504,7 @@ async fn fix_stuck_building(
                         warn!(
                             task_id = %task.id,
                             build_id = task.build_id,
-                            builder = %endpoint,
+                            builder = %builder.public_key,
                             "Builder is building another task, requeuing stuck build"
                         );
 
@@ -515,7 +515,7 @@ async fn fix_stuck_building(
                     warn!(
                         task_id = %task.id,
                         build_id = task.build_id,
-                        builder = %endpoint,
+                        builder = %builder.public_key,
                         "Builder is busy with something else, requeuing stuck build"
                     );
 
@@ -525,7 +525,7 @@ async fn fix_stuck_building(
                     warn!(
                         task_id = %task.id,
                         build_id = task.build_id,
-                        builder = %endpoint,
+                        builder = %builder.public_key,
                         "Builder is idle, requeuing stuck build"
                     );
 
@@ -538,7 +538,7 @@ async fn fix_stuck_building(
                         warn!(
                             task_id = %task.id,
                             build_id = task.build_id,
-                            builder = %endpoint,
+                            builder = %builder.public_key,
                             "Builder is disconnected & build is older than {} minutes, requeuing stuck build",
                             DISCONNECTED_TIMEOUT.num_minutes()
                         );
@@ -691,7 +691,7 @@ async fn set_log_path(tx: &mut Transaction, task_id: Id, log_path: Option<&Path>
 }
 
 /// Allocate a builder for a task
-async fn set_allocated_builder(tx: &mut Transaction, task_id: Id, builder: Option<endpoint::Id>) -> Result<()> {
+async fn set_allocated_builder(tx: &mut Transaction, task_id: Id, builder: Option<PublicKey>) -> Result<()> {
     sqlx::query(
         "
         UPDATE task
@@ -701,7 +701,7 @@ async fn set_allocated_builder(tx: &mut Transaction, task_id: Id, builder: Optio
         WHERE task_id = ?;
         ",
     )
-    .bind(builder.map(Uuid::from))
+    .bind(builder.as_ref().map(ToString::to_string))
     .bind(i64::from(task_id))
     .execute(tx.as_mut())
     .await
@@ -958,4 +958,11 @@ async fn unblock_all(tx: &mut Transaction, task_id: Id, queue: &impl TaskQueue) 
     }
 
     Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AllocatedBuilder {
+    pub public_key: PublicKey,
+    pub description: Option<String>,
+    pub size: Option<Size>,
 }

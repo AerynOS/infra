@@ -1,9 +1,6 @@
 //! Manage data for admin, user, bot & service accounts
 
-use std::str::FromStr;
-
 use chrono::{DateTime, Utc};
-use derive_more::{Display, From, Into};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use thiserror::Error;
@@ -12,44 +9,7 @@ use uuid::Uuid;
 
 use crate::{Database, crypto::EncodedPublicKey, database};
 
-pub use service_core::account::Kind;
-
-pub(crate) use self::service::service;
-
-mod service;
-
-/// Unique identifier of an [`Account`]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, From, Into, Display)]
-pub struct Id(Uuid);
-
-impl Id {
-    /// Generate a new [`Id`]
-    pub fn generate() -> Self {
-        Self(Uuid::new_v4())
-    }
-}
-
-impl FromStr for Id {
-    type Err = uuid::Error;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        value.parse::<Uuid>().map(Id)
-    }
-}
-
-impl<'a> TryFrom<&'a str> for Id {
-    type Error = uuid::Error;
-
-    fn try_from(value: &'a str) -> Result<Self, Self::Error> {
-        value.parse::<Uuid>().map(Id)
-    }
-}
-
-impl From<Id> for String {
-    fn from(id: Id) -> Self {
-        id.to_string()
-    }
-}
+pub use service_core::account::{Id, Kind};
 
 /// Details for an account registered with this service
 #[derive(Debug, Clone, Serialize, FromRow)]
@@ -72,18 +32,6 @@ pub struct Account {
 }
 
 impl Account {
-    /// Create a service account
-    pub fn service(id: Id, public_key: EncodedPublicKey) -> Self {
-        Self {
-            id,
-            kind: Kind::Service,
-            username: format!("@{id}"),
-            email: None,
-            name: None,
-            public_key,
-        }
-    }
-
     /// Get the account for [`Id`] from the provided [`Database`]
     pub async fn get<'a, T>(conn: &'a mut T, id: Id) -> Result<Self, Error>
     where
@@ -102,7 +50,7 @@ impl Account {
             WHERE account_id = ?;
             ",
         )
-        .bind(id.0)
+        .bind(id.as_ref())
         .fetch_one(conn)
         .await?;
 
@@ -163,7 +111,7 @@ impl Account {
               public_key=excluded.public_key;
             ",
         )
-        .bind(self.id.0)
+        .bind(self.id.as_ref())
         .bind(self.kind.to_string())
         .bind(&self.username)
         .bind(&self.email)
@@ -207,7 +155,7 @@ impl Token {
               expiration = excluded.expiration;
             ",
         )
-        .bind(id.0)
+        .bind(id.as_ref())
         .bind(encoded.to_string())
         .bind(expiration)
         .execute(tx.as_mut())
@@ -230,7 +178,7 @@ impl Token {
             WHERE account_id = ?;
             ",
         )
-        .bind(id.0)
+        .bind(id.as_ref())
         .fetch_one(conn)
         .await?;
 

@@ -3,7 +3,7 @@ use std::{net::IpAddr, path::PathBuf};
 use channel::DEFAULT_CHANNEL;
 use clap::Parser;
 use color_eyre::eyre::Context;
-use service::{Server, buildinfo, endpoint::Role, error};
+use service::{Server, Service, buildinfo, error};
 use tracing::{error, info};
 
 pub use self::config::Config;
@@ -16,6 +16,8 @@ mod grpc;
 mod migration;
 mod package;
 mod state;
+mod stream;
+mod upload;
 mod worker;
 
 pub type Result<T, E = color_eyre::eyre::Error> = std::result::Result<T, E>;
@@ -49,7 +51,6 @@ async fn main() -> Result<()> {
     );
 
     let state = State::load(root).await.context("load state")?;
-    let issuer = config.issuer(state.service.key_pair.clone());
 
     migration::run_all(&state).await.context("run migrations")?;
 
@@ -63,13 +64,13 @@ async fn main() -> Result<()> {
         .await
         .context("reindex")?;
 
-    let (worker_sender, worker_task) = worker::run(state.clone()).await?;
+    let (worker_sender, worker_events, worker_task) = worker::run(state.clone()).await?;
 
-    Server::new(Role::RepositoryManager, &state.service, config.admin.clone())
+    Server::new(Service::Vessel, &state.service, config.admin.clone())
         .with_task("worker", worker_task)
-        .with_auto_enroll(issuer, vec![config.hub])
+        .with_task("stream", stream::run(state.clone(), config.clone(), worker_events))
         .with_grpc((host, grpc_port), |routes| {
-            routes.add_service(grpc::service(state.service.clone(), worker_sender));
+            routes.add_service(grpc::vessel_service(state.service.clone(), worker_sender));
         })
         .start()
         .await?;
