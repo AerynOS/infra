@@ -340,6 +340,15 @@ pub trait AuthProvider: Clone + Send + Sync + 'static {
     }
 }
 
+#[async_trait]
+impl AuthProvider for Tokens {
+    type Error = Infallible;
+
+    async fn tokens(&self) -> Result<Tokens, Self::Error> {
+        Ok(self.clone())
+    }
+}
+
 /// Storage for auth tokens
 #[async_trait]
 pub trait TokenStorage: Clone + Send + Sync + 'static {
