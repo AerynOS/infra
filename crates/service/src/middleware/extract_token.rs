@@ -6,9 +6,10 @@ use std::collections::HashSet;
 use tracing::{debug, warn};
 
 use crate::{
-    Token, account,
+    Token,
     auth::{Flags, flag_names},
     crypto::PublicKey,
+    error,
     token::{self, Validation, VerifiedToken},
 };
 
@@ -75,13 +76,6 @@ where
                 token::Purpose::Authentication => flags |= Flags::ACCESS_TOKEN,
             }
 
-            match token.decoded.payload.account_type {
-                account::Kind::Admin => flags |= Flags::ADMIN_ACCOUNT,
-                account::Kind::Standard => flags |= Flags::USER_ACCOUNT,
-                account::Kind::Bot => flags |= Flags::BOT_ACCOUNT,
-                account::Kind::Service => flags |= Flags::SERVICE_ACCOUNT,
-            }
-
             if token.decoded.is_expired() {
                 flags |= Flags::EXPIRED;
             } else {
@@ -92,17 +86,9 @@ where
 
             let token_flags = flag_names(flags);
             let token_purpose = Some(token.decoded.payload.purpose.to_string());
-            let account = Some(token.decoded.payload.account_id.to_string());
-            let account_type = Some(token.decoded.payload.account_type.to_string());
+            let client = &token.decoded.payload.client;
 
-            debug!(
-                ?token_flags,
-                token_purpose,
-                account,
-                account_type,
-                ?permissions,
-                "Auth parsed"
-            );
+            debug!(?token_flags, token_purpose, ?permissions, %client, "Auth parsed");
         }
 
         req.extensions_mut().insert(flags);
@@ -123,7 +109,7 @@ fn extract_token<Body>(
     match Token::verify(token_str, pub_key, validation) {
         Ok(token) => Some(token),
         Err(error) => {
-            warn!(%error, "Invalid authorization token");
+            warn!(error = error::chain(&error), "Invalid authorization token");
             None
         }
     }

@@ -3,26 +3,18 @@ use std::path::Path;
 use color_eyre::eyre::{Context, Result};
 use http::Uri;
 use serde::Deserialize;
-use service::{
-    account::Admin,
-    crypto::KeyPair,
-    endpoint::{
-        Role,
-        enrollment::{self, Issuer},
-    },
-    tracing,
-};
+use service::{account::Admin, crypto::PublicKey, tracing};
 use tokio::fs;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     #[serde(with = "http_serde::uri")]
     pub grpc_address: Uri,
-    pub description: String,
     pub admin: Admin,
     #[serde(default)]
     pub tracing: tracing::Config,
-    pub hub: enrollment::HubTarget,
+    #[serde(alias = "hub")]
+    pub summit: SummitConfig,
 }
 
 impl Config {
@@ -31,15 +23,15 @@ impl Config {
         let config = toml::from_str(&content).context("deserialize config")?;
         Ok(config)
     }
+}
 
-    pub fn issuer(&self, key_pair: KeyPair) -> Issuer {
-        Issuer {
-            key_pair,
-            host_address: self.grpc_address.clone(),
-            role: Role::RepositoryManager,
-            admin_name: self.admin.name.clone(),
-            admin_email: self.admin.email.clone(),
-            description: self.description.clone(),
-        }
-    }
+#[derive(Debug, Clone, Deserialize)]
+pub struct SummitConfig {
+    /// Host address of the upstream summit hub to connect to
+    #[serde(with = "http_serde::uri")]
+    pub host_address: Uri,
+    /// Public key of the summit instance
+    ///
+    /// Avalanche will verify this public key during authentication
+    pub public_key: PublicKey,
 }

@@ -1,35 +1,12 @@
 use minijinja::{Value, value::ViaDeserialize};
-use service::{Endpoint, endpoint};
 
-use crate::{Project, Task, builder, task};
-
-pub fn repository(projects: ViaDeserialize<Vec<Project>>, id: i64) -> Option<Value> {
-    projects
-        .iter()
-        .find_map(|p| p.repositories.iter().find(|r| r.id == id.into()))
-        .map(Value::from_serialize)
-}
+use crate::{Project, Task, task};
 
 pub fn profile(projects: ViaDeserialize<Vec<Project>>, id: i64) -> Option<Value> {
     projects
         .iter()
         .find_map(|p| p.profiles.iter().find(|p| p.id == id.into()))
         .map(Value::from_serialize)
-}
-
-pub fn endpoint(endpoints: ViaDeserialize<Vec<Endpoint>>, id: ViaDeserialize<Option<endpoint::Id>>) -> Option<Value> {
-    let id = id.0?;
-
-    endpoints.iter().find(|e| e.id == id).map(Value::from_serialize)
-}
-
-pub fn builder(
-    builders: ViaDeserialize<Vec<builder::Info>>,
-    id: ViaDeserialize<Option<endpoint::Id>>,
-) -> Option<Value> {
-    let id = id.0?;
-
-    builders.iter().find(|b| b.endpoint == id).map(Value::from_serialize)
 }
 
 pub fn task(tasks: ViaDeserialize<Vec<Task>>, id: ViaDeserialize<Option<task::Id>>) -> Option<Value> {

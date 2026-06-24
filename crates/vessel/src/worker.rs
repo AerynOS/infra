@@ -1,11 +1,6 @@
 use std::{convert::Infallible, future::Future, time::Duration};
 
-use color_eyre::eyre::{Context, Result};
-use service::{
-    Endpoint,
-    client::{AuthClient, EndpointAuth, SummitServiceClient},
-    grpc::summit::ImportRequest,
-};
+use color_eyre::eyre::Result;
 use tokio::{
     sync::{mpsc, oneshot},
     time::{self, Instant},
@@ -18,6 +13,7 @@ use crate::{
 };
 
 pub type Sender = mpsc::UnboundedSender<Message>;
+pub type EventReceiver = mpsc::UnboundedReceiver<Event>;
 
 /// Prune 1x per day
 const PRUNE_INTERVAL: Duration = Duration::from_secs(60 * 60 * 24);
@@ -28,7 +24,6 @@ const PRUNE_INTERVAL: Duration = Duration::from_secs(60 * 60 * 24);
 pub enum Message {
     PackagesUploaded {
         task_id: u64,
-        endpoint: Endpoint,
         packages: Vec<Package>,
     },
     Prune(Instant),
@@ -40,8 +35,22 @@ pub enum Message {
     },
 }
 
-pub async fn run(state: State) -> Result<(Sender, impl Future<Output = Result<(), Infallible>> + use<>)> {
+#[derive(Debug, strum::Display)]
+#[strum(serialize_all = "kebab-case")]
+pub enum Event {
+    ImportSucceeded { task_id: u64 },
+    ImportFailed { task_id: u64 },
+}
+
+pub async fn run(
+    state: State,
+) -> Result<(
+    Sender,
+    EventReceiver,
+    impl Future<Output = Result<(), Infallible>> + use<>,
+)> {
     let (sender, mut receiver) = mpsc::unbounded_channel::<Message>();
+    let (event_sender, event_receiver) = mpsc::unbounded_channel::<Event>();
 
     tokio::spawn(prune_interval_task(sender.clone()));
 
@@ -49,7 +58,7 @@ pub async fn run(state: State) -> Result<(Sender, impl Future<Output = Result<()
         while let Some(message) = receiver.recv().await {
             let kind = message.to_string();
 
-            if let Err(e) = handle_message(&state, message).await {
+            if let Err(e) = handle_message(&state, message, &event_sender).await {
                 let error = service::error::chain(e.as_ref() as &dyn std::error::Error);
                 error!(message = kind, %error, "Error handling message");
             }
@@ -60,7 +69,7 @@ pub async fn run(state: State) -> Result<(Sender, impl Future<Output = Result<()
         Ok(())
     };
 
-    Ok((sender, task))
+    Ok((sender, event_receiver, task))
 }
 
 /// Fires off [`Message::Prune`] every [`PRUNE_INTERVAL`]
@@ -73,49 +82,30 @@ async fn prune_interval_task(sender: Sender) -> Result<(), Infallible> {
     }
 }
 
-async fn handle_message(state: &State, message: Message) -> Result<()> {
+async fn handle_message(state: &State, message: Message, events: &mpsc::UnboundedSender<Event>) -> Result<()> {
     match message {
-        Message::PackagesUploaded {
-            task_id,
-            endpoint,
-            packages,
-        } => {
+        Message::PackagesUploaded { task_id, packages } => {
             let channel = DEFAULT_CHANNEL;
 
             let span = info_span!(
                 "packages_uploaded",
                 task_id,
-                endpoint = %endpoint.id,
                 num_packages = packages.len(),
                 %channel,
             );
 
             async move {
-                let mut client = SummitServiceClient::connect_with_auth(
-                    endpoint.host_address.clone(),
-                    None,
-                    EndpointAuth::new(&endpoint, state.service_db().clone(), state.service.key_pair.clone()),
-                )
-                .await
-                .context("connect summit client")?;
-
                 match channel::import_packages(state, channel, packages, true).await {
                     Ok(()) => {
                         info!("All packages imported");
 
-                        client
-                            .import_succeeded(ImportRequest { task_id })
-                            .await
-                            .context("send import succeeded request")?;
+                        let _ = events.send(Event::ImportSucceeded { task_id });
                     }
                     Err(e) => {
                         let error = service::error::chain(e.as_ref() as &dyn std::error::Error);
                         error!(%error, "Failed to import packages");
 
-                        client
-                            .import_failed(ImportRequest { task_id })
-                            .await
-                            .context("send import failed request")?;
+                        let _ = events.send(Event::ImportFailed { task_id });
                     }
                 }
 

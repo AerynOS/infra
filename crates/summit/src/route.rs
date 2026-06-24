@@ -8,7 +8,6 @@ use color_eyre::eyre::{self, Context, OptionExt, eyre};
 use futures_util::{future, stream};
 use http::{StatusCode, Uri, header};
 use serde::Deserialize;
-use service::Endpoint;
 use snafu::Snafu;
 use strum::IntoEnumIterator;
 use tokio::sync::{broadcast, mpsc};
@@ -38,15 +37,12 @@ pub async fn index(extract::State(state): extract::State<Arc<State>>) -> Result<
     .await
     .context("query tasks")?;
 
-    let endpoints = Endpoint::list(&mut *conn).await.context("list endpoints")?;
-
     let _builders_guard = state.builders.load();
     let builders = _builders_guard.as_slice();
 
     Ok(template::render_response(
         "index.html.jinja",
         minijinja::context! {
-            endpoints,
             tasks,
             building_tasks,
             builders,
@@ -106,7 +102,6 @@ async fn tasks_context(state: &State, query: &TasksQuery) -> Result<minijinja::V
     }
 
     let projects = project::list(&mut conn).await.context("list projects")?;
-    let endpoints = Endpoint::list(&mut *conn).await.context("list endpoints")?;
     let task_query = task::query(&mut conn, params).await.context("query tasks")?;
 
     let statuses = task::Status::iter().collect::<Vec<_>>();
@@ -119,7 +114,6 @@ async fn tasks_context(state: &State, query: &TasksQuery) -> Result<minijinja::V
 
     Ok(minijinja::context! {
         projects,
-        endpoints,
         statuses,
         selected_status,
         selected_sort,
@@ -298,13 +292,10 @@ pub async fn sse_worker(
                     .await
                     .context("query tasks")?;
 
-                    let endpoints = Endpoint::list(&mut *conn).await.context("list endpoints")?;
-
                     let template = template::render(
                         "index-recent-events.html.jinja",
                         minijinja::context! {
                             tasks,
-                            endpoints,
                         },
                     )
                     .context("render index-recent-events jinja template")?;

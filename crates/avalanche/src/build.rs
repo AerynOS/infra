@@ -5,10 +5,10 @@ use futures_util::{TryStreamExt, stream::select};
 use http::Uri;
 use service::{
     State, error, git,
-    grpc::{
-        collectable::{self, Collectable},
-        remote::Remote,
-        summit::BuilderBuild,
+    grpc::proto::{
+        self,
+        common::{Collectable, Remote, collectable},
+        summit::builder_stream::StartBuild,
     },
 };
 use sha2::{Digest, Sha256};
@@ -28,7 +28,7 @@ use crate::stream;
         task_id = request.task_id,
     )
 )]
-pub async fn build(request: BuilderBuild, state: State, stream: stream::Handle) {
+pub async fn build(request: StartBuild, state: State, stream: stream::Handle) {
     info!("Starting build");
 
     stream.build_started(request.task_id).await;
@@ -50,7 +50,7 @@ pub async fn build(request: BuilderBuild, state: State, stream: stream::Handle) 
     }
 }
 
-async fn run(request: BuilderBuild, state: &State, stream: stream::Handle) -> Result<Vec<Collectable>> {
+async fn run(request: StartBuild, state: &State, stream: stream::Handle) -> Result<Vec<Collectable>> {
     let uri = request.uri.parse::<Uri>().context("invalid upstream URI")?;
 
     let mirror_dir = state.cache_dir.join(
@@ -150,7 +150,7 @@ async fn create_boulder_config(work_dir: &Path, remotes: &[Remote], arch: &str) 
                 .and_then(|i| i.index.as_ref())
                 .context("missing remotes[].index")?
             {
-                service::grpc::remote::index::Index::DirectIndex(index) => {
+                proto::common::index::Index::DirectIndex(index) => {
                     let _ = write!(
                         &mut entry,
                         "
@@ -158,7 +158,7 @@ async fn create_boulder_config(work_dir: &Path, remotes: &[Remote], arch: &str) 
                 ",
                     );
                 }
-                service::grpc::remote::index::Index::RootIndex(root_index) => {
+                proto::common::index::Index::RootIndex(root_index) => {
                     let _ = write!(
                         &mut entry,
                         "

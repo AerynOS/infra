@@ -8,10 +8,7 @@ use axum::{
 };
 use clap::Parser;
 use color_eyre::eyre::Context;
-use service::{
-    Server, buildinfo,
-    endpoint::{self, Role},
-};
+use service::{Server, Service, buildinfo};
 use tokio::sync::{broadcast, mpsc};
 use tower_http::{services::ServeDir, set_header::SetResponseHeader};
 use tracing::info;
@@ -23,6 +20,7 @@ pub use self::profile::Profile;
 pub use self::project::Project;
 pub use self::queue::Queue;
 pub use self::repository::Repository;
+pub use self::repository_manager::RepositoryMananger;
 pub use self::seed::seed;
 pub use self::state::State;
 pub use self::task::Task;
@@ -37,12 +35,15 @@ mod profile;
 mod project;
 mod queue;
 mod repository;
+mod repository_manager;
 mod route;
 mod seed;
 mod state;
 mod task;
 mod template;
 mod worker;
+
+pub const SERVICE: Service = Service::Summit;
 
 tokio::task_local! {
     static USE_MOCK_DATA: bool;
@@ -89,8 +90,7 @@ async fn main() -> Result<()> {
 
     let state = State::load(root, sse_events_rx).await.context("load state")?;
 
-    let issuer = config.issuer(state.service.key_pair.clone());
-    let downstreams = config.downstreams();
+    let authorized_services = config.authorized_services();
 
     if let Some(from_path) = seed_from {
         seed(&state, from_path).await.context("seeding")?;
@@ -109,7 +109,7 @@ async fn main() -> Result<()> {
         const { http::HeaderValue::from_static("text/plain; charset=utf-8") },
     );
 
-    Server::new(Role::Hub, &state.service, config.admin.clone())
+    Server::new(SERVICE, &state.service, config.admin.clone())
         .with_task("worker", worker_task)
         .with_task(
             "sse worker",
@@ -117,9 +117,13 @@ async fn main() -> Result<()> {
         )
         .with_grpc((host, grpc_port), |routes| {
             routes
-                // Allow other services to enroll w/ summit
-                .add_service(endpoint::service(issuer, state.service_db().clone(), downstreams))
-                .add_service(grpc::service(&state, worker_sender));
+                .add_service(grpc::auth_service(
+                    SERVICE,
+                    state.service_db().clone(),
+                    state.service.key_pair.clone(),
+                    authorized_services,
+                ))
+                .add_service(grpc::summit_service(&state, config, worker_sender));
         })
         .with_http(
             (host, http_port),

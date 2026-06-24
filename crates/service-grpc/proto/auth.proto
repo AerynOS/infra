@@ -1,0 +1,77 @@
+syntax = "proto3";
+
+package auth;
+
+import "common.proto";
+import "options.proto";
+import "google/protobuf/empty.proto";
+
+message Credentials {
+  oneof credentials {
+    // Foo
+    AccountCredentials account = 1;
+    ServiceCredentials service = 2;
+  }
+}
+
+message AccountCredentials {
+  string username = 1;
+  string public_key = 2;
+}
+
+message ServiceCredentials {
+  common.Service service = 1;
+  string public_key = 2;
+}
+
+message AuthenticateStream {
+  message Incoming {
+    oneof body {
+      // Optional challenge to the upstream to enable mutual auth
+      string challenge = 1;
+      // Credentials of client, provided to upstream
+      Credentials credentials = 2;
+      // Signature response of upstreams challenge
+      string signature = 3;
+    }
+  }
+
+  // # Auth flow
+  // Server -> public_key
+  // 
+  // ## Optional client requested mutual auth
+  // [optional] Client -> challenge
+  // [optional] Server -> signature
+  // 
+  // ## Client auth flow
+  // Client -> Credentials
+  // Server -> challenge
+  // Client -> signature
+  // Server -> tokens
+  message Outgoing {
+    oneof body {
+      // Public key of upstream, used for mutual auth
+      string public_key = 1;
+      // Optional signature if client mutual auth is requested
+      string signature = 2;
+      // Required challenge to downstream, used to verify its public key
+      string challenge = 3;
+      // Tokens issued upon successful authentication
+      TokenResponse tokens = 4;
+    }
+  }
+}
+
+message TokenResponse {
+  string bearer_token = 1;
+  string access_token = 2;
+}
+
+service AuthService {
+  rpc Authenticate(stream AuthenticateStream.Incoming) returns (stream AuthenticateStream.Outgoing) {
+    option (options.flags) = "NO_AUTH";
+  }
+  rpc RefreshToken(google.protobuf.Empty) returns (TokenResponse) {
+    option (options.flags) = "BEARER_TOKEN | NOT_EXPIRED";
+  }
+}

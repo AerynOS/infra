@@ -5,7 +5,7 @@ use service::{
     State,
     client::{TokenClient, VesselServiceClient},
     error,
-    grpc::{collectable, summit::BuilderFinished, vessel::UploadRequest},
+    grpc::proto::{common::collectable, summit::builder_stream::BuildFinished, vessel::UploadRequest},
 };
 use tokio::{
     fs::{self, File},
@@ -22,13 +22,15 @@ use tracing::{debug, error, info, warn};
         upstream = uri,
     )
 )]
-pub async fn upload(state: State, build: BuilderFinished, token: String, uri: &str) -> Result<()> {
+pub async fn upload(state: State, build: BuildFinished, token: String, uri: &str) -> Result<()> {
     info!("Upload started");
 
     let asset_dir = state.root.join("assets").join(build.task_id.to_string());
 
     let mut header = BytesMut::new();
     build.encode(&mut header).context("encode header")?;
+
+    let signature = state.key_pair.sign(&header);
 
     let mut client = VesselServiceClient::connect_with_token(uri.parse().context("invalid vessel uri")?, None, &token)
         .await
@@ -44,6 +46,12 @@ pub async fn upload(state: State, build: BuilderFinished, token: String, uri: &s
 
     sender
         .send(UploadRequest { chunk: header.into() })
+        .await
+        .context("send header")?;
+    sender
+        .send(UploadRequest {
+            chunk: signature.to_vec(),
+        })
         .await
         .context("send header")?;
 

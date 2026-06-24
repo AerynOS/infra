@@ -4,12 +4,13 @@ use std::collections::HashSet;
 
 use futures_util::{Stream, StreamExt, stream::BoxStream};
 use service_core::auth::{Flags, Permission, flag_names};
-use service_grpc::vessel::UploadTokenRequest;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::{error, warn};
 
 use crate::error;
+
+pub mod auth;
 
 pub use service_grpc::*;
 
@@ -139,21 +140,4 @@ fn verify_auth<T>(request: &tonic::Request<T>) -> Result<(), tonic::Status> {
         );
         Err(tonic::Status::permission_denied(""))
     }
-}
-
-/// Hashes the [`UploadRequest`] for use in
-/// deriving a single use token
-pub fn upload_request_hash(request: &UploadTokenRequest) -> String {
-    use sha2::{Digest, Sha256};
-
-    let mut sha2 = Sha256::default();
-    sha2.update(request.task_id.to_be_bytes());
-
-    for collectable in &request.collectables {
-        sha2.update(collectable.kind.to_be_bytes());
-        sha2.update(collectable.sha256sum.as_bytes());
-        sha2.update(collectable.size.to_be_bytes());
-    }
-
-    hex::encode(sha2.finalize())
 }
