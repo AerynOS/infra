@@ -2,7 +2,7 @@
 use std::{collections::HashSet, time::SystemTime};
 
 use chrono::{DateTime, Duration, Utc};
-use jsonwebtoken::{DecodingKey, EncodingKey, Header};
+use jsonwebtoken::{DecodingKey, EncodingKey};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
@@ -11,6 +11,8 @@ use crate::{
     account, auth,
     crypto::{self, KeyPair, PublicKey},
 };
+
+pub use jsonwebtoken::Header;
 
 /// A decoded Json Web Token (JWT)
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,6 +29,20 @@ impl Token {
             header: Header::new(jsonwebtoken::Algorithm::EdDSA),
             payload,
         }
+    }
+
+    pub fn unverified(token: &str) -> Result<UnverifiedToken, Error> {
+        let decoded =
+            jsonwebtoken::decode::<Payload>(token, &DecodingKey::from_secret(&[]), &Validation::unverified().0)
+                .map_err(Error::decode)?;
+
+        Ok(UnverifiedToken {
+            encoded: token.to_owned(),
+            decoded: Token {
+                header: decoded.header,
+                payload: decoded.claims,
+            },
+        })
     }
 
     /// Verify and return a decoded token
@@ -126,6 +142,15 @@ impl VerifiedToken {
     }
 }
 
+/// A deocded token that hasn't been verified
+#[derive(Debug, Clone)]
+pub struct UnverifiedToken {
+    /// Encoded token string
+    pub encoded: String,
+    /// Decoded token
+    pub decoded: Token,
+}
+
 /// Validation rules to use when running [`Token::verify`]
 #[derive(Debug, Clone)]
 pub struct Validation(jsonwebtoken::Validation);
@@ -146,6 +171,18 @@ impl Validation {
     /// Create a default validation that verifies signature
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Returns a validation that does not verify the token at all
+    pub fn unverified() -> Self {
+        let mut validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::EdDSA);
+        validation.insecure_disable_signature_validation();
+        validation.required_spec_claims = Default::default();
+        validation.validate_exp = false;
+        validation.validate_nbf = false;
+        validation.validate_aud = false;
+
+        Self(validation)
     }
 
     /// Validation will check that the `aud` field is is equal to

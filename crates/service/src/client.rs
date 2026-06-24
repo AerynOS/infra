@@ -44,26 +44,14 @@ impl AuthProvider for EndpointAuth {
         })
     }
 
-    async fn tokens(&self) -> Result<VerifiedTokens, EndpointAuthError> {
+    async fn tokens(&self) -> Result<Tokens, EndpointAuthError> {
         let mut conn = self.db.acquire().await?;
-
-        let endpoint = Endpoint::get(conn.as_mut(), self.endpoint).await?;
-        let account = Account::get(conn.as_mut(), endpoint.account).await?;
-        let public_key = account.public_key.decoded()?;
 
         let tokens = endpoint::Tokens::get(conn.as_mut(), self.endpoint).await?;
 
-        Ok(VerifiedTokens {
-            bearer_token: tokens
-                .bearer_token
-                .as_deref()
-                .map(|token| Token::verify(token, &public_key, &token::Validation::new()))
-                .transpose()?,
-            access_token: tokens
-                .access_token
-                .as_deref()
-                .map(|token| Token::verify(token, &public_key, &token::Validation::new()))
-                .transpose()?,
+        Ok(Tokens {
+            bearer_token: tokens.bearer_token.as_deref().map(Token::unverified).transpose()?,
+            access_token: tokens.access_token.as_deref().map(Token::unverified).transpose()?,
         })
     }
 
@@ -81,8 +69,8 @@ impl AuthProvider for EndpointAuth {
 
         let public_key = account.public_key.decoded()?;
 
-        let bearer_token = Token::verify(&tokens.bearer_token, &public_key, &token::Validation::new());
-        let access_token = Token::verify(&tokens.access_token, &public_key, &token::Validation::new());
+        let bearer_token = Token::verify(&tokens.bearer_token.encoded, &public_key, &token::Validation::new());
+        let access_token = Token::verify(&tokens.access_token.encoded, &public_key, &token::Validation::new());
 
         match (bearer_token, access_token) {
             (Ok(bearer_token), Ok(access_token)) => {

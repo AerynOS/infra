@@ -1,6 +1,7 @@
 use std::convert::Infallible;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::sync::Arc;
 use std::time::Duration;
 use std::{io, mem};
 
@@ -10,16 +11,16 @@ use futures_util::future::BoxFuture;
 use futures_util::{FutureExt, StreamExt};
 use http::{HeaderValue, Request, Response, Uri};
 use serde::Deserialize;
-use service_core::auth;
 use service_core::crypto::KeyPair;
-use service_core::token::VerifiedToken;
+use service_core::token::UnverifiedToken;
+use service_core::{Token, auth, token};
 use service_grpc::Method;
 use service_grpc::account::{
     AuthenticateRequest, Credentials as GrpcCredentials, authenticate_request, authenticate_response,
 };
 use thiserror::Error;
 use tokio::fs;
-use tokio::sync::mpsc;
+use tokio::sync::{Mutex, mpsc};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::body::Body;
 use tonic::metadata::MetadataValue;
@@ -183,17 +184,15 @@ where
             if flags.intersects(auth::Flags::ACCESS_TOKEN | auth::Flags::BEARER_TOKEN) {
                 let tokens = provider.tokens().await.map_err(Error::AuthProvider)?;
 
-                let mut encoded_bearer = tokens.bearer_token.as_ref().map(|t| t.encoded.clone());
-                let mut encoded_access = tokens.access_token.as_ref().map(|t| t.encoded.clone());
+                let mut bearer_token = tokens.bearer_token;
+                let mut access_token = tokens.access_token;
 
                 // If provider supports persisting refresh tokens, ensure they're refreshed
                 if A::REFRESH_ENABLED {
-                    let refresh_bearer = tokens
-                        .bearer_token
+                    let refresh_bearer = bearer_token
                         .as_ref()
                         .is_none_or(|bearer| bearer.decoded.is_expired_in(TOKEN_VALIDITY));
-                    let refresh_access = tokens
-                        .access_token
+                    let refresh_access = access_token
                         .as_ref()
                         .is_none_or(|access| access.decoded.is_expired_in(TOKEN_VALIDITY));
 
@@ -206,8 +205,8 @@ where
                                         .await
                                         .map_err(Error::AuthProvider)?;
 
-                                    encoded_bearer = Some(refreshed.bearer_token);
-                                    encoded_access = Some(refreshed.access_token);
+                                    bearer_token = Some(refreshed.bearer_token);
+                                    access_token = Some(refreshed.access_token);
                                 }
                                 Err(error) => provider
                                     .token_refresh_failed(&error)
@@ -215,7 +214,7 @@ where
                                     .map_err(Error::AuthProvider)?,
                             }
                         }
-                    } else if refresh_access && let Some(bearer) = &tokens.bearer_token {
+                    } else if refresh_access && let Some(bearer) = &bearer_token {
                         match refresh_tokens(channel.clone(), &bearer.encoded).await {
                             Ok(refreshed) => {
                                 provider
@@ -223,8 +222,8 @@ where
                                     .await
                                     .map_err(Error::AuthProvider)?;
 
-                                encoded_bearer = Some(refreshed.bearer_token);
-                                encoded_access = Some(refreshed.access_token);
+                                bearer_token = Some(refreshed.bearer_token);
+                                access_token = Some(refreshed.access_token);
                             }
                             Err(error) => {
                                 if let Some(credentials) = provider.credentials() {
@@ -237,8 +236,8 @@ where
                                                 .await
                                                 .map_err(Error::AuthProvider)?;
 
-                                            encoded_bearer = Some(refreshed.bearer_token);
-                                            encoded_access = Some(refreshed.access_token);
+                                            bearer_token = Some(refreshed.bearer_token);
+                                            access_token = Some(refreshed.access_token);
                                         }
                                         Err(error) => provider
                                             .token_refresh_failed(&error)
@@ -257,16 +256,16 @@ where
                 }
 
                 if flags.contains(auth::Flags::BEARER_TOKEN) {
-                    token = encoded_bearer;
+                    token = bearer_token;
                 } else {
-                    token = encoded_access;
+                    token = access_token;
                 }
             }
 
             if let Some(token) = token {
                 req.headers_mut().insert(
                     "authorization",
-                    HeaderValue::from_str(&format!("Bearer {token}")).expect("JWT token"),
+                    HeaderValue::from_str(&format!("Bearer {}", token.encoded)).expect("JWT token"),
                 );
             }
 
@@ -283,20 +282,20 @@ service_client!(VesselServiceClient);
 
 /// Tokens needed to make authenticated requests
 #[derive(Debug, Clone, Default)]
-pub struct VerifiedTokens {
+pub struct Tokens {
     /// A bearer token
-    pub bearer_token: Option<VerifiedToken>,
+    pub bearer_token: Option<UnverifiedToken>,
     /// An access token
-    pub access_token: Option<VerifiedToken>,
+    pub access_token: Option<UnverifiedToken>,
 }
 
 /// Refreshed tokens
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct RefreshedTokens {
     /// A bearer token
-    pub bearer_token: String,
+    pub bearer_token: UnverifiedToken,
     /// An access token
-    pub access_token: String,
+    pub access_token: UnverifiedToken,
 }
 
 /// Credentials used to authenticate
@@ -328,7 +327,7 @@ pub trait AuthProvider: Clone + Send + Sync + 'static {
     }
 
     /// Returns current tokens from this provider
-    async fn tokens(&self) -> Result<VerifiedTokens, Self::Error>;
+    async fn tokens(&self) -> Result<Tokens, Self::Error>;
 
     /// Called when client refreshes tokens, allowing provider to persist the tokens.
     async fn tokens_refreshed(&self, _tokens: &RefreshedTokens) -> Result<(), Self::Error> {
@@ -341,28 +340,94 @@ pub trait AuthProvider: Clone + Send + Sync + 'static {
     }
 }
 
-/// Auth with credentials and no refresh persistence
-#[derive(Debug, Clone)]
-pub struct CredentialsAuth(Credentials);
+/// Storage for auth tokens
+#[async_trait]
+pub trait TokenStorage: Clone + Send + Sync + 'static {
+    /// A token storage error
+    type Error: std::error::Error + Send + Sync;
 
-impl CredentialsAuth {
-    pub fn new(username: String, key_pair: KeyPair) -> Self {
-        Self(Credentials { username, key_pair })
+    /// Loads tokens from this storage
+    async fn load(&self) -> Result<Tokens, Self::Error>;
+
+    /// Saves tokens to this storage
+    async fn save(&self, tokens: Tokens) -> Result<(), Self::Error>;
+}
+
+/// Token storage kept in-memory
+#[derive(Debug, Clone, Default)]
+pub struct InMemoryTokenStorage(Arc<Mutex<Tokens>>);
+
+#[async_trait]
+impl TokenStorage for InMemoryTokenStorage {
+    type Error = Infallible;
+
+    /// Loads tokens from this storage
+    async fn load(&self) -> Result<Tokens, Self::Error> {
+        Ok(self.0.lock().await.clone())
+    }
+
+    /// Saves tokens to this storage
+    async fn save(&self, tokens: Tokens) -> Result<(), Self::Error> {
+        *self.0.lock().await = tokens;
+        Ok(())
+    }
+}
+
+/// Auth with credentials and in-memory token persistence
+#[derive(Debug, Clone)]
+pub struct CredentialsAuth<Storage> {
+    credentials: Credentials,
+    storage: Storage,
+}
+
+impl<Storage> CredentialsAuth<Storage> {
+    pub fn new(username: String, key_pair: KeyPair, storage: Storage) -> Self {
+        Self {
+            credentials: Credentials { username, key_pair },
+            storage,
+        }
+    }
+}
+
+impl CredentialsAuth<InMemoryTokenStorage> {
+    pub fn with_in_memory_storage(username: String, key_pair: KeyPair) -> Self {
+        Self {
+            credentials: Credentials { username, key_pair },
+            storage: InMemoryTokenStorage::default(),
+        }
     }
 }
 
 #[async_trait]
-impl AuthProvider for CredentialsAuth {
+impl<Storage> AuthProvider for CredentialsAuth<Storage>
+where
+    Storage: TokenStorage<Error = Infallible>,
+{
     type Error = Infallible;
 
     const REFRESH_ENABLED: bool = true;
 
     fn credentials(&self) -> Option<Credentials> {
-        Some(self.0.clone())
+        Some(self.credentials.clone())
     }
 
-    async fn tokens(&self) -> Result<VerifiedTokens, Self::Error> {
-        Ok(VerifiedTokens::default())
+    async fn tokens(&self) -> Result<Tokens, Self::Error> {
+        self.storage.load().await
+    }
+
+    async fn tokens_refreshed(&self, tokens: &RefreshedTokens) -> Result<(), Self::Error> {
+        self.storage
+            .save(Tokens {
+                bearer_token: Some(tokens.bearer_token.clone()),
+                access_token: Some(tokens.access_token.clone()),
+            })
+            .await
+    }
+
+    async fn token_refresh_failed(&self, error: &Error<Self::Error>) -> Result<(), Self::Error> {
+        error!(%error, "Failed to refresh tokens");
+
+        self.storage.save(Tokens::default()).await
     }
 }
 
@@ -410,6 +475,9 @@ where
     /// Transport error
     #[error("transport")]
     Transport(#[from] transport::Error),
+    /// Decode JWT token
+    #[error("decode JWT token")]
+    DecodeJWT(#[source] token::Error),
 }
 
 async fn refresh_tokens<A>(channel: Channel, bearer_token: &str) -> Result<RefreshedTokens, Error<A>>
@@ -431,9 +499,12 @@ where
         .map_err(Error::RefreshTokenRequest)?
         .into_inner();
 
+    let bearer_token = Token::unverified(&tokens.bearer_token).map_err(Error::DecodeJWT)?;
+    let access_token = Token::unverified(&tokens.access_token).map_err(Error::DecodeJWT)?;
+
     Ok(RefreshedTokens {
-        bearer_token: tokens.bearer_token,
-        access_token: tokens.access_token,
+        bearer_token,
+        access_token,
     })
 }
 
@@ -500,9 +571,12 @@ where
         return Err(Error::MalformedRequest);
     };
 
+    let bearer_token = Token::unverified(&tokens.bearer_token).map_err(Error::DecodeJWT)?;
+    let access_token = Token::unverified(&tokens.access_token).map_err(Error::DecodeJWT)?;
+
     Ok(RefreshedTokens {
-        bearer_token: tokens.bearer_token,
-        access_token: tokens.access_token,
+        bearer_token,
+        access_token,
     })
 }
 

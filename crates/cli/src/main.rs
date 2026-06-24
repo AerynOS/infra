@@ -36,8 +36,12 @@ async fn main() -> Result<()> {
                 ..Default::default()
             });
 
-            let mut client =
-                SummitServiceClient::connect_with_auth(uri, tls, CredentialsAuth::new(username, key_pair)).await?;
+            let mut client = SummitServiceClient::connect_with_auth(
+                uri,
+                tls,
+                CredentialsAuth::with_in_memory_storage(username, key_pair),
+            )
+            .await?;
 
             match command {
                 Summit::Retry { task } => {
@@ -73,8 +77,12 @@ async fn main() -> Result<()> {
                 ..Default::default()
             });
 
-            let mut client =
-                VesselServiceClient::connect_with_auth(uri, tls, CredentialsAuth::new(username, key_pair)).await?;
+            let mut client = VesselServiceClient::connect_with_auth(
+                uri,
+                tls,
+                CredentialsAuth::with_in_memory_storage(username, key_pair),
+            )
+            .await?;
 
             let response = match command {
                 Vessel::UpdateStream {
