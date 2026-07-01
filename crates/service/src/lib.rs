@@ -1,11 +1,11 @@
 #![warn(missing_docs)]
-//! Shared service code for Serpent OS infrastructure
+//! Shared service code for AerynOS infrastructure
 
-pub use service_core::{Token, auth, crypto, token};
+pub use service_client as client;
+pub use service_core::{Service, Token, auth, crypto, token};
 
 pub use self::account::Account;
 pub use self::database::Database;
-pub use self::endpoint::Endpoint;
 pub use self::server::Server;
 pub use self::state::State;
 
@@ -14,9 +14,7 @@ mod task;
 
 pub mod account;
 pub mod buildinfo;
-pub mod client;
 pub mod database;
-pub mod endpoint;
 pub mod error;
 pub mod git;
 pub mod grpc;

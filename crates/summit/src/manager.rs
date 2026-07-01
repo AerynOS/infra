@@ -1,18 +1,21 @@
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, VecDeque, btree_map},
+    collections::{BTreeSet, HashMap, VecDeque},
     path::PathBuf,
     sync::Arc,
 };
 
-use color_eyre::eyre::{self, Context, OptionExt, Report, Result};
+use color_eyre::eyre::{self, Context, OptionExt, Report, Result, ensure};
 use itertools::Itertools;
 use moss::db::meta;
-use service::{Account, Endpoint, crypto::EncodedPublicKey, database::Transaction, endpoint, error};
+use service::{crypto::PublicKey, database::Transaction, error};
 use sqlx::{Sqlite, pool::PoolConnection};
 use tokio::{sync::mpsc, task::spawn_blocking};
 use tracing::{Span, debug, error, info, warn};
 
-use crate::{Builder, Config, Project, Queue, State, builder, config::Size, profile, project, repository, task};
+use crate::{
+    Builder, Config, Project, Queue, RepositoryMananger, State, builder, config::Size, profile, project, repository,
+    repository_manager, task,
+};
 
 #[derive(Debug, Clone)]
 pub enum Event {
@@ -25,7 +28,8 @@ pub struct Manager {
     pub state: Arc<State>,
     pub paused: bool,
     pub queue: Queue,
-    builders: BTreeMap<builder::Key, Builder>,
+    builders: Vec<Builder>,
+    repository_manager: RepositoryMananger,
     profile_dbs: HashMap<profile::Id, meta::Database>,
     repository_dbs: HashMap<repository::Id, meta::Database>,
     config: Config,
@@ -72,35 +76,17 @@ impl Manager {
         .await
         .context("join handle")??;
 
-        let mut builders = BTreeMap::default();
+        let repository_manager = RepositoryMananger::new(config.repository_manager.clone());
 
-        for endpoint in Endpoint::list(conn.as_mut()).await.context("list endpoints")? {
-            if endpoint.role == endpoint::Role::Builder {
-                let account = Account::get(conn.as_mut(), endpoint.account)
-                    .await
-                    .context(format!("lookup account: {}", endpoint.account))?;
-
-                if let Some((index, config)) = config
-                    .builders
-                    .iter()
-                    .enumerate()
-                    .find(|(_, config)| config.public_key.encode() == account.public_key)
-                {
-                    builders.insert(
-                        builder::Key {
-                            index,
-                            endpoint: endpoint.id,
-                        },
-                        Builder::new(&endpoint, config),
-                    );
-                }
-            }
-        }
+        let builders = builder::init_all(&state, &config.builders)
+            .await
+            .context("init builders")?;
 
         let manager = Self {
             state,
             paused: false,
             queue: Queue::default(),
+            repository_manager,
             builders,
             profile_dbs,
             repository_dbs,
@@ -268,15 +254,15 @@ impl Manager {
 
         let max_connected_builder_size = self
             .builders
-            .values()
+            .iter()
             .filter(|builder| builder.is_connected())
-            .map(|builder| builder.size)
+            .map(|builder| builder.config.size)
             .max()
             .unwrap_or(Size::Small);
 
         let mut idle_builders = self
             .builders
-            .values_mut()
+            .iter_mut()
             .filter(|builder| builder.is_idle())
             .collect::<Vec<_>>();
 
@@ -302,7 +288,7 @@ impl Manager {
                     break 'tasks;
                 }
 
-                let available_sizes = idle_builders.iter().map(|b| b.size).collect::<BTreeSet<_>>();
+                let available_sizes = idle_builders.iter().map(|b| b.config.size).collect::<BTreeSet<_>>();
 
                 // Attempt to find the smallest builder that fits (>=) this task,
                 // otherwise find the largest builder that is smaller (<) than the task
@@ -323,13 +309,13 @@ impl Manager {
                 {
                     let builder_idx = idle_builders
                         .iter()
-                        .position(|b| b.size == best_fit_builder_size)
+                        .position(|b| b.config.size == best_fit_builder_size)
                         .expect("non empty");
                     let builder = idle_builders.remove(builder_idx);
 
                     if task.size > best_fit_builder_size {
                         debug!(
-                            builder = %builder.endpoint,
+                            builder = %builder.config.id,
                             task_id = %task.task.id,
                             build_id = %task.task.build_id,
                             task_size = %task.size,
@@ -347,7 +333,7 @@ impl Manager {
                                 &mut tx,
                                 task.task.id,
                                 task::Transition::Building {
-                                    builder: builder.endpoint,
+                                    builder: builder.config.public_key,
                                 },
                                 &self.queue,
                             )
@@ -362,7 +348,7 @@ impl Manager {
                         }
                         Err(err) => {
                             warn!(
-                                builder = %builder.endpoint,
+                                builder = %builder.config.id,
                                 error = error::chain(&*err),
                                 "Failed to send build, trying next builder"
                             );
@@ -467,15 +453,19 @@ impl Manager {
         let task = task::get(tx.as_mut(), task_id).await.context("get task")?;
 
         // Send cancellation to builder, if connected & building
-        if let Some(endpoint) = task.allocated_builder.filter(|_| task.status == task::Status::Building) {
+        if let Some(allocated_builder) = task
+            .allocated_builder
+            .as_ref()
+            .filter(|_| task.status == task::Status::Building)
+        {
             if let Some(builder) = self
                 .builders
                 .iter_mut()
-                .find_map(|(key, value)| (key.endpoint == endpoint).then_some(value))
+                .find(|builder| builder.config.public_key == allocated_builder.public_key)
             {
                 if let Err(err) = builder.cancel_build(&task).await {
                     error!(
-                        builder = %endpoint,
+                        builder = %builder.config.id,
                         task_id = %task.id,
                         build_id = task.build_id,
                         error = error::chain(&*err),
@@ -484,7 +474,7 @@ impl Manager {
                 }
             } else {
                 warn!(
-                    builder = %endpoint,
+                    allocated_builder = %allocated_builder.public_key,
                     task_id = %task.id,
                     build_id = task.build_id,
                     "Builder not connected while cancelling task"
@@ -508,19 +498,15 @@ impl Manager {
 
     pub async fn update_builder(
         &mut self,
-        endpoint: endpoint::Id,
-        public_key: EncodedPublicKey,
+        builder_id: String,
+        public_key: PublicKey,
         message: builder::Message,
     ) -> Result<bool> {
-        let builder = get_or_init_builder(
-            &mut self.builders,
-            &self.config,
-            self.state.service_db(),
-            endpoint,
-            public_key,
-        )
-        .await
-        .context("init builder")?;
+        let builder = self
+            .builders
+            .iter_mut()
+            .find(|builder| builder.config.id == builder_id && builder.config.public_key == public_key)
+            .ok_or_eyre("builder not configured")?;
 
         let event = builder.update(message).await;
 
@@ -558,7 +544,11 @@ impl Manager {
 
                         for task in query.tasks {
                             // Skip tasks not on this builder
-                            if task.allocated_builder.is_none_or(|id| id != builder.endpoint) {
+                            if task
+                                .allocated_builder
+                                .as_ref()
+                                .is_none_or(|b| b.public_key != builder.config.public_key)
+                            {
                                 continue;
                             }
 
@@ -570,7 +560,7 @@ impl Manager {
                             warn!(
                                 task_id = %task.id,
                                 build_id = %task.build_id,
-                                builder = %builder.endpoint,
+                                builder = %builder.config.id,
                                 "Task stuck as building, but builder is no longer building it. Requeuing the task."
                             );
 
@@ -607,7 +597,7 @@ impl Manager {
                         &mut tx,
                         task_id,
                         task::Transition::Publishing {
-                            builder: builder.endpoint,
+                            builder: builder.config.public_key,
                             stashed_build_logs,
                         },
                         &self.queue,
@@ -617,12 +607,16 @@ impl Manager {
 
                     tx.commit().await?;
 
-                    if let Err(err) = builder.request_upload(&self.state, task_id, collectables).await {
+                    if let Err(err) = self
+                        .repository_manager
+                        .request_upload_token(task_id, collectables, builder)
+                        .await
+                    {
                         error!(
                             %task_id,
-                            builder = %builder.endpoint,
+                            builder = %builder.config.id,
                             error = error::chain(&*err),
-                            "Failed to send upload request to builder"
+                            "Failed to request upload token"
                         );
 
                         let mut tx = self.state.service_db().begin().await?;
@@ -703,17 +697,103 @@ impl Manager {
         Ok(false)
     }
 
-    pub fn builder_status(&self, endpoint: &endpoint::Id) -> Option<builder::Status> {
+    pub async fn update_repository_manager(
+        &mut self,
+        repository_manager_id: String,
+        public_key: PublicKey,
+        message: repository_manager::Message,
+    ) -> Result<bool> {
+        ensure!(
+            repository_manager_id == self.repository_manager.config.id,
+            "Repository manager with id {repository_manager_id} is not configured anymore"
+        );
+        ensure!(
+            public_key == self.repository_manager.config.public_key,
+            "Repository manager with pubkey {public_key} is not configured anymore"
+        );
+
+        let event = self.repository_manager.update(message).await;
+
+        if let Some(event) = event {
+            match event {
+                repository_manager::Event::UploadToken {
+                    task_id,
+                    collectables,
+                    token,
+                    vessel_uri,
+                } => {
+                    let mut conn = self.state.service_db().acquire().await?;
+
+                    let task = task::get(&mut conn, task_id).await.context("get task")?;
+
+                    drop(conn);
+
+                    let upload_build = async {
+                        let allocated_builder = task
+                            .allocated_builder
+                            .as_ref()
+                            .ok_or_eyre("task doesn't have allocated builder")?;
+                        let builder = self
+                            .builders
+                            .iter_mut()
+                            .find(|builder| builder.config.public_key == allocated_builder.public_key)
+                            .ok_or_eyre("builder not configured")?;
+
+                        builder
+                            .upload_build(&self.state, task_id, collectables, token, &vessel_uri)
+                            .await
+                    };
+
+                    if let Err(err) = upload_build.await {
+                        error!(
+                            %task_id,
+                            error = error::chain(&*err),
+                            "Failed to request build upload"
+                        );
+
+                        let mut tx = self.state.service_db().begin().await?;
+
+                        task::transition(
+                            &mut tx,
+                            task_id,
+                            task::Transition::Failed {
+                                stashed_build_logs: None,
+                            },
+                            &self.queue,
+                        )
+                        .await
+                        .context(format!("transition task {task_id} to failed"))?;
+
+                        tx.commit().await?;
+
+                        let _ = self.event_sender.try_send(Event::TasksUpdated);
+                    }
+                }
+                repository_manager::Event::ImportSucceeded { task_id } => {
+                    self.import_succeeded(task_id).await.context("import succeeded")?;
+                    return Ok(true);
+                }
+                repository_manager::Event::ImportFailed { task_id } => {
+                    self.import_failed(task_id).await.context("import failed")?;
+                    return Ok(true);
+                }
+            }
+        }
+
+        Ok(false)
+    }
+
+    pub fn builder_status(&self, public_key: &PublicKey) -> Option<builder::Status> {
         self.builders
             .iter()
-            .find_map(|(key, value)| (key.endpoint == *endpoint).then_some(value))
+            .find(|builder| builder.config.public_key == *public_key)
             .map(Builder::status)
     }
 
     pub fn refresh_cached_builder_info(&self) {
         self.state
             .builders
-            .store(Arc::new(self.builders.values().map(Builder::info).collect()));
+            .store(Arc::new(self.builders.iter().map(Builder::info).collect()));
     }
 
     #[tracing::instrument(skip_all)]
@@ -784,33 +864,4 @@ async fn stash_log(state: &State, path: PathBuf) -> Result<PathBuf> {
         .context("log is descendent of state dir")?;
 
     Ok(relative_path.to_owned())
-}
-
-async fn get_or_init_builder<'a>(
-    builders: &'a mut BTreeMap<builder::Key, Builder>,
-    config: &Config,
-    service_db: &service::Database,
-    endpoint_id: endpoint::Id,
-    public_key: EncodedPublicKey,
-) -> Result<&'a mut Builder> {
-    let (index, builder_config) = config
-        .builders
-        .iter()
-        .enumerate()
-        .find(|(_, config)| config.public_key.encode() == public_key)
-        .ok_or_eyre(format!("builder not defined in config: {public_key}"))?;
-
-    let key = builder::Key {
-        index,
-        endpoint: endpoint_id,
-    };
-
-    match builders.entry(key) {
-        btree_map::Entry::Vacant(entry) => {
-            let endpoint = Endpoint::get(service_db.acquire().await?.as_mut(), endpoint_id).await?;
-
-            Ok(entry.insert(Builder::new(&endpoint, builder_config)))
-        }
-        btree_map::Entry::Occupied(entry) => Ok(entry.into_mut()),
-    }
 }

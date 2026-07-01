@@ -1,14 +1,14 @@
 use std::{convert::Infallible, future::Future, path::PathBuf, time::Duration};
 
 use color_eyre::{Result, eyre::Context};
-use service::{crypto::EncodedPublicKey, endpoint, signal};
+use service::{crypto::PublicKey, signal};
 use tokio::{
     sync::mpsc,
     time::{self, Instant},
 };
 use tracing::{debug, error, info, warn};
 
-use crate::{Config, Manager, builder, task};
+use crate::{Config, Manager, builder, repository_manager, task};
 
 /// The interval at which a timer fires off an event to check the configured git recipe repo branch
 const TIMER_INTERVAL: Duration = Duration::from_secs(30);
@@ -19,15 +19,14 @@ pub type Sender = mpsc::UnboundedSender<Message>;
 #[strum(serialize_all = "kebab-case")]
 pub enum Message {
     AllocateBuilds,
-    ImportSucceeded { task_id: task::Id },
-    ImportFailed { task_id: task::Id },
     RetryTask { task_id: task::Id },
     CancelTask { task_id: task::Id },
     Timer(Instant),
     ForceRefresh,
     Pause,
     Resume,
-    Builder(endpoint::Id, EncodedPublicKey, builder::Message),
+    Builder(String, PublicKey, builder::Message),
+    RepositoryManager(String, PublicKey, repository_manager::Message),
     ConfigReloaded(Box<Config>),
 }
 
@@ -112,23 +111,37 @@ async fn reload_config_on_sighup_task(sender: Sender, config_path: PathBuf) {
 async fn handle_message(sender: &Sender, manager: &mut Manager, paused: &mut bool, message: Message) -> Result<()> {
     match message {
         Message::AllocateBuilds => allocate_builds(manager, *paused).await,
-        Message::ImportSucceeded { task_id } => import_succeeded(sender, manager, task_id).await,
-        Message::ImportFailed { task_id } => import_failed(sender, manager, task_id).await,
         Message::RetryTask { task_id } => retry_task(sender, manager, task_id).await,
         Message::CancelTask { task_id } => cancel_task(sender, manager, task_id).await,
         Message::Timer(_) => timer(sender, manager, *paused).await,
         Message::ForceRefresh => force_refresh(sender, manager, *paused).await,
         Message::Pause => pause(paused).await,
         Message::Resume => resume(sender, paused).await,
-        Message::Builder(endpoint, public_key, message) => {
+        Message::Builder(builder_id, public_key, message) => {
             let allocate_builds = manager
-                .update_builder(endpoint, public_key, message)
+                .update_builder(builder_id, public_key, message)
                 .await
                 .context("update builder")?;
 
             // Ensure cached build info is always up-to-date after
             // any builder state change so frontend can access this asynchronously
             manager.refresh_cached_builder_info();
+
+            if allocate_builds {
+                let _ = sender.send(Message::AllocateBuilds);
+            }
+
+            Ok(())
+        }
+        Message::RepositoryManager(repo_manager_id, public_key, message) => {
+            let allocate_builds = manager
+                .update_repository_manager(repo_manager_id, public_key, message)
+                .await
+                .context("update repository manager")?;
+
+            // Ensure cached build info is always up-to-date after
+            // any builder state change so frontend can access this asynchronously
+            // manager.refresh_cached_builder_info();
 
             if allocate_builds {
                 let _ = sender.send(Message::AllocateBuilds);
@@ -154,31 +167,6 @@ async fn allocate_builds(manager: &mut Manager, paused: bool) -> Result<()> {
     debug!("Allocating builds");
 
     manager.allocate_builds().await.context("allocate builds")
-}
-
-#[tracing::instrument(skip_all)]
-async fn import_succeeded(sender: &Sender, manager: &mut Manager, task_id: task::Id) -> Result<()> {
-    debug!("Import succeeded");
-
-    manager
-        .import_succeeded(task_id)
-        .await
-        .context("manager import failed")?;
-
-    let _ = sender.send(Message::AllocateBuilds);
-
-    Ok(())
-}
-
-#[tracing::instrument(skip_all)]
-async fn import_failed(sender: &Sender, manager: &mut Manager, task_id: task::Id) -> Result<()> {
-    debug!("Import failed");
-
-    manager.import_failed(task_id).await.context("manager import failed")?;
-
-    let _ = sender.send(Message::AllocateBuilds);
-
-    Ok(())
 }
 
 #[tracing::instrument(skip_all)]

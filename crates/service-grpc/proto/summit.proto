@@ -2,14 +2,9 @@ syntax = "proto3";
 
 package summit;
 
-import "collectable.proto";
+import "common.proto";
 import "options.proto";
-import "remote.proto";
 import "google/protobuf/empty.proto";
-
-message ImportRequest {
-  uint64 task_id = 1;
-}
 
 message RetryRequest {
   uint64 task_id = 1;
@@ -19,82 +14,117 @@ message CancelRequest {
   uint64 task_id = 1;
 }
 
-message BuilderStreamIncoming {
-  oneof event {
-    BuilderStatus status = 1;
-    uint64 build_started = 2;
-    BuilderLog build_log = 3;
-    BuilderFinished build_succeeded = 4;
-    uint64 build_failed = 5;
-    BuilderBusy busy = 6;
-    uint64 upload_failed = 7;
+message BuilderStream {
+  message Incoming {
+    oneof event {
+      BuilderStatus status = 1;
+      uint64 build_started = 2;
+      BuildLog build_log = 3;
+      BuildFinished build_succeeded = 4;
+      uint64 build_failed = 5;
+      BuilderBusy busy = 6;
+      uint64 upload_failed = 7;
+    }
+  }
+  
+  message Outgoing {
+    oneof event {
+      StartBuild start_build = 1;
+      UploadBuild upload_build = 2;
+      google.protobuf.Empty cancel_build = 3;
+    }
+  }
+
+  message BuilderStatus {
+    // True if the builder is building
+    bool building = 1;
+    // Current task being built
+    // 
+    // Not set if builder is busy building a task
+    // for another instance of summit
+    optional uint64 task_id = 2;
+  }
+
+  message StartBuild {
+    uint64 task_id = 1;
+    string uri = 2;
+    string commit_ref = 3;
+    string relative_path = 4;
+    string build_architecture = 5;
+    repeated common.Remote remotes = 6;
+  }
+
+  message BuildLog {
+    bytes chunk = 1;
+  }
+
+  message BuildFinished {
+    uint64 task_id = 1;
+    repeated common.Collectable collectables = 2;
+  }
+
+  message UploadBuild {
+    BuildFinished build = 1;
+    string token = 2;
+    string uri = 3;
+  }
+
+  message BuilderBusy {
+    uint64 requested_task_id = 1;
+    // Not set if builder is busy building a task
+    // for another instance of summit
+    optional uint64 in_progress_task_id = 2;
   }
 }
 
-message BuilderStreamOutgoing {
-  oneof event {
-    BuilderBuild build = 1;
-    BuilderUpload upload = 2;
-    google.protobuf.Empty cancel_build = 3;
+message RepositoryManagerStream {
+  message Incoming {
+    oneof event {
+      Details details = 1;
+      UploadToken upload_token = 2;
+      uint64 import_succeeded = 3;
+      uint64 import_failed = 4;
+    }
   }
-}
 
-message BuilderStatus {
-  // True if the builder is building
-  bool building = 1;
-  // Current task being built
-  // 
-  // Not set if builder is busy building a task
-  // for another instance of summit
-  optional uint64 task_id = 2;
-}
+  message Outgoing {
+    oneof event {
+      RequestUploadToken request_upload_token = 1;
+    }
+  }
 
-message BuilderBuild {
-  uint64 task_id = 1;
-  string uri = 2;
-  string commit_ref = 3;
-  string relative_path = 4;
-  string build_architecture = 5;
-  repeated remote.Remote remotes = 6;
-}
+  message Details {
+    string grpc_uri = 1;
+  }
 
-message BuilderLog {
-  bytes chunk = 1;
-}
-
-message BuilderFinished {
-  uint64 task_id = 1;
-  repeated collectable.Collectable collectables = 2;
-}
-
-message BuilderBusy {
-  uint64 requested_task_id = 1;
-  // Not set if builder is busy building a task
-  // for another instance of summit
-  optional uint64 in_progress_task_id = 2;
-}
-
-message BuilderUpload {
-  BuilderFinished build = 1;
-  string token = 2;
-  string uri = 3;
+  message RequestUploadToken {
+    uint64 task_id = 1;
+    repeated common.Collectable collectables = 2;
+    string builder_id = 3;
+    string builder_public_key = 4;
+  }
+  
+  message UploadToken {
+    uint64 task_id = 1;
+    repeated common.Collectable collectables = 2;
+    string token = 3;
+  }
 }
 
 service SummitService {
-  rpc ImportSucceeded(ImportRequest) returns (google.protobuf.Empty) {
-    option (options.flags) = "ACCESS_TOKEN | SERVICE_ACCOUNT | NOT_EXPIRED";
-    option (options.perm) = "ReportImportStatus";
-  }
-  rpc ImportFailed(ImportRequest) returns (google.protobuf.Empty) {
-    option (options.flags) = "ACCESS_TOKEN | SERVICE_ACCOUNT | NOT_EXPIRED";
-    option (options.perm) = "ReportImportStatus";
-  }
-
   // Bidirectional stream between summit & builder
-  rpc Builder(stream BuilderStreamIncoming) returns (stream BuilderStreamOutgoing) {
-    option (options.flags) = "ACCESS_TOKEN | SERVICE_ACCOUNT | NOT_EXPIRED";
+  rpc Builder(stream BuilderStream.Incoming) returns (stream BuilderStream.Outgoing) {
+    option (options.flags) = "ACCESS_TOKEN | NOT_EXPIRED";
     option (options.perm) = "ConnectBuilderStream";
   }
+
+  // Bidirectional stream between summit & repository manager
+  rpc RepositoryManager(stream RepositoryManagerStream.Incoming) returns (stream RepositoryManagerStream.Outgoing) {
+    option (options.flags) = "ACCESS_TOKEN | NOT_EXPIRED";
+    option (options.perm) = "ConnectRepositoryManagerStream";
+  }
+
+  // Commands
 
   rpc Retry(RetryRequest) returns (google.protobuf.Empty) {
     option (options.flags) = "ACCESS_TOKEN | NOT_EXPIRED";

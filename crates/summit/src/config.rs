@@ -1,28 +1,25 @@
 use std::{iter, path::Path};
 
 use color_eyre::eyre::{Context, Result};
-use http::Uri;
 use serde::{Deserialize, Serialize};
 use service::{
+    Service,
     account::Admin,
-    crypto::{KeyPair, PublicKey},
-    endpoint::{self, enrollment::Issuer},
+    auth::{AuthorizedService, AuthorizedServices},
     tracing,
 };
 use tokio::fs;
 
-use crate::builder;
+use crate::{builder, repository_manager};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
-    #[serde(with = "http_serde::uri")]
-    pub grpc_address: Uri,
-    pub description: String,
     pub admin: Admin,
     #[serde(default)]
     pub tracing: tracing::Config,
-    pub repository_manager: RepositoryManagerConfig,
-    #[serde(rename = "builder", default)]
+    #[serde(alias = "vessel")]
+    pub repository_manager: repository_manager::Config,
+    #[serde(rename = "builder", alias = "avalanche", default)]
     pub builders: Vec<builder::Config>,
     #[serde(default)]
     pub build_sizes: BuildSizesConfig,
@@ -35,30 +32,30 @@ impl Config {
         Ok(config)
     }
 
-    pub fn issuer(&self, key_pair: KeyPair) -> Issuer {
-        Issuer {
-            key_pair,
-            host_address: self.grpc_address.clone(),
-            role: endpoint::Role::Hub,
-            admin_name: self.admin.name.clone(),
-            admin_email: self.admin.email.clone(),
-            description: self.description.clone(),
-        }
-    }
-
-    pub fn downstreams(&self) -> Vec<PublicKey> {
-        iter::once(self.repository_manager.public_key)
-            .chain(self.builders.iter().map(|config| config.public_key))
-            .collect()
+    pub fn authorized_services(&self) -> AuthorizedServices {
+        iter::once((
+            self.repository_manager.public_key,
+            AuthorizedService {
+                id: self.repository_manager.id.clone(),
+                service: Service::Vessel,
+            },
+        ))
+        .chain(self.builders.iter().map(|config| {
+            (
+                config.public_key,
+                AuthorizedService {
+                    id: config.id.clone(),
+                    service: Service::Avalanche,
+                },
+            )
+        }))
+        .collect()
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct RepositoryManagerConfig {
-    pub public_key: PublicKey,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, strum::Display)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, strum::Display, strum::EnumString,
+)]
 #[serde(rename_all = "kebab-case")]
 #[strum(serialize_all = "kebab-case")]
 pub enum Size {

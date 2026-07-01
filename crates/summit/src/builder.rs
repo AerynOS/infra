@@ -2,18 +2,15 @@ use std::{path::PathBuf, time::Duration};
 
 use chrono::{DateTime, Utc};
 use color_eyre::eyre::{Context, OptionExt, Result};
+use http::Uri;
 use serde::{Deserialize, Serialize};
 use service::{
-    Endpoint,
-    client::{AuthClient, EndpointAuth, VesselServiceClient},
     crypto::PublicKey,
-    endpoint,
-    grpc::{
+    database,
+    grpc::proto::{
         self,
-        collectable::{self, Collectable},
-        remote::Remote,
-        summit::{BuilderBuild, BuilderFinished, BuilderStreamOutgoing, BuilderUpload, builder_stream_outgoing},
-        vessel::UploadTokenRequest,
+        common::{Collectable, Remote, collectable},
+        summit::builder_stream,
     },
 };
 use tokio::{sync::mpsc, time::Instant};
@@ -76,40 +73,58 @@ pub enum Event {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Info {
-    pub endpoint: endpoint::Id,
     pub last_seen: Option<DateTime<Utc>>,
     pub status: StatusKind,
     pub building: Option<task::Id>,
     pub size: Size,
-    pub description: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Key {
-    pub index: usize,
-    pub endpoint: endpoint::Id,
+    pub description: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
+    /// Unique id of the builder for use as an internal identifier
+    /// for things like logs
+    pub id: String,
     pub public_key: PublicKey,
+    pub description: String,
     pub size: Size,
+}
+
+/// Initializes a builder for each incoming config
+///
+/// Ensures [`Config`] is sync'd to backing database which is used to
+/// populate builder info on related build tasks. If a builder / config
+/// is removed in the future, the old DB entry will continue to provide
+/// builder description resolution for older tasks.
+pub async fn init_all(state: &State, configs: &[Config]) -> Result<Vec<Builder>> {
+    let mut builders = vec![];
+
+    let mut tx = state.service_db().begin().await.context("begin db tx")?;
+
+    for config in configs {
+        // Persist config to ensure it's always up-to-date
+        persist_config(&mut tx, config)
+            .await
+            .context("persist builder config")?;
+
+        builders.push(Builder::new(config.clone()));
+    }
+
+    tx.commit().await?;
+
+    Ok(builders)
 }
 
 #[derive(Debug)]
 pub struct Builder {
-    pub endpoint: endpoint::Id,
-    pub size: Size,
-    description: Option<String>,
+    pub config: Config,
     connection: Option<Connection>,
 }
 
 impl Builder {
-    pub fn new(endpoint: &Endpoint, config: &Config) -> Self {
+    pub fn new(config: Config) -> Self {
         Self {
-            endpoint: endpoint.id,
-            size: config.size,
-            description: endpoint.description.clone(),
+            config: config.clone(),
             connection: None,
         }
     }
@@ -132,12 +147,11 @@ impl Builder {
         };
 
         Info {
-            endpoint: self.endpoint,
-            size: self.size,
+            size: self.config.size,
+            description: self.config.description.clone(),
             last_seen,
             status,
             building,
-            description: self.description.clone(),
         }
     }
 
@@ -171,7 +185,7 @@ impl Builder {
         name = "cancel_build",
         skip_all,
         fields(
-            builder = %self.endpoint,
+            builder = %self.config.id,
             task_id = %task.id,
             build_id = task.build_id
         )
@@ -194,8 +208,8 @@ impl Builder {
             Some(Connection { handle, .. }) => {
                 handle
                     .sender
-                    .send(BuilderStreamOutgoing {
-                        event: Some(builder_stream_outgoing::Event::CancelBuild(())),
+                    .send(builder_stream::Outgoing {
+                        event: Some(builder_stream::outgoing::Event::CancelBuild(())),
                     })
                     .await
                     .context("send builder stream message")?;
@@ -216,11 +230,11 @@ impl Builder {
         name = "build",
         skip_all,
         fields(
-            builder = %self.endpoint,
+            builder = %self.config.id,
             task_id = %queued.task.id,
             build_id = %queued.task.build_id,
             task_size = %queued.size,
-            builder_size = %self.size,
+            builder_size = %self.config.size,
         )
     )]
     pub async fn build(&mut self, queued: &task::Queued) -> Result<()> {
@@ -229,44 +243,46 @@ impl Builder {
         connection
             .handle
             .sender
-            .send(BuilderStreamOutgoing {
-                event: Some(builder_stream_outgoing::Event::Build(BuilderBuild {
-                    task_id: i64::from(queued.task.id) as u64,
-                    uri: queued.origin_uri.to_string(),
-                    commit_ref: queued.commit_ref.clone(),
-                    relative_path: queued
-                        .meta
-                        .uri
-                        .as_ref()
-                        .ok_or_eyre("missing relative path on metadata")?
-                        .to_string(),
-                    build_architecture: queued.task.arch.clone(),
-                    remotes: queued
-                        .remotes
-                        .iter()
-                        .enumerate()
-                        .map(|(idx, index)| Remote {
-                            #[allow(deprecated)]
-                            index_uri: String::default(),
-                            name: format!("repo{idx}"),
-                            priority: idx as u64 * 10,
-                            index: Some(grpc::remote::Index {
-                                index: Some(match index {
-                                    profile::Index::DirectIndex(uri) => {
-                                        grpc::remote::index::Index::DirectIndex(uri.to_string())
-                                    }
-                                    profile::Index::RootIndex(root_index) => {
-                                        grpc::remote::index::Index::RootIndex(grpc::remote::RootIndex {
-                                            base_uri: root_index.base_uri.to_string(),
-                                            channel: root_index.channel.to_string(),
-                                            version: root_index.version.to_string(),
-                                        })
-                                    }
+            .send(builder_stream::Outgoing {
+                event: Some(builder_stream::outgoing::Event::StartBuild(
+                    builder_stream::StartBuild {
+                        task_id: i64::from(queued.task.id) as u64,
+                        uri: queued.origin_uri.to_string(),
+                        commit_ref: queued.commit_ref.clone(),
+                        relative_path: queued
+                            .meta
+                            .uri
+                            .as_ref()
+                            .ok_or_eyre("missing relative path on metadata")?
+                            .to_string(),
+                        build_architecture: queued.task.arch.clone(),
+                        remotes: queued
+                            .remotes
+                            .iter()
+                            .enumerate()
+                            .map(|(idx, index)| Remote {
+                                #[allow(deprecated)]
+                                index_uri: String::default(),
+                                name: format!("repo{idx}"),
+                                priority: idx as u64 * 10,
+                                index: Some(proto::common::Index {
+                                    index: Some(match index {
+                                        profile::Index::DirectIndex(uri) => {
+                                            proto::common::index::Index::DirectIndex(uri.to_string())
+                                        }
+                                        profile::Index::RootIndex(root_index) => {
+                                            proto::common::index::Index::RootIndex(proto::common::index::RootIndex {
+                                                base_uri: root_index.base_uri.to_string(),
+                                                channel: root_index.channel.to_string(),
+                                                version: root_index.version.to_string(),
+                                            })
+                                        }
+                                    }),
                                 }),
-                            }),
-                        })
-                        .collect(),
-                })),
+                            })
+                            .collect(),
+                    },
+                )),
             })
             .await
             .context("send builder stream message")?;
@@ -281,7 +297,7 @@ impl Builder {
         Ok(())
     }
 
-    #[tracing::instrument(name = "update_builder", skip_all, fields(builder = %self.endpoint))]
+    #[tracing::instrument(name = "update_builder", skip_all, fields(builder = %self.config.id))]
     pub async fn update(&mut self, message: Message) -> Option<Event> {
         match message {
             Message::Connected(handle) => {
@@ -387,62 +403,42 @@ impl Builder {
         None
     }
 
-    pub async fn request_upload(&self, state: &State, task_id: task::Id, collectables: Vec<Collectable>) -> Result<()> {
+    pub async fn upload_build(
+        &self,
+        state: &State,
+        task_id: task::Id,
+        collectables: Vec<Collectable>,
+        token: String,
+        vessel_uri: &Uri,
+    ) -> Result<()> {
         let connection = self.connection.as_ref().ok_or_eyre("builder not connected")?;
 
         let mut conn = state.service_db().acquire().await.context("acquire db connection")?;
 
         let task = task::get(conn.as_mut(), task_id).await.context("get task")?;
 
-        let vessel = Endpoint::list(conn.as_mut())
-            .await
-            .context("list endpoints")?
-            .into_iter()
-            .find(|endpoint| matches!(endpoint.role, endpoint::Role::RepositoryManager))
-            .ok_or_eyre("no vessel instance")?;
-
-        drop(conn);
-
-        let mut client = VesselServiceClient::connect_with_auth(
-            vessel.host_address.clone(),
-            None,
-            EndpointAuth::new(&vessel, state.service_db().clone(), state.service.key_pair.clone()),
-        )
-        .await
-        .context("connect vessel client")?;
-
-        let response = client
-            .upload_token(UploadTokenRequest {
-                task_id: i64::from(task_id) as u64,
-                collectables: collectables
-                    .iter()
-                    .filter(|c| matches!(c.kind(), collectable::Kind::Package))
-                    .cloned()
-                    .collect(),
-            })
-            .await
-            .context("send upload token request")?;
-
         connection
             .handle
             .sender
-            .send(BuilderStreamOutgoing {
-                event: Some(builder_stream_outgoing::Event::Upload(BuilderUpload {
-                    build: Some(BuilderFinished {
-                        task_id: i64::from(task_id) as u64,
-                        collectables: collectables
-                            .into_iter()
-                            .filter(|c| matches!(c.kind(), collectable::Kind::Package))
-                            .collect(),
-                    }),
-                    token: response.into_inner().token,
-                    uri: vessel.host_address.to_string(),
-                })),
+            .send(builder_stream::Outgoing {
+                event: Some(builder_stream::outgoing::Event::UploadBuild(
+                    builder_stream::UploadBuild {
+                        build: Some(builder_stream::BuildFinished {
+                            task_id: i64::from(task_id) as u64,
+                            collectables: collectables
+                                .into_iter()
+                                .filter(|c| matches!(c.kind(), collectable::Kind::Package))
+                                .collect(),
+                        }),
+                        token,
+                        uri: vessel_uri.to_string(),
+                    },
+                )),
             })
             .await
             .context("send builder upload message")?;
 
-        info!(%task_id, build_id = %task.build_id, "Upload token sent to builder");
+        info!(%task_id, build_id = %task.build_id, "Upload request sent to builder");
 
         Ok(())
     }
@@ -450,11 +446,11 @@ impl Builder {
 
 #[derive(Debug, Clone)]
 pub struct Handle {
-    sender: mpsc::Sender<BuilderStreamOutgoing>,
+    sender: mpsc::Sender<builder_stream::Outgoing>,
 }
 
-impl From<mpsc::Sender<BuilderStreamOutgoing>> for Handle {
-    fn from(sender: mpsc::Sender<BuilderStreamOutgoing>) -> Self {
+impl From<mpsc::Sender<builder_stream::Outgoing>> for Handle {
+    fn from(sender: mpsc::Sender<builder_stream::Outgoing>) -> Self {
         Self { sender }
     }
 }
@@ -487,4 +483,27 @@ pub enum Status {
     Idle,
     Busy,
     Building { task: task::Id },
+}
+
+async fn persist_config(tx: &mut database::Transaction, config: &Config) -> Result<(), database::Error> {
+    sqlx::query(
+        "
+        INSERT INTO builder (
+          public_key,
+          description,
+          size
+        )
+        VALUES (?,?,?)
+        ON CONFLICT(public_key) DO UPDATE SET
+          description=excluded.description,
+          size=excluded.size
+        ",
+    )
+    .bind(config.public_key.to_string())
+    .bind(&config.description)
+    .bind(config.size.to_string())
+    .execute(tx.as_mut())
+    .await?;
+
+    Ok(())
 }

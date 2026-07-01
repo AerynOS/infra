@@ -83,7 +83,7 @@ impl KeyPair {
 }
 
 /// Public key half of a [`KeyPair`]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct PublicKey(ed25519_dalek::VerifyingKey);
 
@@ -162,6 +162,11 @@ impl EncodedSignature {
 
         Ok(Signature::from_bytes(&bytes))
     }
+}
+
+/// Parse an Ed25519 signature from a byte slice.
+pub fn signature_from_bytes(bytes: &[u8]) -> Result<Signature, Error> {
+    Signature::from_slice(bytes).map_err(Error::VerifySignature)
 }
 
 /// A crypto error

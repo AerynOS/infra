@@ -3,17 +3,11 @@ use std::{convert::Infallible, sync::Arc, time::Duration};
 use color_eyre::eyre::{Context, OptionExt, Result};
 use futures_util::{TryStreamExt, future::join_all};
 use service::{
-    Endpoint, State,
-    client::{AuthClient, EndpointAuth, SummitServiceClient},
-    endpoint::{self, Role, enrollment::HubTarget},
+    Service, State,
+    client::{AuthClient, Credentials, CredentialsAuth, InMemoryTokenStorage, SummitServiceClient},
+    crypto::PublicKey,
     error,
-    grpc::{
-        collectable::Collectable,
-        summit::{
-            BuilderBuild, BuilderBusy, BuilderFinished, BuilderLog, BuilderStatus, BuilderStreamIncoming,
-            BuilderUpload, builder_stream_incoming, builder_stream_outgoing,
-        },
-    },
+    grpc::proto::{common::Collectable, summit::builder_stream},
 };
 use tokio::{
     select,
@@ -23,19 +17,23 @@ use tokio::{
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::{debug, error, info, warn};
 
-use crate::{build, config::Config, upload};
+use crate::{
+    build,
+    config::{Config, SummitConfig},
+    upload,
+};
 
 #[derive(Clone)]
 pub struct Handle {
-    sender: mpsc::Sender<BuilderStreamIncoming>,
+    sender: mpsc::Sender<builder_stream::Incoming>,
 }
 
 impl Handle {
     pub async fn build_started(&self, task_id: u64) {
         let _ = self
             .sender
-            .send(BuilderStreamIncoming {
-                event: Some(builder_stream_incoming::Event::BuildStarted(task_id)),
+            .send(builder_stream::Incoming {
+                event: Some(builder_stream::incoming::Event::BuildStarted(task_id)),
             })
             .await;
     }
@@ -43,8 +41,10 @@ impl Handle {
     pub async fn build_log(&self, chunk: Vec<u8>) {
         let _ = self
             .sender
-            .send(BuilderStreamIncoming {
-                event: Some(builder_stream_incoming::Event::BuildLog(BuilderLog { chunk })),
+            .send(builder_stream::Incoming {
+                event: Some(builder_stream::incoming::Event::BuildLog(builder_stream::BuildLog {
+                    chunk,
+                })),
             })
             .await;
     }
@@ -52,11 +52,10 @@ impl Handle {
     pub async fn build_succeeded(&self, task_id: u64, collectables: Vec<Collectable>) {
         let _ = self
             .sender
-            .send(BuilderStreamIncoming {
-                event: Some(builder_stream_incoming::Event::BuildSucceeded(BuilderFinished {
-                    task_id,
-                    collectables,
-                })),
+            .send(builder_stream::Incoming {
+                event: Some(builder_stream::incoming::Event::BuildSucceeded(
+                    builder_stream::BuildFinished { task_id, collectables },
+                )),
             })
             .await;
     }
@@ -64,8 +63,8 @@ impl Handle {
     pub async fn build_failed(&self, task_id: u64) {
         let _ = self
             .sender
-            .send(BuilderStreamIncoming {
-                event: Some(builder_stream_incoming::Event::BuildFailed(task_id)),
+            .send(builder_stream::Incoming {
+                event: Some(builder_stream::incoming::Event::BuildFailed(task_id)),
             })
             .await;
     }
@@ -73,7 +72,10 @@ impl Handle {
 
 #[derive(Debug, Clone, Copy)]
 struct Building {
-    hub_id: endpoint::Id,
+    // Summit instance this build is related to. Since avalanche
+    // can connect to multiple summit, we need to track who this
+    // build is for.
+    summit_public: PublicKey,
     task_id: u64,
 }
 
@@ -84,9 +86,9 @@ pub async fn run(state: State, config: Config) -> Result<(), Infallible> {
 
     join_all(
         config
-            .hubs
+            .upstreams
             .iter()
-            .map(|hub| connect(&state, hub, building.clone(), notify_build_change.clone())),
+            .map(|summit| connect(&state, summit, building.clone(), notify_build_change.clone())),
     )
     .await;
 
@@ -97,20 +99,40 @@ pub async fn run(state: State, config: Config) -> Result<(), Infallible> {
     name = "stream",
     skip_all,
     fields(
-        host_address = %target.host_address,
-        public_key = %target.public_key
+        host_address = %summit.host_address,
+        public_key = %summit.public_key,
     ),
 )]
 async fn connect(
     state: &State,
-    target: &HubTarget,
+    summit: &SummitConfig,
     building: Arc<Mutex<Option<Building>>>,
     notify_build_change: watch::Sender<()>,
 ) {
+    // Create auth credentials up here so it'll live longer than our `connect_inner` loop
+    // and we can reuse access tokens across broken connections / reconnect loop
+    let auth = CredentialsAuth::with_in_memory_storage(Credentials::Service {
+        service: Service::Avalanche,
+        key_pair: state.key_pair.clone(),
+    })
+    // Ensure the configured summit is who they say they are
+    //
+    // TLS should cover this, but this is an extra protection especially
+    // if TLS isn't enabled on the summit grpc server
+    .verify_server(summit.public_key);
+
     loop {
         debug!("Attempting to connect to summit");
 
-        if let Err(e) = connect_inner(state, target, building.clone(), notify_build_change.clone()).await {
+        if let Err(e) = connect_inner(
+            state,
+            summit,
+            auth.clone(),
+            building.clone(),
+            notify_build_change.clone(),
+        )
+        .await
+        {
             let error = error::chain(&*e);
             error!(%error, "Stream error");
 
@@ -122,24 +144,14 @@ async fn connect(
 
 async fn connect_inner(
     state: &State,
-    target: &HubTarget,
+    summit: &SummitConfig,
+    auth: CredentialsAuth<InMemoryTokenStorage>,
     building: Arc<Mutex<Option<Building>>>,
     notify_build_change: watch::Sender<()>,
 ) -> Result<()> {
-    let endpoint = Endpoint::list(&mut *state.service_db.acquire().await.context("acquire db conn")?)
+    let mut client = SummitServiceClient::connect_with_auth(summit.host_address.clone(), None, auth)
         .await
-        .context("list endpoints")?
-        .into_iter()
-        .find(|e| e.role == Role::Hub && e.host_address == target.host_address)
-        .ok_or_eyre("no enrolled hub")?;
-
-    let mut client = SummitServiceClient::connect_with_auth(
-        endpoint.host_address.clone(),
-        None,
-        EndpointAuth::new(&endpoint, state.service_db.clone(), state.key_pair.clone()),
-    )
-    .await
-    .context("connect summit client")?;
+        .context("connect summit client")?;
 
     let (sender, receiver) = mpsc::channel(1);
 
@@ -150,6 +162,7 @@ async fn connect_inner(
 
     info!("Connected to summit");
 
+    let summit_public = summit.public_key;
     let (notify_build_cancelled, _) = watch::channel(());
 
     let mut stream = resp.into_inner();
@@ -162,12 +175,12 @@ async fn connect_inner(
                 let building = *building.lock().await;
 
                 // Only send task id if its being built for this summit instance
-                let task_id = building.and_then(|b| (b.hub_id == endpoint.id).then_some(b.task_id));
+                let task_id = building.and_then(|b| (b.summit_public == summit_public).then_some(b.task_id));
                 let building = building.is_some();
 
                 let _ = sender
-                    .send(BuilderStreamIncoming {
-                        event: Some(builder_stream_incoming::Event::Status(BuilderStatus { building, task_id })),
+                    .send(builder_stream::Incoming {
+                        event: Some(builder_stream::incoming::Event::Status(builder_stream::BuilderStatus { building, task_id })),
                     })
                     .await;
 
@@ -177,12 +190,12 @@ async fn connect_inner(
                 let building = *building.lock().await;
 
                 // Only send task id if its being built for this summit instance
-                let task_id = building.and_then(|b| (b.hub_id == endpoint.id).then_some(b.task_id));
+                let task_id = building.and_then(|b| (b.summit_public == summit_public).then_some(b.task_id));
                 let building = building.is_some();
 
                 let _ = sender
-                    .send(BuilderStreamIncoming {
-                        event: Some(builder_stream_incoming::Event::Status(BuilderStatus { building, task_id })),
+                    .send(builder_stream::Incoming {
+                        event: Some(builder_stream::incoming::Event::Status(builder_stream::BuilderStatus { building, task_id })),
                     })
                     .await;
 
@@ -193,12 +206,12 @@ async fn connect_inner(
                     let event = message.event.ok_or_eyre("missing stream event")?;
 
                     match event {
-                        builder_stream_outgoing::Event::Build(request) => {
+                        builder_stream::outgoing::Event::StartBuild(request) => {
                             let build_changed_receiver = notify_build_cancelled.subscribe();
 
                             build_requested(
                                 state,
-                                endpoint.id,
+                                summit_public,
                                 &building,
                                 &sender,
                                 request,
@@ -206,7 +219,7 @@ async fn connect_inner(
                                 &notify_build_change
                             ).await;
                         }
-                        builder_stream_outgoing::Event::Upload(BuilderUpload { build, token, uri }) => {
+                        builder_stream::outgoing::Event::UploadBuild(builder_stream::UploadBuild { build, token, uri }) => {
                             let build = build.ok_or_eyre("missing build message")?;
                             let task_id = build.task_id;
 
@@ -220,15 +233,15 @@ async fn connect_inner(
                                         error!(uri, task_id, %error, "Failed to upload packages to vessel");
 
                                         let _ = sender
-                                            .send(BuilderStreamIncoming {
-                                                event: Some(builder_stream_incoming::Event::UploadFailed(task_id)),
+                                            .send(builder_stream::Incoming {
+                                                event: Some(builder_stream::incoming::Event::UploadFailed(task_id)),
                                             })
                                             .await;
                                     }
                                 }
                             });
                         }
-                        builder_stream_outgoing::Event::CancelBuild(()) => {
+                        builder_stream::outgoing::Event::CancelBuild(()) => {
                             notify_build_cancelled.send_replace(());
                         }
                     }
@@ -245,10 +258,10 @@ async fn connect_inner(
 
 async fn build_requested(
     state: &State,
-    hub_id: endpoint::Id,
+    summit_public: PublicKey,
     building: &Arc<Mutex<Option<Building>>>,
-    sender: &mpsc::Sender<BuilderStreamIncoming>,
-    request: BuilderBuild,
+    sender: &mpsc::Sender<builder_stream::Incoming>,
+    request: builder_stream::StartBuild,
     mut cancelled_receiver: watch::Receiver<()>,
     notify_build_changed: &watch::Sender<()>,
 ) {
@@ -257,11 +270,11 @@ async fn build_requested(
     if let Some(in_progress) = *build_guard {
         warn!("Build already in progress, ignoring");
 
-        let in_progress_task_id = (in_progress.hub_id == hub_id).then_some(in_progress.task_id);
+        let in_progress_task_id = (in_progress.summit_public == summit_public).then_some(in_progress.task_id);
 
         let _ = sender
-            .send(BuilderStreamIncoming {
-                event: Some(builder_stream_incoming::Event::Busy(BuilderBusy {
+            .send(builder_stream::Incoming {
+                event: Some(builder_stream::incoming::Event::Busy(builder_stream::BuilderBusy {
                     requested_task_id: request.task_id,
                     in_progress_task_id,
                 })),
@@ -272,7 +285,7 @@ async fn build_requested(
     }
 
     *build_guard = Some(Building {
-        hub_id,
+        summit_public,
         task_id: request.task_id,
     });
     notify_build_changed.send_replace(());
