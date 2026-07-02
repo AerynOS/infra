@@ -9,38 +9,54 @@ message UploadRequest {
   bytes chunk = 1;
 }
 
-message UpdateStreamRequest {
-  string channel = 1;
-  Stream stream = 2;
-  string version = 3;
-}
-
-message AddTagRequest {
-  string channel = 1;
-  string tag = 2;
-  string history = 3;
-}
-
-message RemoveTagRequest {
-  string channel = 1;
-  string tag = 2;
-}
-
 enum Stream {
   STREAM_UNKNOWN = 0;
   STREAM_VOLATILE = 1;
   STREAM_UNSTABLE = 2;
 }
 
-message CommandResponse {
-  bool success = 1;
-  optional string error = 2;
-}
+message Command {
+  message Request {
+    string request_id = 1;
+    Inner command = 2;
+  }
 
-message UpgradeFormatRequest {
-  string channel = 1;
-  UpgradeFormat format = 2;
+  message Response {
+    string request_id = 1;
+    bool success = 2;
+    optional string error = 3;
+  }
 
+  message Inner {
+    oneof command {
+      vessel.Command.UpdateStream update_stream = 1;
+      vessel.Command.AddTag add_tag = 2;
+      vessel.Command.RemoveTag remove_tag = 3;
+      vessel.Command.FormatUpgrade upgrade_format = 4;
+    }
+  }
+
+  message UpdateStream {
+    string channel = 1;
+    Stream stream = 2;
+    string version = 3;
+  }
+  
+  message AddTag {
+    string channel = 1;
+    string tag = 2;
+    string history = 3;
+  }
+  
+  message RemoveTag {
+    string channel = 1;
+    string tag = 2;
+  }
+  
+  message FormatUpgrade {
+    string channel = 1;
+    UpgradeFormat format = 2;
+  }
 }
 
 message UpgradeFormat {
@@ -62,26 +78,5 @@ service VesselService {
     // Single use token / not session scoped
     option (options.flags) = "ACCESS_TOKEN | NOT_EXPIRED";
     option (options.perm) = "UploadPackage";
-  }
-
-  // Commands
-  // TODO: Move to summit & send them over stream so we can
-  // remove auth service from vessel
-  
-  rpc UpdateStream(UpdateStreamRequest) returns (CommandResponse) {
-    option (options.flags) = "SESSION_ACCESS";
-    option (options.perm) = "UpdateStream";
-  }
-  rpc AddTag(AddTagRequest) returns (CommandResponse) {
-    option (options.flags) = "SESSION_ACCESS";
-    option (options.perm) = "AddTag";
-  }
-  rpc RemoveTag(RemoveTagRequest) returns (CommandResponse) {
-    option (options.flags) = "SESSION_ACCESS";
-    option (options.perm) = "RemoveTag";
-  }
-  rpc UpgradeFormat(UpgradeFormatRequest) returns (CommandResponse) {
-    option (options.flags) = "SESSION_ACCESS";
-    option (options.perm) = "UpgradeFormat";
   }
 }

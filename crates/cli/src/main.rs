@@ -3,13 +3,12 @@ use std::{path::PathBuf, process};
 use clap::{Parser, Subcommand, ValueEnum};
 use color_eyre::eyre::{Result, bail};
 use moss::repository::Format;
-use service_client::{AuthClient, Credentials, CredentialsAuth, SummitServiceClient, TlsConfig, VesselServiceClient};
+use service_client::{AuthClient, Credentials, CredentialsAuth, SummitServiceClient, TlsConfig};
 use service_core::crypto::KeyPair;
 use service_grpc::{
-    proto::summit::{CancelRequest, RetryRequest},
+    proto::summit::command,
     proto::vessel::{
-        AddTagRequest, RemoveTagRequest, Stream as ProtoStream, UpdateStreamRequest, UpgradeFormat,
-        UpgradeFormatLegacy, UpgradeFormatRequest, upgrade_format,
+        Stream as ProtoStream, UpgradeFormat, UpgradeFormatLegacy, command as vessel_command, upgrade_format,
     },
 };
 use tokio::{fs, io};
@@ -43,55 +42,19 @@ async fn main() -> Result<()> {
             )
             .await?;
 
-            match command {
-                Summit::Retry { task } => {
-                    client.retry(RetryRequest { task_id: task }).await?;
-                }
-                Summit::Cancel { task } => {
-                    client.cancel(CancelRequest { task_id: task }).await?;
-                }
-                Summit::Refresh {} => {
-                    client.refresh(()).await?;
-                }
-                Summit::Pause {} => {
-                    client.pause(()).await?;
-                }
-                Summit::Resume {} => {
-                    client.resume(()).await?;
-                }
-            }
-        }
-        Command::Vessel {
-            uri,
-            username,
-            private_key,
-            ca_cert,
-            command,
-        } => {
-            let key_pair = KeyPair::load(private_key)?;
-
-            println!("Using key_pair {}", key_pair.public_key().encode());
-
-            let tls = ca_cert.map(|ca_cert| TlsConfig {
-                ca: Some(ca_cert),
-                ..Default::default()
-            });
-
-            let mut client = VesselServiceClient::connect_with_auth(
-                uri,
-                tls,
-                CredentialsAuth::with_in_memory_storage(Credentials::Account { username, key_pair }),
-            )
-            .await?;
-
             let response = match command {
-                Vessel::UpdateStream {
+                Summit::Retry { task } => client.retry(command::Retry { task_id: task }).await?,
+                Summit::Cancel { task } => client.cancel(command::Cancel { task_id: task }).await?,
+                Summit::Refresh {} => client.refresh(()).await?,
+                Summit::Pause {} => client.pause(()).await?,
+                Summit::Resume {} => client.resume(()).await?,
+                Summit::UpdateStream {
                     channel,
                     stream,
                     version,
                 } => {
                     client
-                        .update_stream(UpdateStreamRequest {
+                        .update_stream(vessel_command::UpdateStream {
                             channel,
                             stream: match stream {
                                 ChannelStream::Volatile => ProtoStream::Volatile,
@@ -101,11 +64,13 @@ async fn main() -> Result<()> {
                         })
                         .await?
                 }
-                Vessel::AddTag { channel, tag, history } => {
-                    client.add_tag(AddTagRequest { channel, tag, history }).await?
+                Summit::AddTag { channel, tag, history } => {
+                    client.add_tag(vessel_command::AddTag { channel, tag, history }).await?
                 }
-                Vessel::RemoveTag { channel, tag } => client.remove_tag(RemoveTagRequest { channel, tag }).await?,
-                Vessel::UpgradeFormat { channel, format, tag } => {
+                Summit::RemoveTag { channel, tag } => {
+                    client.remove_tag(vessel_command::RemoveTag { channel, tag }).await?
+                }
+                Summit::UpgradeFormat { channel, format, tag } => {
                     let format = Format::from(format.as_str());
 
                     let upgrade_format = match format {
@@ -117,7 +82,7 @@ async fn main() -> Result<()> {
                     };
 
                     client
-                        .upgrade_format(UpgradeFormatRequest {
+                        .upgrade_format(vessel_command::FormatUpgrade {
                             channel,
                             format: Some(upgrade_format),
                         })
@@ -181,6 +146,7 @@ struct Args {
 }
 
 #[derive(Debug, Subcommand)]
+#[allow(clippy::large_enum_variant)]
 enum Command {
     /// Summit commands
     Summit {
@@ -198,23 +164,6 @@ enum Command {
         ca_cert: Option<PathBuf>,
         #[command(subcommand)]
         command: Summit,
-    },
-    /// Vessel commands
-    Vessel {
-        /// Uri to connect to
-        #[arg(long = "uri", default_value = "http://127.0.0.1:5002")]
-        uri: Uri,
-        /// Admin username
-        #[arg(long = "user")]
-        username: String,
-        /// Path to admin private key
-        #[arg(long = "key")]
-        private_key: PathBuf,
-        /// Path to a PEM ca cert
-        #[arg(long)]
-        ca_cert: Option<PathBuf>,
-        #[command(subcommand)]
-        command: Vessel,
     },
     /// Work with ed25519 keys
     Key {
@@ -241,10 +190,6 @@ enum Summit {
     Pause {},
     /// Resume all projects
     Resume {},
-}
-
-#[derive(Debug, Subcommand)]
-enum Vessel {
     /// Update a stream to link to a new version
     UpdateStream {
         /// Channel name

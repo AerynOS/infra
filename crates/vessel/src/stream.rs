@@ -1,20 +1,28 @@
 use std::{convert::Infallible, time::Duration};
 
-use color_eyre::eyre::{Context, OptionExt as _, Result};
+use color_eyre::eyre::{Context, OptionExt as _, Result, bail, eyre};
 use service::{
     Service,
     client::{AuthClient as _, Credentials, CredentialsAuth, InMemoryTokenStorage, SummitServiceClient},
     error,
-    grpc::proto::summit::repository_manager_stream,
+    grpc::proto::{
+        summit::repository_manager_stream,
+        vessel::{command, upgrade_format},
+    },
 };
 use tokio::{select, sync::mpsc, time};
 use tokio_stream::{StreamExt, wrappers::ReceiverStream};
 use tracing::{debug, error, info};
 
-use crate::{Config, State, upload, worker};
+use crate::{Config, State, channel, upload, worker};
 
-pub async fn run(state: State, config: Config, worker_events: worker::EventReceiver) -> Result<(), Infallible> {
-    connect(&state, &config, worker_events).await;
+pub async fn run(
+    state: State,
+    config: Config,
+    worker_sender: worker::Sender,
+    worker_events: worker::EventReceiver,
+) -> Result<(), Infallible> {
+    connect(&state, &config, worker_sender, worker_events).await;
     Ok(())
 }
 
@@ -26,7 +34,12 @@ pub async fn run(state: State, config: Config, worker_events: worker::EventRecei
         public_key = %config.summit.public_key,
     ),
 )]
-async fn connect(state: &State, config: &Config, mut worker_events: worker::EventReceiver) {
+async fn connect(
+    state: &State,
+    config: &Config,
+    mut worker_sender: worker::Sender,
+    mut worker_events: worker::EventReceiver,
+) {
     // Create auth credentials up here so it'll live longer than our `connect_inner` loop
     // and we can reuse access tokens across broken connections / reconnect loop
     let auth = CredentialsAuth::with_in_memory_storage(Credentials::Service {
@@ -42,7 +55,7 @@ async fn connect(state: &State, config: &Config, mut worker_events: worker::Even
     loop {
         debug!("Attempting to connect to summit");
 
-        if let Err(e) = connect_inner(state, config, auth.clone(), &mut worker_events).await {
+        if let Err(e) = connect_inner(state, config, auth.clone(), &mut worker_sender, &mut worker_events).await {
             let error = error::chain(&*e);
             error!(%error, "Stream error");
 
@@ -56,6 +69,7 @@ async fn connect_inner(
     state: &State,
     config: &Config,
     auth: CredentialsAuth<InMemoryTokenStorage>,
+    worker_sender: &mut worker::Sender,
     worker_events: &mut worker::EventReceiver,
 ) -> Result<()> {
     let mut client = SummitServiceClient::connect_with_auth(config.summit.host_address.clone(), None, auth)
@@ -112,6 +126,20 @@ async fn connect_inner(
 
                             debug!(%task_id, "Import failed reported");
                         },
+                        worker::Event::CommandFinished { request_id, result } => {
+                            let _ = sender.send(repository_manager_stream::Incoming {
+                                event: Some(repository_manager_stream::incoming::Event::Command(
+                                    command::Response {
+                                        request_id: request_id.clone(),
+                                        success: result.is_ok(),
+                                        error: result.err().map(|err| format!("{err:#}")),
+                                    }
+                                ))
+                            })
+                            .await;
+
+                            debug!(%request_id, "Command status reported");
+                        },
                     }
                 }
             }
@@ -139,6 +167,44 @@ async fn connect_inner(
                                 "Upload token issued for task"
                             );
                         },
+                        repository_manager_stream::outgoing::Event::Command(request) => {
+                            let request_id = request.request_id.clone();
+
+                            match parse_channel_command(request) {
+                                Ok((channel, command)) => {
+                                    info!(
+                                        %request_id,
+                                        %channel,
+                                        %command,
+                                        "Command received"
+                                    );
+
+                                    let _ = worker_sender.send(worker::Message::ChannelCommand {
+                                        request_id,
+                                        channel,
+                                        command,
+                                    });
+                                }
+                                Err(err) => {
+                                    error!(
+                                        %request_id,
+                                        error = format!("{err:#}"),
+                                        "Failed to parse incoming command"
+                                    );
+
+                                    let _ = sender.send(repository_manager_stream::Incoming {
+                                        event: Some(repository_manager_stream::incoming::Event::Command(
+                                            command::Response {
+                                                request_id,
+                                                success: false,
+                                                error: Some(format!("{err:#}"))
+                                            }
+                                        ))
+                                    })
+                                    .await;
+                                }
+                            }
+                        }
                     }
                 } else {
                     break;
@@ -149,4 +215,51 @@ async fn connect_inner(
     }
 
     Ok(())
+}
+
+fn parse_channel_command(request: command::Request) -> Result<(String, channel::Command)> {
+    match request
+        .command
+        .and_then(|inner| inner.command)
+        .ok_or_eyre("malformed grpc request")?
+    {
+        command::inner::Command::UpdateStream(command) => Ok((
+            command.channel.clone(),
+            channel::Command::UpdateStream {
+                stream: match command.stream() {
+                    service::grpc::proto::vessel::Stream::Volatile => channel::version::Stream::Volatile,
+                    service::grpc::proto::vessel::Stream::Unstable => channel::version::Stream::Unstable,
+                    _ => bail!("unknown stream"),
+                },
+                version: channel::Version::try_from(command.version)
+                    .map_err(|err| eyre!("failed to parse version: {err}"))?,
+            },
+        )),
+        command::inner::Command::AddTag(command) => Ok((
+            command.channel,
+            channel::Command::AddTag {
+                tag: channel::version::Identifier::new(&command.tag)?.into(),
+                history: channel::version::Identifier::new(&command.history)?.into(),
+            },
+        )),
+        command::inner::Command::RemoveTag(command) => Ok((
+            command.channel,
+            channel::Command::RemoveTag {
+                tag: channel::version::Identifier::new(&command.tag)?.into(),
+            },
+        )),
+        command::inner::Command::UpgradeFormat(command) => Ok((
+            command.channel,
+            channel::Command::FormatUpgrade(
+                command
+                    .format
+                    .and_then(|f| match f.format? {
+                        upgrade_format::Format::Legacy(request) => Some(channel::FormatUpgrade::Legacy {
+                            tag_name: request.tag_name,
+                        }),
+                    })
+                    .ok_or_eyre("missing format")?,
+            ),
+        )),
+    }
 }

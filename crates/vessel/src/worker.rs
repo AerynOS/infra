@@ -2,7 +2,7 @@ use std::{convert::Infallible, future::Future, time::Duration};
 
 use color_eyre::eyre::Result;
 use tokio::{
-    sync::{mpsc, oneshot},
+    sync::mpsc,
     time::{self, Instant},
 };
 use tracing::{Instrument, error, info, info_span};
@@ -29,9 +29,9 @@ pub enum Message {
     Prune(Instant),
     #[strum(serialize = "channel-command-{command}")]
     ChannelCommand {
+        request_id: String,
         channel: String,
         command: channel::Command,
-        response: oneshot::Sender<Result<()>>,
     },
 }
 
@@ -40,6 +40,7 @@ pub enum Message {
 pub enum Event {
     ImportSucceeded { task_id: u64 },
     ImportFailed { task_id: u64 },
+    CommandFinished { request_id: String, result: Result<()> },
 }
 
 pub async fn run(
@@ -116,9 +117,9 @@ async fn handle_message(state: &State, message: Message, events: &mpsc::Unbounde
         }
         Message::Prune(_) => channel::prune(state, DEFAULT_CHANNEL).await,
         Message::ChannelCommand {
+            request_id,
             channel,
             command,
-            response,
         } => {
             let result = channel::handle_command(state, &channel, command).await;
 
@@ -127,7 +128,7 @@ async fn handle_message(state: &State, message: Message, events: &mpsc::Unbounde
                 error!(%error, "Failed to handle command");
             }
 
-            let _ = response.send(result);
+            let _ = events.send(Event::CommandFinished { request_id, result });
 
             Ok(())
         }

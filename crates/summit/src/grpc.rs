@@ -8,9 +8,12 @@ use service::{
     crypto::PublicKey,
     grpc::{
         self,
-        proto::summit::{
-            CancelRequest, RetryRequest, builder_stream, repository_manager_stream,
-            summit_service_server::{SummitService as GrpcSummitService, SummitServiceServer},
+        proto::{
+            summit::{
+                builder_stream, command, repository_manager_stream,
+                summit_service_server::{SummitService as GrpcSummitService, SummitServiceServer},
+            },
+            vessel::command::{self as vessel_command, inner::Command as VesselCommand},
         },
     },
     session,
@@ -19,7 +22,7 @@ use snafu::{ResultExt, Snafu};
 use tokio::{
     fs::{self, File},
     io::AsyncWriteExt,
-    sync::mpsc,
+    sync::{mpsc, oneshot},
 };
 use tokio_stream::{StreamExt, wrappers::ReceiverStream};
 use tracing::{Instrument, Span, info};
@@ -59,34 +62,76 @@ impl GrpcSummitService for SummitService {
     type BuilderStream = ReceiverStream<Result<builder_stream::Outgoing, tonic::Status>>;
     type RepositoryManagerStream = ReceiverStream<Result<repository_manager_stream::Outgoing, tonic::Status>>;
 
-    async fn retry(&self, request: tonic::Request<RetryRequest>) -> Result<tonic::Response<()>, tonic::Status> {
+    async fn retry(
+        &self,
+        request: tonic::Request<command::Retry>,
+    ) -> Result<tonic::Response<command::Response>, tonic::Status> {
         let state = self.state.clone();
 
         grpc::handle(request, async move |request| retry(state, request).await).await
     }
 
-    async fn cancel(&self, request: tonic::Request<CancelRequest>) -> Result<tonic::Response<()>, tonic::Status> {
+    async fn cancel(
+        &self,
+        request: tonic::Request<command::Cancel>,
+    ) -> Result<tonic::Response<command::Response>, tonic::Status> {
         let state = self.state.clone();
 
         grpc::handle(request, async move |request| cancel(state, request).await).await
     }
 
-    async fn refresh(&self, request: tonic::Request<()>) -> Result<tonic::Response<()>, tonic::Status> {
+    async fn refresh(&self, request: tonic::Request<()>) -> Result<tonic::Response<command::Response>, tonic::Status> {
         let state = self.state.clone();
 
         grpc::handle(request, async move |request| refresh(state, request).await).await
     }
 
-    async fn pause(&self, request: tonic::Request<()>) -> Result<tonic::Response<()>, tonic::Status> {
+    async fn pause(&self, request: tonic::Request<()>) -> Result<tonic::Response<command::Response>, tonic::Status> {
         let state = self.state.clone();
 
         grpc::handle(request, async move |request| pause(state, request).await).await
     }
 
-    async fn resume(&self, request: tonic::Request<()>) -> Result<tonic::Response<()>, tonic::Status> {
+    async fn resume(&self, request: tonic::Request<()>) -> Result<tonic::Response<command::Response>, tonic::Status> {
         let state = self.state.clone();
 
         grpc::handle(request, async move |request| resume(state, request).await).await
+    }
+
+    async fn update_stream(
+        &self,
+        request: tonic::Request<vessel_command::UpdateStream>,
+    ) -> Result<tonic::Response<command::Response>, tonic::Status> {
+        let state = self.state.clone();
+
+        grpc::handle(request, async move |request| update_stream(state, request).await).await
+    }
+
+    async fn add_tag(
+        &self,
+        request: tonic::Request<vessel_command::AddTag>,
+    ) -> Result<tonic::Response<command::Response>, tonic::Status> {
+        let state = self.state.clone();
+
+        grpc::handle(request, async move |request| add_tag(state, request).await).await
+    }
+
+    async fn remove_tag(
+        &self,
+        request: tonic::Request<vessel_command::RemoveTag>,
+    ) -> Result<tonic::Response<command::Response>, tonic::Status> {
+        let state = self.state.clone();
+
+        grpc::handle(request, async move |request| remove_tag(state, request).await).await
+    }
+
+    async fn upgrade_format(
+        &self,
+        request: tonic::Request<vessel_command::FormatUpgrade>,
+    ) -> Result<tonic::Response<command::Response>, tonic::Status> {
+        let state = self.state.clone();
+
+        grpc::handle(request, async move |request| upgrade_format(state, request).await).await
     }
 
     async fn builder(
@@ -118,7 +163,7 @@ impl GrpcSummitService for SummitService {
         task_id = %request.get_ref().task_id,
     )
 )]
-async fn retry(state: Arc<State>, request: tonic::Request<RetryRequest>) -> Result<(), Error> {
+async fn retry(state: Arc<State>, request: tonic::Request<command::Retry>) -> Result<command::Response, Error> {
     let session = request.extensions().get::<Session>().ok_or(Error::NoActiveSession)?;
 
     info!(
@@ -131,7 +176,10 @@ async fn retry(state: Arc<State>, request: tonic::Request<RetryRequest>) -> Resu
         task_id: (request.into_inner().task_id as i64).into(),
     });
 
-    Ok(())
+    Ok(command::Response {
+        success: true,
+        error: None,
+    })
 }
 
 #[tracing::instrument(
@@ -140,7 +188,7 @@ async fn retry(state: Arc<State>, request: tonic::Request<RetryRequest>) -> Resu
         task_id = %request.get_ref().task_id,
     )
 )]
-async fn cancel(state: Arc<State>, request: tonic::Request<CancelRequest>) -> Result<(), Error> {
+async fn cancel(state: Arc<State>, request: tonic::Request<command::Cancel>) -> Result<command::Response, Error> {
     let session = request.extensions().get::<Session>().ok_or(Error::NoActiveSession)?;
 
     info!(
@@ -153,11 +201,14 @@ async fn cancel(state: Arc<State>, request: tonic::Request<CancelRequest>) -> Re
         task_id: (request.into_inner().task_id as i64).into(),
     });
 
-    Ok(())
+    Ok(command::Response {
+        success: true,
+        error: None,
+    })
 }
 
 #[tracing::instrument(skip_all)]
-async fn refresh(state: Arc<State>, request: tonic::Request<()>) -> Result<(), Error> {
+async fn refresh(state: Arc<State>, request: tonic::Request<()>) -> Result<command::Response, Error> {
     let session = request.extensions().get::<Session>().ok_or(Error::NoActiveSession)?;
 
     info!(
@@ -168,11 +219,14 @@ async fn refresh(state: Arc<State>, request: tonic::Request<()>) -> Result<(), E
 
     let _ = state.worker.send(worker::Message::ForceRefresh);
 
-    Ok(())
+    Ok(command::Response {
+        success: true,
+        error: None,
+    })
 }
 
 #[tracing::instrument(skip_all)]
-async fn pause(state: Arc<State>, request: tonic::Request<()>) -> Result<(), Error> {
+async fn pause(state: Arc<State>, request: tonic::Request<()>) -> Result<command::Response, Error> {
     let session = request.extensions().get::<Session>().ok_or(Error::NoActiveSession)?;
 
     info!(
@@ -183,11 +237,14 @@ async fn pause(state: Arc<State>, request: tonic::Request<()>) -> Result<(), Err
 
     let _ = state.worker.send(worker::Message::Pause);
 
-    Ok(())
+    Ok(command::Response {
+        success: true,
+        error: None,
+    })
 }
 
 #[tracing::instrument(skip_all)]
-async fn resume(state: Arc<State>, request: tonic::Request<()>) -> Result<(), Error> {
+async fn resume(state: Arc<State>, request: tonic::Request<()>) -> Result<command::Response, Error> {
     let session = request.extensions().get::<Session>().ok_or(Error::NoActiveSession)?;
 
     info!(
@@ -198,7 +255,158 @@ async fn resume(state: Arc<State>, request: tonic::Request<()>) -> Result<(), Er
 
     let _ = state.worker.send(worker::Message::Resume);
 
-    Ok(())
+    Ok(command::Response {
+        success: true,
+        error: None,
+    })
+}
+
+#[tracing::instrument(skip_all)]
+async fn update_stream(
+    state: Arc<State>,
+    request: tonic::Request<vessel_command::UpdateStream>,
+) -> Result<command::Response, Error> {
+    let session = request.extensions().get::<Session>().ok_or(Error::NoActiveSession)?;
+
+    info!(
+        session_id = %session.id,
+        client = %session.client,
+        "Update stream"
+    );
+
+    let (send, recv) = oneshot::channel();
+
+    let _ = state.worker.send(worker::Message::RepositoryManager(
+        state.config.repository_manager.id.clone(),
+        state.config.repository_manager.public_key,
+        repository_manager::Message::Command {
+            command: VesselCommand::UpdateStream(request.into_inner()),
+            resp: send,
+        },
+    ));
+
+    let Ok(resp) = recv.await else {
+        return Ok(command::Response {
+            success: false,
+            error: Some("internal error".to_owned()),
+        });
+    };
+
+    Ok(command::Response {
+        success: resp.success,
+        error: resp.error,
+    })
+}
+
+#[tracing::instrument(skip_all)]
+async fn add_tag(
+    state: Arc<State>,
+    request: tonic::Request<vessel_command::AddTag>,
+) -> Result<command::Response, Error> {
+    let session = request.extensions().get::<Session>().ok_or(Error::NoActiveSession)?;
+
+    info!(
+        session_id = %session.id,
+        client = %session.client,
+        "Add tag"
+    );
+
+    let (send, recv) = oneshot::channel();
+
+    let _ = state.worker.send(worker::Message::RepositoryManager(
+        state.config.repository_manager.id.clone(),
+        state.config.repository_manager.public_key,
+        repository_manager::Message::Command {
+            command: VesselCommand::AddTag(request.into_inner()),
+            resp: send,
+        },
+    ));
+
+    let Ok(resp) = recv.await else {
+        return Ok(command::Response {
+            success: false,
+            error: Some("internal error".to_owned()),
+        });
+    };
+
+    Ok(command::Response {
+        success: resp.success,
+        error: resp.error,
+    })
+}
+
+#[tracing::instrument(skip_all)]
+async fn remove_tag(
+    state: Arc<State>,
+    request: tonic::Request<vessel_command::RemoveTag>,
+) -> Result<command::Response, Error> {
+    let session = request.extensions().get::<Session>().ok_or(Error::NoActiveSession)?;
+
+    info!(
+        session_id = %session.id,
+        client = %session.client,
+        "Remove tag"
+    );
+
+    let (send, recv) = oneshot::channel();
+
+    let _ = state.worker.send(worker::Message::RepositoryManager(
+        state.config.repository_manager.id.clone(),
+        state.config.repository_manager.public_key,
+        repository_manager::Message::Command {
+            command: VesselCommand::RemoveTag(request.into_inner()),
+            resp: send,
+        },
+    ));
+
+    let Ok(resp) = recv.await else {
+        return Ok(command::Response {
+            success: false,
+            error: Some("internal error".to_owned()),
+        });
+    };
+
+    Ok(command::Response {
+        success: resp.success,
+        error: resp.error,
+    })
+}
+
+#[tracing::instrument(skip_all)]
+async fn upgrade_format(
+    state: Arc<State>,
+    request: tonic::Request<vessel_command::FormatUpgrade>,
+) -> Result<command::Response, Error> {
+    let session = request.extensions().get::<Session>().ok_or(Error::NoActiveSession)?;
+
+    info!(
+        session_id = %session.id,
+        client = %session.client,
+        "Upgrade format"
+    );
+
+    let (send, recv) = oneshot::channel();
+
+    let _ = state.worker.send(worker::Message::RepositoryManager(
+        state.config.repository_manager.id.clone(),
+        state.config.repository_manager.public_key,
+        repository_manager::Message::Command {
+            command: VesselCommand::UpgradeFormat(request.into_inner()),
+            resp: send,
+        },
+    ));
+
+    let Ok(resp) = recv.await else {
+        return Ok(command::Response {
+            success: false,
+            error: Some("internal error".to_owned()),
+        });
+    };
+
+    Ok(command::Response {
+        success: resp.success,
+        error: resp.error,
+    })
 }
 
 #[tracing::instrument(skip_all, fields(builder_id, public_key))]
@@ -442,6 +650,13 @@ async fn repository_manager(
                         repository_manager::Message::ImportFailed {
                             task_id: task::Id::from(task_id as i64),
                         },
+                    ));
+                }
+                repository_manager_stream::incoming::Event::Command(response) => {
+                    let _ = state.worker.send(worker::Message::RepositoryManager(
+                        repository_manager_id.clone(),
+                        public_key,
+                        repository_manager::Message::CommandResponse(response),
                     ));
                 }
             }
