@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use bitflags::bitflags;
 use serde::{Deserialize, Serialize};
 
-use crate::{Service, account, crypto::PublicKey};
+use crate::{Service, crypto::PublicKey};
 
 bitflags! {
     /// Authorization flags that describe the account making the request
@@ -20,6 +20,20 @@ bitflags! {
         const EXPIRED = 1 << 2;
         /// Token is not expired
         const NOT_EXPIRED = 1 << 3;
+        /// Valid session
+        const VALID_SESSION = 1 << 4;
+
+        /// A valid session w/ non-expired access token
+        const SESSION_ACCESS =
+            Self::ACCESS_TOKEN.bits()
+            | Self::NOT_EXPIRED.bits()
+            | Self::VALID_SESSION.bits();
+
+        /// A valid session w/ non-expired refresh / bearer token
+        const SESSION_REFRESH =
+            Self::BEARER_TOKEN.bits()
+            | Self::NOT_EXPIRED.bits()
+            | Self::VALID_SESSION.bits();
     }
 }
 
@@ -98,54 +112,6 @@ pub enum Permission {
     UpgradeFormat,
 }
 
-/// An authorized client
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, strum::Display)]
-#[serde(rename_all = "kebab-case", tag = "type")]
-pub enum Client {
-    /// Account client
-    #[strum(serialize = "account(id={account_id}, kind={account_kind}, public_key={public_key})")]
-    Account {
-        /// Account id
-        account_id: account::Id,
-        /// Account kind
-        account_kind: account::Kind,
-        /// Public key of account
-        public_key: PublicKey,
-    },
-    /// Service client
-    #[strum(serialize = "service(id={service_id}, service={service}, public_key={public_key})")]
-    Service {
-        /// Service id
-        service_id: String,
-        /// Service
-        service: Service,
-        /// Public key of service
-        public_key: PublicKey,
-    },
-}
-
-impl Client {
-    /// The client's [`PublicKey`]
-    pub fn public_key(&self) -> PublicKey {
-        match self {
-            Client::Account { public_key, .. } => *public_key,
-            Client::Service { public_key, .. } => *public_key,
-        }
-    }
-
-    /// The client's [`Role`], if any
-    pub fn role(&self) -> Option<Role> {
-        match self {
-            Client::Account { account_kind, .. } => matches!(account_kind, account::Kind::Admin).then_some(Role::Admin),
-            Client::Service { service, .. } => Some(match service {
-                Service::Summit => Role::Hub,
-                Service::Avalanche => Role::Builder,
-                Service::Vessel => Role::RepositoryManager,
-            }),
-        }
-    }
-}
-
 /// A unique service which is allowed to authorize
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AuthorizedService {
@@ -162,3 +128,33 @@ pub struct AuthorizedService {
 /// If the same [`PublicKey`] is added, it will overwrite any
 /// previous service entry.
 pub type AuthorizedServices = HashMap<PublicKey, AuthorizedService>;
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_required_flags() {
+        const REQUIRED_FLAGS: Flags = Flags::SESSION_ACCESS;
+
+        let valid = [
+            Flags::NOT_EXPIRED | Flags::ACCESS_TOKEN | Flags::VALID_SESSION,
+            Flags::all(),
+        ];
+
+        let not_valid = [
+            Flags::empty(),
+            Flags::NO_AUTH,
+            Flags::SESSION_REFRESH,
+            Flags::all() & !Flags::VALID_SESSION,
+        ];
+
+        for actual in valid {
+            assert!(actual.contains(REQUIRED_FLAGS));
+        }
+
+        for actual in not_valid {
+            assert!(!actual.contains(REQUIRED_FLAGS));
+        }
+    }
+}

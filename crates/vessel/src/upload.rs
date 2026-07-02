@@ -6,7 +6,7 @@ use std::{
 use chrono::Utc;
 use futures_util::{Stream, TryStreamExt};
 use service::{
-    Service, Token, auth, crypto,
+    Service, Token, auth,
     grpc::proto::{
         common::{Collectable, collectable},
         summit::{builder_stream::BuildFinished, repository_manager_stream::RequestUploadToken},
@@ -42,15 +42,7 @@ pub fn upload_token(state: &State, request: &RequestUploadToken) -> Result<Strin
         jti: Some(hash),
         permissions: [auth::Permission::UploadPackage].into_iter().collect(),
         iss: Service::Vessel.name().to_owned(),
-        client: auth::Client::Service {
-            service_id: request.builder_id.clone(),
-            service: Service::Avalanche,
-            public_key: request
-                .builder_public_key
-                .clone()
-                .try_into()
-                .context(ParseBuilderPublicKeySnafu)?,
-        },
+        kind: token::Kind::SingleUse,
         purpose: token::Purpose::Authentication,
     })
     .sign(&state.service.key_pair)
@@ -158,8 +150,6 @@ async fn download_path(state_dir: &Path, hash: &str) -> Result<PathBuf, Error> {
 pub enum Error {
     #[snafu(display("Failed to sign upload token"))]
     SignUploadToken { source: token::Error },
-    #[snafu(display("Failed to parse builder public key"))]
-    ParseBuilderPublicKey { source: crypto::Error },
     #[snafu(display("Cannot import collectable type {kind:?}"))]
     InvalidCollectableKind { kind: collectable::Kind },
     #[snafu(display("Failed to create download directory"))]

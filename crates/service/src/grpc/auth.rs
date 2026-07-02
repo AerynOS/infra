@@ -1,5 +1,5 @@
 //! Grpc service enabling authentication
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use base64::Engine;
 use chrono::{DateTime, Utc};
@@ -9,10 +9,11 @@ use futures_util::{
 };
 use rand::Rng;
 use service_core::{
-    Service, Token,
-    auth::{self, AuthorizedService, AuthorizedServices},
+    Service, Session, Token,
+    auth::{self, AuthorizedServices},
     crypto::{self, EncodedPublicKey, EncodedSignature, KeyPair},
-    token::{self, VerifiedToken},
+    session::{self, ActiveSessions},
+    token,
 };
 use service_grpc::proto::auth::{
     AccountCredentials, Credentials, TokenResponse,
@@ -20,7 +21,6 @@ use service_grpc::proto::auth::{
     authenticate_stream, credentials,
 };
 use thiserror::Error;
-use tokio::sync::Mutex;
 use tonic::async_trait;
 use tracing::{debug, info_span};
 use tracing_futures::Instrument;
@@ -40,6 +40,7 @@ pub fn service(
     service: Service,
     db: Database,
     key_pair: KeyPair,
+    active_sessions: ActiveSessions,
     authorized_services: AuthorizedServices,
 ) -> ServiceServer {
     ServiceServer::new(AuthService {
@@ -47,8 +48,8 @@ pub fn service(
             service,
             db,
             key_pair,
+            active_sessions,
             authorized_services,
-            service_bearer_tokens: Default::default(),
         }),
     })
 }
@@ -58,9 +59,8 @@ struct State {
     service: Service,
     db: Database,
     key_pair: KeyPair,
+    active_sessions: ActiveSessions,
     authorized_services: AuthorizedServices,
-    /// Runtime lifetime bearer tokens for authorized services
-    service_bearer_tokens: Mutex<HashMap<AuthorizedService, String>>,
 }
 
 #[async_trait]
@@ -97,7 +97,7 @@ fn authenticate(
         },
         ChallengeSent {
             state: Arc<State>,
-            client: auth::Client,
+            client: session::Client,
             challenge: String,
         },
         Finished,
@@ -144,7 +144,7 @@ fn authenticate(
                                         Error::AccountLookup(username.clone(), encoded_public_key, error)
                                     })?;
 
-                            auth::Client::Account {
+                            session::Client::Account {
                                 account_id: account.id,
                                 account_kind: account.kind,
                                 public_key,
@@ -163,7 +163,7 @@ fn authenticate(
                                 _ => return Err(Error::NonAuthorizedService(service, public_key.encode())),
                             };
 
-                            auth::Client::Service {
+                            session::Client::Service {
                                 service_id: authorized_service.id,
                                 service: authorized_service.service,
                                 public_key,
@@ -220,35 +220,31 @@ fn authenticate(
                         .verify(challenge.as_bytes(), &signature)
                         .map_err(Error::InvalidSignature)?;
 
-                    let (bearer_token, expires_on) =
-                        create_token(&state.key_pair, state.service, &client, token::Purpose::Authorization)?;
-                    let (access_token, _) =
-                        create_token(&state.key_pair, state.service, &client, token::Purpose::Authentication)?;
+                    // Create a new session & provision tokens
+                    let session_id = session::Id::generate();
 
-                    match &client {
-                        auth::Client::Account { account_id, .. } => {
-                            let mut tx = state.db.begin().await?;
+                    let (bearer_token, expires_on) = create_token(
+                        &state.key_pair,
+                        state.service,
+                        session_id,
+                        &client,
+                        token::Purpose::Authorization,
+                    )?;
+                    let (access_token, _) = create_token(
+                        &state.key_pair,
+                        state.service,
+                        session_id,
+                        &client,
+                        token::Purpose::Authentication,
+                    )?;
 
-                            account::Token::set(&mut tx, *account_id, &bearer_token, expires_on)
-                                .await
-                                .map_err(Error::SaveAccountToken)?;
+                    debug!(%client, %session_id, "Authentication successful");
 
-                            tx.commit().await?;
-                        }
-                        auth::Client::Service {
-                            service_id, service, ..
-                        } => {
-                            state.service_bearer_tokens.lock().await.insert(
-                                AuthorizedService {
-                                    id: service_id.clone(),
-                                    service: *service,
-                                },
-                                bearer_token.clone(),
-                            );
-                        }
-                    }
-
-                    debug!(%client, "Authenticate successful");
+                    state.active_sessions.add(Session {
+                        id: session_id,
+                        client,
+                        expires: expires_on,
+                    });
 
                     Ok(Some((
                         authenticate_stream::Outgoing {
@@ -269,77 +265,39 @@ fn authenticate(
 
 #[tracing::instrument(skip_all)]
 async fn refresh_token(state: Arc<State>, request: tonic::Request<()>) -> Result<TokenResponse, Error> {
-    let request_token = request
+    // We've already validated we have non-expired bearer token
+
+    // Assuming we still have a non-revoked active session,
+    // we can safely refresh / extend it
+    let session = request
         .extensions()
-        .get::<VerifiedToken>()
+        .get::<Session>()
         .cloned()
-        .ok_or(Error::MissingRequestToken)?;
+        .ok_or(Error::NoActiveSesssionDuringRefresh)?;
 
-    let client = request_token.decoded.payload.client;
-
-    let bearer_token = match &client {
-        auth::Client::Account { account_id, .. } => {
-            let mut conn = state.db.acquire().await?;
-
-            account::Token::get(conn.as_mut(), *account_id)
-                .await
-                .map_err(Error::ReadAccountToken)?
-                .encoded
-        }
-        auth::Client::Service {
-            service_id, service, ..
-        } => {
-            let service = AuthorizedService {
-                id: service_id.clone(),
-                service: *service,
-            };
-
-            state
-                .service_bearer_tokens
-                .lock()
-                .await
-                .get(&service)
-                .ok_or(Error::NoIssuedServiceBearerToken)?
-                .clone()
-        }
-    };
-
-    if request_token.encoded != bearer_token {
-        return Err(Error::NotCurrentBearerToken);
-    }
-
-    // We've already validated it's not expired in auth middleware
     // Looks good! Let's issue a new pair
 
-    let (bearer_token, expires_on) =
-        create_token(&state.key_pair, state.service, &client, token::Purpose::Authorization)?;
-    let (access_token, _) = create_token(&state.key_pair, state.service, &client, token::Purpose::Authentication)?;
+    let (bearer_token, expires_on) = create_token(
+        &state.key_pair,
+        state.service,
+        session.id,
+        &session.client,
+        token::Purpose::Authorization,
+    )?;
+    let (access_token, _) = create_token(
+        &state.key_pair,
+        state.service,
+        session.id,
+        &session.client,
+        token::Purpose::Authentication,
+    )?;
 
-    match &client {
-        auth::Client::Account { account_id, .. } => {
-            let mut tx = state.db.begin().await?;
-
-            account::Token::set(&mut tx, *account_id, &bearer_token, expires_on)
-                .await
-                .map_err(Error::SaveAccountToken)?;
-
-            tx.commit().await?;
-        }
-        auth::Client::Service {
-            service_id, service, ..
-        } => {
-            state.service_bearer_tokens.lock().await.insert(
-                AuthorizedService {
-                    id: service_id.clone(),
-                    service: *service,
-                },
-                bearer_token.clone(),
-            );
-        }
-    }
+    // Extend the session off the new expiration time
+    state.active_sessions.extend(&session.id, expires_on);
 
     debug!(
-        %client,
+        session_id = %session.id,
+        client = %session.client,
         "Refresh token successful",
     );
 
@@ -352,7 +310,8 @@ async fn refresh_token(state: Arc<State>, request: tonic::Request<()>) -> Result
 fn create_token(
     key_pair: &KeyPair,
     ourself: Service,
-    client: &auth::Client,
+    session_id: session::Id,
+    client: &session::Client,
     purpose: token::Purpose,
 ) -> Result<(String, DateTime<Utc>), Error> {
     let now = Utc::now();
@@ -364,10 +323,10 @@ fn create_token(
         exp: expires_on.timestamp(),
         iat: now.timestamp(),
         iss: ourself.name().to_owned(),
-        client: client.clone(),
         jti: None,
         purpose,
         permissions: auth_role.iter().flat_map(auth::Role::permissions).collect(),
+        kind: token::Kind::Session { session_id },
     })
     .sign(key_pair)
     .map_err(Error::SignToken)?;
@@ -378,15 +337,9 @@ fn create_token(
 /// Auth error
 #[derive(Debug, Error)]
 pub enum Error {
-    /// Service bearer token not issued
-    #[error("Service bearer token not issued")]
-    NoIssuedServiceBearerToken,
-    /// Request token doesn't match current bearer token
-    #[error("Request token doesn't match current bearer token")]
-    NotCurrentBearerToken,
-    /// Token missing from request
-    #[error("Token missing from request")]
-    MissingRequestToken,
+    /// No active session found during token refresh
+    #[error("No active session found during token refresh")]
+    NoActiveSesssionDuringRefresh,
     /// Malformed request
     #[error("Malformed request")]
     MalformedRequest,
@@ -428,13 +381,11 @@ pub enum Error {
 impl From<Error> for tonic::Status {
     fn from(error: Error) -> Self {
         match error {
-            Error::InvalidSignature(_)
+            Error::NoActiveSesssionDuringRefresh
+            | Error::InvalidSignature(_)
             | Error::AccountLookup(..)
-            | Error::NoIssuedServiceBearerToken
-            | Error::NotCurrentBearerToken
             | Error::NonAuthorizedService(..) => tonic::Status::unauthenticated(""),
-            Error::MissingRequestToken
-            | Error::MalformedRequest
+            Error::MalformedRequest
             | Error::SignToken(_)
             | Error::SaveAccountToken(_)
             | Error::ReadAccountToken(_)

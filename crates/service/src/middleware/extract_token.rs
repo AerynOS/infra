@@ -86,9 +86,9 @@ where
 
             let token_flags = flag_names(flags);
             let token_purpose = Some(token.decoded.payload.purpose.to_string());
-            let client = &token.decoded.payload.client;
+            let token_type = &token.decoded.payload.kind;
 
-            debug!(?token_flags, token_purpose, ?permissions, %client, "Auth parsed");
+            debug!(?token_flags, token_purpose, %token_type, ?permissions, "Auth parsed");
         }
 
         req.extensions_mut().insert(flags);
