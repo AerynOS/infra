@@ -4,15 +4,8 @@ package summit;
 
 import "common.proto";
 import "options.proto";
+import "vessel.proto";
 import "google/protobuf/empty.proto";
-
-message RetryRequest {
-  uint64 task_id = 1;
-}
-
-message CancelRequest {
-  uint64 task_id = 1;
-}
 
 message BuilderStream {
   message Incoming {
@@ -84,12 +77,14 @@ message RepositoryManagerStream {
       UploadToken upload_token = 2;
       uint64 import_succeeded = 3;
       uint64 import_failed = 4;
+      vessel.Command.Response command = 5;
     }
   }
 
   message Outgoing {
     oneof event {
       RequestUploadToken request_upload_token = 1;
+      vessel.Command.Request command = 2;
     }
   }
 
@@ -109,6 +104,21 @@ message RepositoryManagerStream {
   }
 }
 
+message Command {
+  message Retry {
+    uint64 task_id = 1;
+  }
+  
+  message Cancel {
+    uint64 task_id = 1;
+  }
+
+  message Response {
+    bool success = 1;
+    optional string error = 2;
+  }
+}
+
 service SummitService {
   // Bidirectional stream between summit & builder
   rpc Builder(stream BuilderStream.Incoming) returns (stream BuilderStream.Outgoing) {
@@ -123,25 +133,40 @@ service SummitService {
   }
 
   // Commands
-
-  rpc Retry(RetryRequest) returns (google.protobuf.Empty) {
+  rpc Retry(Command.Retry) returns (Command.Response) {
     option (options.flags) = "SESSION_ACCESS";
     option (options.perm) = "RetryTask";
   }
-  rpc Cancel(CancelRequest) returns (google.protobuf.Empty) {
+  rpc Cancel(Command.Cancel) returns (Command.Response) {
     option (options.flags) = "SESSION_ACCESS";
     option (options.perm) = "CancelTask";
   }
-  rpc Refresh(google.protobuf.Empty) returns (google.protobuf.Empty) {
+  rpc Refresh(google.protobuf.Empty) returns (Command.Response) {
     option (options.flags) = "SESSION_ACCESS";
     option (options.perm) = "Refresh";
   }
-  rpc Pause(google.protobuf.Empty) returns (google.protobuf.Empty) {
+  rpc Pause(google.protobuf.Empty) returns (Command.Response) {
     option (options.flags) = "SESSION_ACCESS";
     option (options.perm) = "Pause";
   }
-  rpc Resume(google.protobuf.Empty) returns (google.protobuf.Empty) {
+  rpc Resume(google.protobuf.Empty) returns (Command.Response) {
     option (options.flags) = "SESSION_ACCESS";
     option (options.perm) = "Resume";
+  }
+  rpc UpdateStream(vessel.Command.UpdateStream) returns (Command.Response) {
+    option (options.flags) = "SESSION_ACCESS";
+    option (options.perm) = "UpdateStream";
+  }
+  rpc AddTag(vessel.Command.AddTag) returns (Command.Response) {
+    option (options.flags) = "SESSION_ACCESS";
+    option (options.perm) = "AddTag";
+  }
+  rpc RemoveTag(vessel.Command.RemoveTag) returns (Command.Response) {
+    option (options.flags) = "SESSION_ACCESS";
+    option (options.perm) = "RemoveTag";
+  }
+  rpc UpgradeFormat(vessel.Command.FormatUpgrade) returns (Command.Response) {
+    option (options.flags) = "SESSION_ACCESS";
+    option (options.perm) = "UpgradeFormat";
   }
 }
