@@ -9,7 +9,7 @@ pub enum Service {
     Summit,
     /// Builder service
     Avalanche,
-    /// Respository manager service
+    /// Repository manager service
     Vessel,
 }
 

@@ -142,7 +142,7 @@ impl VerifiedToken {
     }
 }
 
-/// A deocded token that hasn't been verified
+/// A decoded token that hasn't been verified
 #[derive(Debug, Clone)]
 pub struct UnverifiedToken {
     /// Encoded token string
