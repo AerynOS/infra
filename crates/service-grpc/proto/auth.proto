@@ -72,6 +72,6 @@ service AuthService {
     option (options.flags) = "NO_AUTH";
   }
   rpc RefreshToken(google.protobuf.Empty) returns (TokenResponse) {
-    option (options.flags) = "BEARER_TOKEN | NOT_EXPIRED";
+    option (options.flags) = "SESSION_REFRESH";
   }
 }

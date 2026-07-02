@@ -4,6 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use service_core::session::ActiveSessions;
 use thiserror::Error;
 use tokio::fs;
 use tracing::debug;
@@ -29,6 +30,8 @@ pub struct State {
     pub service_db: Database,
     /// Key pair used by the service
     pub key_pair: KeyPair,
+    /// Active sessions, if auth service is enabled
+    pub active_sessions: ActiveSessions,
 }
 
 impl State {
@@ -75,6 +78,7 @@ impl State {
             db_dir,
             service_db,
             key_pair,
+            active_sessions: ActiveSessions::default(),
         })
     }
 

@@ -30,8 +30,6 @@ pub async fn upload(state: State, build: BuildFinished, token: String, uri: &str
     let mut header = BytesMut::new();
     build.encode(&mut header).context("encode header")?;
 
-    let signature = state.key_pair.sign(&header);
-
     let mut client = VesselServiceClient::connect_with_token(uri.parse().context("invalid vessel uri")?, None, &token)
         .await
         .context("connect vessel client")?;
@@ -46,12 +44,6 @@ pub async fn upload(state: State, build: BuildFinished, token: String, uri: &str
 
     sender
         .send(UploadRequest { chunk: header.into() })
-        .await
-        .context("send header")?;
-    sender
-        .send(UploadRequest {
-            chunk: signature.to_vec(),
-        })
         .await
         .context("send header")?;
 

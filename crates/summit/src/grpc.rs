@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use http::Extensions;
 use service::{
-    Service, auth,
+    Service, Session,
     crypto::PublicKey,
     grpc::{
         self,
@@ -13,7 +13,7 @@ use service::{
             summit_service_server::{SummitService as GrpcSummitService, SummitServiceServer},
         },
     },
-    token::VerifiedToken,
+    session,
 };
 use snafu::{ResultExt, Snafu};
 use tokio::{
@@ -119,14 +119,11 @@ impl GrpcSummitService for SummitService {
     )
 )]
 async fn retry(state: Arc<State>, request: tonic::Request<RetryRequest>) -> Result<(), Error> {
-    let token = request
-        .extensions()
-        .get::<VerifiedToken>()
-        .cloned()
-        .ok_or(Error::MissingRequestToken)?;
+    let session = request.extensions().get::<Session>().ok_or(Error::NoActiveSession)?;
 
     info!(
-        client = %token.decoded.payload.client,
+        session_id = %session.id,
+        client = %session.client,
         "Retry task"
     );
 
@@ -144,14 +141,11 @@ async fn retry(state: Arc<State>, request: tonic::Request<RetryRequest>) -> Resu
     )
 )]
 async fn cancel(state: Arc<State>, request: tonic::Request<CancelRequest>) -> Result<(), Error> {
-    let token = request
-        .extensions()
-        .get::<VerifiedToken>()
-        .cloned()
-        .ok_or(Error::MissingRequestToken)?;
+    let session = request.extensions().get::<Session>().ok_or(Error::NoActiveSession)?;
 
     info!(
-        client = %token.decoded.payload.client,
+        session_id = %session.id,
+        client = %session.client,
         "Cancel task"
     );
 
@@ -164,14 +158,11 @@ async fn cancel(state: Arc<State>, request: tonic::Request<CancelRequest>) -> Re
 
 #[tracing::instrument(skip_all)]
 async fn refresh(state: Arc<State>, request: tonic::Request<()>) -> Result<(), Error> {
-    let token = request
-        .extensions()
-        .get::<VerifiedToken>()
-        .cloned()
-        .ok_or(Error::MissingRequestToken)?;
+    let session = request.extensions().get::<Session>().ok_or(Error::NoActiveSession)?;
 
     info!(
-        client = %token.decoded.payload.client,
+        session_id = %session.id,
+        client = %session.client,
         "Refresh"
     );
 
@@ -182,14 +173,11 @@ async fn refresh(state: Arc<State>, request: tonic::Request<()>) -> Result<(), E
 
 #[tracing::instrument(skip_all)]
 async fn pause(state: Arc<State>, request: tonic::Request<()>) -> Result<(), Error> {
-    let token = request
-        .extensions()
-        .get::<VerifiedToken>()
-        .cloned()
-        .ok_or(Error::MissingRequestToken)?;
+    let session = request.extensions().get::<Session>().ok_or(Error::NoActiveSession)?;
 
     info!(
-        client = %token.decoded.payload.client,
+        session_id = %session.id,
+        client = %session.client,
         "Pause"
     );
 
@@ -200,14 +188,11 @@ async fn pause(state: Arc<State>, request: tonic::Request<()>) -> Result<(), Err
 
 #[tracing::instrument(skip_all)]
 async fn resume(state: Arc<State>, request: tonic::Request<()>) -> Result<(), Error> {
-    let token = request
-        .extensions()
-        .get::<VerifiedToken>()
-        .cloned()
-        .ok_or(Error::MissingRequestToken)?;
+    let session = request.extensions().get::<Session>().ok_or(Error::NoActiveSession)?;
 
     info!(
-        client = %token.decoded.payload.client,
+        session_id = %session.id,
+        client = %session.client,
         "Resume"
     );
 
@@ -225,18 +210,15 @@ async fn builder(
 ) -> Result<(), Error> {
     let span = Span::current();
 
-    let token = extensions
-        .get::<VerifiedToken>()
-        .cloned()
-        .ok_or(Error::MissingRequestToken)?;
+    let session = extensions.get::<Session>().cloned().ok_or(Error::NoActiveSession)?;
 
-    let (builder_id, public_key) = match token.decoded.payload.client {
-        auth::Client::Service {
+    let (builder_id, public_key) = match session.client {
+        session::Client::Service {
             service_id: id,
             public_key,
             service: Service::Avalanche,
         } => (id, public_key),
-        client => return Err(Error::InvalidTokenClient { client }),
+        client => return Err(Error::InvalidSessionClient { client }),
     };
 
     // Verify this is an actively configured builder. This will reject
@@ -384,18 +366,15 @@ async fn repository_manager(
 ) -> Result<(), Error> {
     let span = Span::current();
 
-    let token = extensions
-        .get::<VerifiedToken>()
-        .cloned()
-        .ok_or(Error::MissingRequestToken)?;
+    let session = extensions.get::<Session>().cloned().ok_or(Error::NoActiveSession)?;
 
-    let (repository_manager_id, public_key) = match token.decoded.payload.client {
-        auth::Client::Service {
+    let (repository_manager_id, public_key) = match session.client {
+        session::Client::Service {
             service_id: id,
             public_key,
             service: Service::Vessel,
         } => (id, public_key),
-        client => return Err(Error::InvalidTokenClient { client }),
+        client => return Err(Error::InvalidSessionClient { client }),
     };
 
     // Verify this is the actively configured repo manager. This will reject
@@ -484,10 +463,10 @@ async fn repository_manager(
 
 #[derive(Debug, Snafu)]
 enum Error {
-    #[snafu(display("Token missing from request"))]
-    MissingRequestToken,
-    #[snafu(display("Invalid token client: {client}"))]
-    InvalidTokenClient { client: auth::Client },
+    #[snafu(display("No active session"))]
+    NoActiveSession,
+    #[snafu(display("Invalid session client: {client}"))]
+    InvalidSessionClient { client: session::Client },
     #[snafu(display("Unconfigured builder {builder_id} with public key {public_key}"))]
     UnconfiguredBuilder { builder_id: String, public_key: PublicKey },
     #[snafu(display("Unconfigured repository manager {repository_manager_id} with public key {public_key}"))]
@@ -512,10 +491,10 @@ enum Error {
 impl From<Error> for tonic::Status {
     fn from(error: Error) -> Self {
         match error {
-            Error::MissingRequestToken
-            | Error::InvalidTokenClient { .. }
+            Error::NoActiveSession
             | Error::UnconfiguredBuilder { .. }
             | Error::UnconfiguredRepositoryManager { .. } => tonic::Status::unauthenticated(""),
+            Error::InvalidSessionClient { .. } => tonic::Status::permission_denied(""),
             Error::BuilderStream { source } => source,
             Error::CreateLogFile { .. }
             | Error::WriteLogFile { .. }

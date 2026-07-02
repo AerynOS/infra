@@ -59,26 +59,29 @@ message UpgradeFormatLegacy {
 
 service VesselService {
   rpc Upload(stream UploadRequest) returns (google.protobuf.Empty) {
+    // Single use token / not session scoped
     option (options.flags) = "ACCESS_TOKEN | NOT_EXPIRED";
     option (options.perm) = "UploadPackage";
   }
 
   // Commands
+  // TODO: Move to summit & send them over stream so we can
+  // remove auth service from vessel
   
   rpc UpdateStream(UpdateStreamRequest) returns (CommandResponse) {
-    option (options.flags) = "ACCESS_TOKEN | NOT_EXPIRED";
+    option (options.flags) = "SESSION_ACCESS";
     option (options.perm) = "UpdateStream";
   }
   rpc AddTag(AddTagRequest) returns (CommandResponse) {
-    option (options.flags) = "ACCESS_TOKEN | NOT_EXPIRED";
+    option (options.flags) = "SESSION_ACCESS";
     option (options.perm) = "AddTag";
   }
   rpc RemoveTag(RemoveTagRequest) returns (CommandResponse) {
-    option (options.flags) = "ACCESS_TOKEN | NOT_EXPIRED";
+    option (options.flags) = "SESSION_ACCESS";
     option (options.perm) = "RemoveTag";
   }
   rpc UpgradeFormat(UpgradeFormatRequest) returns (CommandResponse) {
-    option (options.flags) = "ACCESS_TOKEN | NOT_EXPIRED";
+    option (options.flags) = "SESSION_ACCESS";
     option (options.perm) = "UpgradeFormat";
   }
 }
