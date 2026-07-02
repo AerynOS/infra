@@ -67,7 +67,7 @@ async fn main() -> Result<()> {
     } = Args::parse();
 
     if version {
-        println!("summit {}", buildinfo::get_full_version());
+        println!("summit {}", buildinfo::full_version());
         return Ok(());
     }
 
@@ -77,10 +77,10 @@ async fn main() -> Result<()> {
     service::tracing::init(&config.tracing);
 
     info!(
-        version = buildinfo::get_version(),
-        git_ref = buildinfo::get_git_full_hash(),
-        git_dirty = !buildinfo::get_git_dirty().is_empty(),
-        build_time = buildinfo::get_build_time(),
+        version = buildinfo::version(),
+        git_ref = buildinfo::git_sha(),
+        git_dirty = buildinfo::git_dirty(),
+        build_time = buildinfo::build_time(),
         "summit started"
     );
 
