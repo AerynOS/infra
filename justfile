@@ -1,40 +1,42 @@
-export COMPOSE_FILE := "./test/docker-compose.yaml"
+export PODMAN_COMPOSE_PROVIDER := "podman-compose"
+export PODMAN_COMPOSE_WARNING_LOGS := "false"
+export COMPOSE_FILE := "./test/compose.yaml"
 
 [private]
 help:
 	@just --list
 
 [private]
-docker-build target profile *ARGS:
-	@docker build . -t serpentos/{{target}}:{{profile}} --target {{target}} --build-arg RUST_PROFILE={{profile}} {{ARGS}}
+podman-build target profile *ARGS:
+	@podman build . -t serpentos/{{target}}:{{profile}} --target {{target}} --build-arg RUST_PROFILE={{profile}} {{ARGS}}
 
-# Build docker containers
-build profile="infratest" *ARGS: (docker-build "summit" profile ARGS) (docker-build "avalanche" profile ARGS) (docker-build "vessel" profile ARGS)
+# Build podman containers
+build profile="infratest" *ARGS: (podman-build "summit" profile ARGS) (podman-build "avalanche" profile ARGS) (podman-build "vessel" profile ARGS)
 
-# Bring up docker containers
+# Bring up podman containers
 up *ARGS: (_up "infratest" ARGS)
 
-# Bring up docker containers in release mode
+# Bring up podman containers in release mode
 up-release *ARGS: (_up "release" ARGS)
 
-_up profile *ARGS: (build profile)
-	RUST_PROFILE={{profile}} docker compose up -d {{ARGS}}
+_up profile *ARGS:
+	RUST_PROFILE={{profile}} podman compose up -d {{ARGS}}
 
-# Follow logs of docker containers
+# Follow logs of podman containers
 logs *ARGS:
-	docker compose logs --follow {{ARGS}}
+	podman compose logs --follow {{ARGS}}
 
-# Restart docker containers
+# Restart podman containers
 restart *ARGS:
-	docker compose restart {{ARGS}}
+	podman compose restart {{ARGS}}
 
-# Stop docker containers
+# Stop podman containers
 stop *ARGS:
-	docker compose stop {{ARGS}}
+	podman compose stop {{ARGS}}
 
-# Bring down docker containers
+# Bring down podman containers
 down *ARGS:
-	docker compose down {{ARGS}}
+	podman compose down {{ARGS}}
 
 # Quickly view summit front-end changes (DX feature)
 summit-dev *ARGS:
