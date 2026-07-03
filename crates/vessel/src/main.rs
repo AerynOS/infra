@@ -3,7 +3,6 @@ use std::{net::IpAddr, path::PathBuf};
 use channel::DEFAULT_CHANNEL;
 use clap::Parser;
 use color_eyre::eyre::Context;
-use service::auth::AuthorizedServices;
 use service::{Server, Service, buildinfo, error};
 use tracing::{error, info};
 
@@ -20,8 +19,6 @@ mod state;
 mod stream;
 mod upload;
 mod worker;
-
-pub const SERVICE: Service = Service::Vessel;
 
 pub type Result<T, E = color_eyre::eyre::Error> = std::result::Result<T, E>;
 
@@ -69,23 +66,14 @@ async fn main() -> Result<()> {
 
     let (worker_sender, worker_events, worker_task) = worker::run(state.clone()).await?;
 
-    Server::new(SERVICE, &state.service, config.admin.clone())
+    Server::new(Service::Vessel, &state.service, config.admin.clone())
         .with_task("worker", worker_task)
-        .with_task("stream", stream::run(state.clone(), config.clone(), worker_events))
+        .with_task(
+            "stream",
+            stream::run(state.clone(), config.clone(), worker_sender.clone(), worker_events),
+        )
         .with_grpc((host, grpc_port), |routes| {
-            routes
-                .add_service(grpc::auth_service(
-                    SERVICE,
-                    state.service_db().clone(),
-                    state.service.key_pair.clone(),
-                    state.service.active_sessions.clone(),
-                    // No services auth w/ vessel, only admin accounts
-                    //
-                    // TODO: route all vessel commands via
-                    // summit -> stream
-                    AuthorizedServices::default(),
-                ))
-                .add_service(grpc::vessel_service(state.service.clone(), worker_sender));
+            routes.add_service(grpc::vessel_service(state.service.clone(), worker_sender));
         })
         .start()
         .await?;

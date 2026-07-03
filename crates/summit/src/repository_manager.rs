@@ -1,12 +1,19 @@
+use std::collections::HashMap;
+
 use color_eyre::eyre::{Context as _, OptionExt as _, Result};
 use http::Uri;
 use serde::Deserialize;
 use service::{
     crypto::PublicKey,
-    grpc::proto::{common::Collectable, summit::repository_manager_stream},
+    grpc::proto::{
+        common::Collectable,
+        summit::repository_manager_stream,
+        vessel::command::{self, inner::Command},
+    },
 };
-use tokio::sync::mpsc;
-use tracing::{error, info};
+use tokio::sync::{mpsc, oneshot};
+use tracing::{error, info, warn};
+use uuid::Uuid;
 
 use crate::task;
 
@@ -28,6 +35,11 @@ pub enum Message {
     ImportFailed {
         task_id: task::Id,
     },
+    Command {
+        command: Command,
+        resp: oneshot::Sender<command::Response>,
+    },
+    CommandResponse(command::Response),
 }
 
 #[derive(Debug)]
@@ -59,6 +71,7 @@ pub struct Config {
 pub struct RepositoryManager {
     pub config: Config,
     connection: Option<Connection>,
+    pending_commands: HashMap<String, oneshot::Sender<command::Response>>,
 }
 
 impl RepositoryManager {
@@ -66,6 +79,7 @@ impl RepositoryManager {
         Self {
             config,
             connection: None,
+            pending_commands: HashMap::new(),
         }
     }
 
@@ -140,6 +154,61 @@ impl RepositoryManager {
                 info!(%task_id, "Import failed");
                 Some(Event::ImportFailed { task_id })
             }
+            Message::Command { command, resp } => {
+                let request_id = Uuid::new_v4().to_string();
+
+                match &self.connection {
+                    Some(connection) => {
+                        if connection
+                            .handle
+                            .sender
+                            .send(repository_manager_stream::Outgoing {
+                                event: Some(repository_manager_stream::outgoing::Event::Command(command::Request {
+                                    request_id: request_id.clone(),
+                                    command: Some(command::Inner { command: Some(command) }),
+                                })),
+                            })
+                            .await
+                            .is_err()
+                        {
+                            let _ = resp.send(command::Response {
+                                request_id,
+                                success: false,
+                                error: Some("internal error".to_owned()),
+                            });
+
+                            return None;
+                        }
+
+                        self.pending_commands.insert(request_id, resp);
+
+                        None
+                    }
+                    None => {
+                        warn!("Repository manager disconnected while forwarding command");
+
+                        let _ = resp.send(command::Response {
+                            request_id,
+                            success: false,
+                            error: Some("disconnected".to_owned()),
+                        });
+
+                        None
+                    }
+                }
+            }
+            Message::CommandResponse(resp) => match self.pending_commands.remove(&resp.request_id) {
+                Some(sender) => {
+                    let _ = sender.send(resp);
+
+                    None
+                }
+                None => {
+                    warn!("Pending command missing after response received");
+
+                    None
+                }
+            },
         }
     }
 }
