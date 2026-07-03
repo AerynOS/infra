@@ -10,8 +10,10 @@ pub struct State {
 }
 
 impl State {
-    pub async fn load(root: impl AsRef<Path>) -> Result<Self> {
-        let service = service::State::load(root).await.context("load service state")?;
+    pub async fn load(root: impl AsRef<Path>, privkey_path: &Path) -> Result<Self> {
+        let service = service::State::load(root, privkey_path)
+            .await
+            .context("load service state")?;
 
         let meta_db = meta::Database::new(service.db_dir.join("meta").to_string_lossy().as_ref())
             .context("failed to open meta database")?;

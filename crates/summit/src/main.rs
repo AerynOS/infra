@@ -75,6 +75,11 @@ async fn main() -> Result<()> {
     let config_path = config.unwrap_or_else(|| root.join("config.toml"));
     let config = Config::load(&config_path).await?;
 
+    let privkey_path = config
+        .privkey_path
+        .clone()
+        .unwrap_or_else(|| config_path.with_file_name(".privkey"));
+
     service::tracing::init(&config.tracing);
 
     info!(
@@ -88,7 +93,9 @@ async fn main() -> Result<()> {
     let (manager_events_tx, manager_events_rx) = mpsc::channel(100);
     let (sse_events_tx, sse_events_rx) = broadcast::channel(100);
 
-    let state = State::load(root, sse_events_rx).await.context("load state")?;
+    let state = State::load(root, &privkey_path, sse_events_rx)
+        .await
+        .context("load state")?;
 
     let authorized_services = config.authorized_services();
 

@@ -1,4 +1,7 @@
-use std::{iter, path::Path};
+use std::{
+    iter,
+    path::{Path, PathBuf},
+};
 
 use color_eyre::eyre::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -14,6 +17,8 @@ use crate::{builder, repository_manager};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
+    #[serde(rename = "privkey")]
+    pub privkey_path: Option<PathBuf>,
     pub admin: Admin,
     #[serde(default)]
     pub tracing: tracing::Config,

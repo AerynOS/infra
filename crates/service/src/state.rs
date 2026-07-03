@@ -37,7 +37,7 @@ pub struct State {
 impl State {
     /// Load state from the provided path. If no keypair and/or database exist, they will be created.
     #[tracing::instrument(name = "load_state", skip_all)]
-    pub async fn load(root: impl AsRef<Path>) -> Result<Self, Error> {
+    pub async fn load(root: impl AsRef<Path>, key_path: &Path) -> Result<Self, Error> {
         let root = fs::canonicalize(root).await.map_err(Error::CanonicalizeRoot)?;
 
         let state_dir = root.join("state");
@@ -52,7 +52,6 @@ impl State {
         let service_db = Database::new(&service_db_path).await?;
         debug!(path = ?service_db_path, "Database opened");
 
-        let key_path = state_dir.join(".privkey");
         let key_pair = if !key_path.exists() {
             let key_pair = KeyPair::generate();
             debug!(key_pair = %key_pair.public_key(), "Keypair generated");

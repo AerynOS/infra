@@ -38,7 +38,13 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    let config = Config::load(config.unwrap_or_else(|| root.join("config.toml"))).await?;
+    let config_path = config.unwrap_or_else(|| root.join("config.toml"));
+    let config = Config::load(&config_path).await?;
+
+    let privkey_path = config
+        .privkey_path
+        .clone()
+        .unwrap_or_else(|| config_path.with_file_name(".privkey"));
 
     service::tracing::init(&config.tracing);
 
@@ -50,7 +56,7 @@ async fn main() -> Result<()> {
         "vessel started"
     );
 
-    let state = State::load(root).await.context("load state")?;
+    let state = State::load(root, &privkey_path).await.context("load state")?;
 
     migration::run_all(&state).await.context("run migrations")?;
 
