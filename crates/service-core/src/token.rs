@@ -9,6 +9,7 @@ use thiserror::Error;
 use crate::{
     auth,
     crypto::{self, KeyPair, PublicKey},
+    session,
 };
 
 pub use jsonwebtoken::Header;
@@ -193,6 +194,22 @@ impl Validation {
     }
 }
 
+/// [`Token`] type
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, strum::Display)]
+#[serde(rename_all = "kebab-case", tag = "type")]
+pub enum Kind {
+    /// Token granted to a session
+    #[strum(serialize = "session({session_id})")]
+    Session {
+        /// Session id
+        #[serde(rename = "sid")]
+        session_id: session::Id,
+    },
+    /// Single use token
+    #[strum(serialize = "single-use")]
+    SingleUse,
+}
+
 /// Payload of a [`Token`] which defines various claims
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Payload {
@@ -210,8 +227,9 @@ pub struct Payload {
     /// Permissions granted to the holder
     #[serde(default, rename = "per")]
     pub permissions: HashSet<auth::Permission>,
-    /// The client granted this token
-    pub client: auth::Client,
+    /// The token type & related data
+    #[serde(flatten)]
+    pub kind: Kind,
 }
 
 /// Purpose of the token
@@ -267,8 +285,6 @@ mod test {
     use chrono::{Duration, Utc};
     use jsonwebtoken::Algorithm;
 
-    use crate::{Service, auth};
-
     use super::*;
 
     #[test]
@@ -284,17 +300,10 @@ mod test {
                 exp: one_hour.timestamp(),
                 iat: now.timestamp(),
                 iss: "test".into(),
-                jti: None,
+                jti: Some("foo".into()),
                 purpose: Purpose::Authorization,
                 permissions: Default::default(),
-                client: auth::Client::Service {
-                    service_id: "test".to_owned(),
-                    service: Service::Avalanche,
-                    public_key: "QRpUVLRvtWVfRUTlnen059e5iddhLyStsuzoE8C9yNs"
-                        .to_owned()
-                        .try_into()
-                        .expect("valid public key"),
-                },
+                kind: Kind::SingleUse,
             },
         };
 

@@ -1,6 +1,5 @@
 //! Manage data for admin, user, bot & service accounts
 
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use thiserror::Error;
@@ -121,68 +120,6 @@ impl Account {
         .await?;
 
         Ok(())
-    }
-}
-
-/// [`Account`] bearer token provisioned for the account after authentication
-#[derive(Debug, Clone, FromRow)]
-pub struct Token {
-    /// Encoded bearer token string
-    pub encoded: String,
-    /// Token expiration time
-    pub expiration: DateTime<Utc>,
-}
-
-impl Token {
-    /// Set the account's bearer token & expiration
-    pub async fn set(
-        tx: &mut database::Transaction,
-        id: Id,
-        encoded: impl ToString,
-        expiration: DateTime<Utc>,
-    ) -> Result<(), Error> {
-        sqlx::query(
-            "
-            INSERT INTO account_token
-            (
-              account_id,
-              encoded,
-              expiration
-            )
-            VALUES (?,?,?)
-            ON CONFLICT(account_id) DO UPDATE SET
-              encoded = excluded.encoded,
-              expiration = excluded.expiration;
-            ",
-        )
-        .bind(id.as_ref())
-        .bind(encoded.to_string())
-        .bind(expiration)
-        .execute(tx.as_mut())
-        .await?;
-
-        Ok(())
-    }
-
-    /// Get the account token for [`Id`] from the provided [`Database`]
-    pub async fn get<'a, T>(conn: &'a mut T, id: Id) -> Result<Token, Error>
-    where
-        &'a mut T: database::Executor<'a>,
-    {
-        let token: Token = sqlx::query_as(
-            "
-            SELECT
-              encoded,
-              expiration
-            FROM account_token
-            WHERE account_id = ?;
-            ",
-        )
-        .bind(id.as_ref())
-        .fetch_one(conn)
-        .await?;
-
-        Ok(token)
     }
 }
 

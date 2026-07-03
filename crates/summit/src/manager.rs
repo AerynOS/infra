@@ -609,7 +609,7 @@ impl Manager {
 
                     if let Err(err) = self
                         .repository_manager
-                        .request_upload_token(task_id, collectables, builder)
+                        .request_upload_token(task_id, collectables)
                         .await
                     {
                         error!(

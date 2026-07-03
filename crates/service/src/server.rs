@@ -124,6 +124,10 @@ impl Server<'_> {
         if let Some(addr) = self.http_addr {
             let router = self
                 .http_router
+                // Layers are defined inner -> outer
+                .layer(middleware::ExtractActiveSession {
+                    active_sessions: self.state.active_sessions.clone(),
+                })
                 .layer(self.extract_token.clone())
                 .layer(middleware::Log);
 
@@ -143,9 +147,13 @@ impl Server<'_> {
                 // https://grpc.io/docs/guides/keepalive/#keepalive-configuration-specification
                 .http2_keepalive_interval(Some(Duration::from_secs(60 * 60 * 2)))
                 .http2_keepalive_timeout(Some(Duration::from_secs(20)))
+                // Layers are defined outer to inner (reverse from axum router)
                 .layer(middleware::Log)
                 .layer(middleware::GrpcMethod)
                 .layer(self.extract_token)
+                .layer(middleware::ExtractActiveSession {
+                    active_sessions: self.state.active_sessions.clone(),
+                })
                 .add_routes(self.grpc_router);
 
             runner = runner.with_task("grpc server", async move {

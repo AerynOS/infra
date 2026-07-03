@@ -8,7 +8,7 @@ use service::{
 use tokio::sync::mpsc;
 use tracing::{error, info};
 
-use crate::{Builder, task};
+use crate::task;
 
 #[derive(Debug)]
 pub enum Message {
@@ -69,13 +69,8 @@ impl RepositoryManager {
         }
     }
 
-    #[tracing::instrument(skip_all, fields(%task_id, builder = builder.config.id))]
-    pub async fn request_upload_token(
-        &self,
-        task_id: task::Id,
-        collectables: Vec<Collectable>,
-        builder: &Builder,
-    ) -> Result<()> {
+    #[tracing::instrument(skip_all, fields(%task_id))]
+    pub async fn request_upload_token(&self, task_id: task::Id, collectables: Vec<Collectable>) -> Result<()> {
         let connection = self
             .connection
             .as_ref()
@@ -89,8 +84,6 @@ impl RepositoryManager {
                     repository_manager_stream::RequestUploadToken {
                         task_id: i64::from(task_id) as u64,
                         collectables,
-                        builder_id: builder.config.id.clone(),
-                        builder_public_key: builder.config.public_key.to_string(),
                     },
                 )),
             })
