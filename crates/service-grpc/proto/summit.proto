@@ -100,8 +100,6 @@ message RepositoryManagerStream {
   message RequestUploadToken {
     uint64 task_id = 1;
     repeated common.Collectable collectables = 2;
-    string builder_id = 3;
-    string builder_public_key = 4;
   }
   
   message UploadToken {
@@ -114,36 +112,36 @@ message RepositoryManagerStream {
 service SummitService {
   // Bidirectional stream between summit & builder
   rpc Builder(stream BuilderStream.Incoming) returns (stream BuilderStream.Outgoing) {
-    option (options.flags) = "ACCESS_TOKEN | NOT_EXPIRED";
+    option (options.flags) = "SESSION_ACCESS";
     option (options.perm) = "ConnectBuilderStream";
   }
 
   // Bidirectional stream between summit & repository manager
   rpc RepositoryManager(stream RepositoryManagerStream.Incoming) returns (stream RepositoryManagerStream.Outgoing) {
-    option (options.flags) = "ACCESS_TOKEN | NOT_EXPIRED";
+    option (options.flags) = "SESSION_ACCESS";
     option (options.perm) = "ConnectRepositoryManagerStream";
   }
 
   // Commands
 
   rpc Retry(RetryRequest) returns (google.protobuf.Empty) {
-    option (options.flags) = "ACCESS_TOKEN | NOT_EXPIRED";
+    option (options.flags) = "SESSION_ACCESS";
     option (options.perm) = "RetryTask";
   }
   rpc Cancel(CancelRequest) returns (google.protobuf.Empty) {
-    option (options.flags) = "ACCESS_TOKEN | NOT_EXPIRED";
+    option (options.flags) = "SESSION_ACCESS";
     option (options.perm) = "CancelTask";
   }
   rpc Refresh(google.protobuf.Empty) returns (google.protobuf.Empty) {
-    option (options.flags) = "ACCESS_TOKEN | NOT_EXPIRED";
+    option (options.flags) = "SESSION_ACCESS";
     option (options.perm) = "Refresh";
   }
   rpc Pause(google.protobuf.Empty) returns (google.protobuf.Empty) {
-    option (options.flags) = "ACCESS_TOKEN | NOT_EXPIRED";
+    option (options.flags) = "SESSION_ACCESS";
     option (options.perm) = "Pause";
   }
   rpc Resume(google.protobuf.Empty) returns (google.protobuf.Empty) {
-    option (options.flags) = "ACCESS_TOKEN | NOT_EXPIRED";
+    option (options.flags) = "SESSION_ACCESS";
     option (options.perm) = "Resume";
   }
 }

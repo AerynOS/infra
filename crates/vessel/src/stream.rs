@@ -136,8 +136,7 @@ async fn connect_inner(
 
                             info!(
                                 task_id = request.task_id,
-                                builder_id = request.builder_id,
-                                "Upload token issued for builder"
+                                "Upload token issued for task"
                             );
                         },
                     }

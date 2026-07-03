@@ -121,6 +121,7 @@ async fn main() -> Result<()> {
                     SERVICE,
                     state.service_db().clone(),
                     state.service.key_pair.clone(),
+                    state.service.active_sessions.clone(),
                     authorized_services,
                 ))
                 .add_service(grpc::summit_service(&state, config, worker_sender));

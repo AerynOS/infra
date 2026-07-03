@@ -2,7 +2,7 @@
 //! Shared service code for AerynOS infrastructure
 
 pub use service_client as client;
-pub use service_core::{Service, Token, auth, crypto, token};
+pub use service_core::{Service, Session, Token, auth, crypto, session, token};
 
 pub use self::account::Account;
 pub use self::database::Database;
