@@ -14,7 +14,7 @@ services:
       - RUST_LOG
     volumes:
       - summit-state:/app/state
-      - ./summit/.privkey:/app/state/.privkey
+      - ./summit/.privkey:/app/.privkey
       - ./summit/config.toml:/app/config.toml
       - ./summit/seed.toml:/app/seed.toml
     ports:
@@ -37,7 +37,7 @@ services:
       - RUST_LOG
     volumes:
       - vessel-state:/app/state
-      - ./vessel/.privkey:/app/state/.privkey
+      - ./vessel/.privkey:/app/.privkey
       - ./vessel/config.toml:/app/config.toml
       - ./import:/import
     ports:
@@ -57,7 +57,7 @@ services:
       - RUST_LOG
     volumes:
       - avalanche-state:/app/state
-      - ./avalanche/.privkey:/app/state/.privkey
+      - ./avalanche/.privkey:/app/.privkey
       - ./avalanche/config.toml:/app/config.toml
     networks:
       infra-test:

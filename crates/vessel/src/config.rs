@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use color_eyre::eyre::{Context, Result};
 use http::Uri;
@@ -8,6 +8,8 @@ use tokio::fs;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
+    #[serde(rename = "privkey")]
+    pub privkey_path: Option<PathBuf>,
     #[serde(with = "http_serde::uri")]
     pub grpc_address: Uri,
     pub admin: Admin,

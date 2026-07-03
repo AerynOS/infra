@@ -19,9 +19,12 @@ pub struct State {
 impl State {
     pub async fn load(
         root: impl AsRef<Path>,
+        privkey_path: &Path,
         sse_receiver: broadcast::Receiver<route::SseEvent>,
     ) -> Result<Arc<State>> {
-        let service = service::State::load(root).await.context("load service state")?;
+        let service = service::State::load(root, privkey_path)
+            .await
+            .context("load service state")?;
 
         service
             .service_db
