@@ -5,9 +5,8 @@ use color_eyre::eyre::{Context, Result};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use sqlx::{Sqlite, SqliteConnection, prelude::FromRow, query::QueryAs, sqlite::SqliteArguments};
-use uuid::Uuid;
 
-use crate::{profile, project, repository, use_mock_data};
+use crate::{profile, project, repository, task::AllocatedBuilder, use_mock_data};
 
 use super::{Blocker, Id, Status, Task};
 
@@ -91,18 +90,18 @@ impl Params {
     fn where_clause(&self) -> String {
         let conditions = self
             .id
-            .map(|_| "task_id = ?".to_owned())
+            .map(|_| "t.task_id = ?".to_owned())
             .into_iter()
             .chain(self.statuses.as_ref().map(|statuses| {
                 let binds = ",?".repeat(statuses.len()).chars().skip(1).collect::<String>();
 
-                format!("status IN ({binds})")
+                format!("t.status IN ({binds})")
             }))
-            .chain(self.source_path.is_some().then(|| "source_path = ?".to_owned()))
+            .chain(self.source_path.is_some().then(|| "t.source_path = ?".to_owned()))
             .chain(
                 self.search_query
                     .is_some()
-                    .then(|| "description LIKE ? COLLATE NOCASE".to_owned()),
+                    .then(|| "t.description LIKE ? COLLATE NOCASE".to_owned()),
             )
             .join(" AND ");
 
@@ -115,60 +114,60 @@ impl Params {
 
     fn sort_order_clause(&self) -> &'static str {
         match (self.sort_field, self.sort_order) {
-            (None, _) => "ORDER BY added DESC, task_id DESC",
+            (None, _) => "ORDER BY t.added DESC, t.task_id DESC",
             (Some(SortField::Ended), Some(SortOrder::Asc)) => {
                 "ORDER BY
-                (ended IS NULL),
-                ended ASC,
-                added DESC,
-                task_id DESC"
+                (t.ended IS NULL),
+                t.ended ASC,
+                t.added DESC,
+                t.task_id DESC"
             }
             (Some(SortField::Ended), Some(SortOrder::Desc)) => {
                 "ORDER BY
-                (ended IS NULL),
-                ended DESC,
-                added DESC,
-                task_id DESC"
+                (t.ended IS NULL),
+                t.ended DESC,
+                t.added DESC,
+                t.task_id DESC"
             }
             (Some(SortField::Build), Some(SortOrder::Asc)) => {
                 "ORDER BY
                     (CASE
-                        WHEN started IS NULL OR ended IS NULL THEN 1
+                        WHEN t.started IS NULL OR t.ended IS NULL THEN 1
                         ELSE 0
                     END),
                     (CASE
-                        WHEN started IS NOT NULL AND ended IS NOT NULL
-                        THEN ended - started
+                        WHEN t.started IS NOT NULL AND t.ended IS NOT NULL
+                        THEN t.ended - t.started
                         ELSE NULL
                     END) ASC,
-                    added DESC,
-                    task_id DESC"
+                    t.added DESC,
+                    t.task_id DESC"
             }
             (Some(SortField::Build), Some(SortOrder::Desc)) => {
                 "ORDER BY
                     (CASE
-                        WHEN started IS NULL OR ended IS NULL THEN 1
+                        WHEN t.started IS NULL OR t.ended IS NULL THEN 1
                         ELSE 0
                     END),
                     (CASE
-                        WHEN started IS NOT NULL AND ended IS NOT NULL
-                        THEN ended - started
+                        WHEN t.started IS NOT NULL AND t.ended IS NOT NULL
+                        THEN t.ended - t.started
                         ELSE NULL
                     END) DESC,
-                    added DESC,
-                    task_id DESC"
+                    t.added DESC,
+                    t.task_id DESC"
             }
             (Some(SortField::Updated), Some(SortOrder::Asc)) => {
                 "ORDER BY
-                updated ASC,
-                task_id DESC"
+                t.updated ASC,
+                t.task_id DESC"
             }
             (Some(SortField::Updated), Some(SortOrder::Desc)) => {
                 "ORDER BY
-                updated DESC,
-                task_id DESC"
+                t.updated DESC,
+                t.task_id DESC"
             }
-            _ => "ORDER BY added DESC, task_id DESC",
+            _ => "ORDER BY t.added DESC, t.task_id DESC",
         }
     }
 
@@ -248,7 +247,9 @@ pub async fn query(conn: &mut SqliteConnection, params: Params) -> Result<Query>
         source_path: String,
         #[sqlx(try_from = "&'a str")]
         status: Status,
-        allocated_builder: Option<Uuid>,
+        allocated_builder: Option<String>,
+        allocated_builder_description: Option<String>,
+        allocated_builder_size: Option<String>,
         log_path: Option<String>,
         added: DateTime<Utc>,
         started: Option<DateTime<Utc>>,
@@ -263,25 +264,29 @@ pub async fn query(conn: &mut SqliteConnection, params: Params) -> Result<Query>
     let query_str = format!(
         "
         SELECT
-          task_id,
-          project_id,
-          profile_id,
-          repository_id,
-          slug,
-          package_id,
-          arch,
-          build_id,
-          description,
-          commit_ref,
-          source_path,
-          status,
-          allocated_builder,
-          log_path,
-          added,
-          started,
-          updated,
-          ended
-        FROM task
+          t.task_id,
+          t.project_id,
+          t.profile_id,
+          t.repository_id,
+          t.slug,
+          t.package_id,
+          t.arch,
+          t.build_id,
+          t.description,
+          t.commit_ref,
+          t.source_path,
+          t.status,
+          t.allocated_builder,
+          b.description as allocated_builder_description,
+          b.size as allocated_builder_size,
+          t.log_path,
+          t.added,
+          t.started,
+          t.updated,
+          t.ended
+        FROM
+          task t
+          LEFT JOIN builder b ON t.allocated_builder = b.public_key
         {where_clause}
         {sort_order_clause}
         {limit_offset_clause}
@@ -297,7 +302,7 @@ pub async fn query(conn: &mut SqliteConnection, params: Params) -> Result<Query>
     let query_str = format!(
         "
         SELECT COUNT(*)
-        FROM task
+        FROM task t
         {where_clause}
         "
     );
@@ -309,33 +314,48 @@ pub async fn query(conn: &mut SqliteConnection, params: Params) -> Result<Query>
 
     let mut tasks = rows
         .into_iter()
-        .map(|row| Task {
-            id: row.id,
-            project_id: row.project_id,
-            profile_id: row.profile_id,
-            repository_id: row.repository_id,
-            slug: row.slug,
-            package_id: row.package_id,
-            arch: row.arch,
-            build_id: row.build_id,
-            description: row.description,
-            commit_ref: row.commit_ref,
-            source_path: row.source_path,
-            status: row.status,
-            allocated_builder: row.allocated_builder.map(From::from),
-            log_path: row.log_path,
-            added: row.added,
-            started: row.started,
-            updated: row.updated,
-            ended: row.ended,
-            duration: match (row.started, row.ended) {
-                (Some(start), Some(end)) => Some((end - start).num_seconds()),
-                _ => None,
-            },
-            // Fetched next
-            blocked_by: vec![],
+        .map(|row| {
+            Ok(Task {
+                id: row.id,
+                project_id: row.project_id,
+                profile_id: row.profile_id,
+                repository_id: row.repository_id,
+                slug: row.slug,
+                package_id: row.package_id,
+                arch: row.arch,
+                build_id: row.build_id,
+                description: row.description,
+                commit_ref: row.commit_ref,
+                source_path: row.source_path,
+                status: row.status,
+                allocated_builder: row
+                    .allocated_builder
+                    .map(|public_key| {
+                        Ok(AllocatedBuilder {
+                            public_key: public_key.try_into().context("parse builder public key from row")?,
+                            description: row.allocated_builder_description,
+                            size: row
+                                .allocated_builder_size
+                                .map(|s| s.parse())
+                                .transpose()
+                                .context("parse builder size from row")?,
+                        }) as Result<AllocatedBuilder>
+                    })
+                    .transpose()?,
+                log_path: row.log_path,
+                added: row.added,
+                started: row.started,
+                updated: row.updated,
+                ended: row.ended,
+                duration: match (row.started, row.ended) {
+                    (Some(start), Some(end)) => Some((end - start).num_seconds()),
+                    _ => None,
+                },
+                // Fetched next
+                blocked_by: vec![],
+            })
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>>>()?;
 
     // max number of sqlite params
     for chunk in tasks.chunks_mut(32766) {

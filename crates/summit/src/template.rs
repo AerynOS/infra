@@ -17,10 +17,7 @@ pub type Response = axum::response::Result<Html<String>, StatusCode>;
 
 fn env() -> Environment<'static> {
     let mut env = Environment::new();
-    env.add_filter("repository", filter::repository);
     env.add_filter("profile", filter::profile);
-    env.add_filter("endpoint", filter::endpoint);
-    env.add_filter("builder", filter::builder);
     env.add_filter("task", filter::task);
     env.add_filter("format_duration", filter::format_duration);
     env.add_function("build_task_query_url", function::build_task_query_url);

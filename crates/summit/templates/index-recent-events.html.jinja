@@ -4,8 +4,11 @@
         {% for task in tasks %}
             {% set status = task.status|capitalize %}
             <li class="overview-recent__list__item overview-recent__list__item--{{ task.status }}">
-                {% set endpoint = endpoints | endpoint(task.allocated_builder) %}
-                <h4>{{ status }} #{{ task.id}} {{task.source_path}}{{ ' on ' ~ endpoint.description }}</h4>
+                {% if task.allocated_builder.description %}
+                    <h4>{{ status }} #{{ task.id}} {{task.source_path}}{{ ' on ' ~ task.allocated_builder.description }}</h4>
+                {% else %}
+                    <h4>{{ status }} #{{ task.id}} {{task.source_path}}</h4>
+                {% endif %}
                 <p>{{ task.description }}</p>
                 <div>{{ task.updated }}</div>
             </li>

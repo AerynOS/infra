@@ -1,0 +1,47 @@
+syntax = "proto3";
+
+package common;
+
+enum Service {
+  SERVICE_UNKNOWN = 0;
+  SERVICE_SUMMIT = 1;
+  SERVICE_AVALANCHE = 2;
+  SERVICE_VESSEL = 3;
+}
+
+message Collectable {
+  Kind kind = 1;
+  string name = 2;
+  uint64 size = 3;
+  string sha256sum = 4;
+
+  enum Kind {
+    KIND_UNKNOWN = 0;
+    KIND_JSON_MANIFEST = 1;
+    KIND_BINARY_MANIFEST = 2;
+    KIND_PACKAGE = 3;
+  }
+}
+
+message Remote {
+  // Deprecated, use `source` instead
+  string index_uri = 1 [deprecated = true];
+  string name = 2;
+  uint64 priority = 3;
+  Index index = 4;
+
+}
+
+message Index {
+  oneof index {
+    string direct_index = 1;
+    RootIndex root_index = 2;
+  }
+
+  message RootIndex {
+    string base_uri = 1;
+    string channel = 2;
+    string version = 3;
+  }
+}
+

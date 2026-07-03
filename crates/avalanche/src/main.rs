@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use clap::Parser;
-use service::{Server, State, buildinfo, endpoint::Role};
+use service::{Server, Service, State, buildinfo};
 use tracing::info;
 
 use self::build::build;
@@ -37,11 +37,9 @@ async fn main() -> Result<()> {
     );
 
     let state = State::load(root).await?;
-    let issuer = config.issuer(state.key_pair.clone());
 
-    Server::new(Role::Builder, &state, config.admin.clone())
+    Server::new(Service::Avalanche, &state, config.admin.clone())
         .with_task("stream", stream::run(state.clone(), config.clone()))
-        .with_auto_enroll(issuer, config.hubs)
         .start()
         .await?;
 

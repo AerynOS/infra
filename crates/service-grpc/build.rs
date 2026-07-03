@@ -5,10 +5,8 @@ use prost_reflect::{DescriptorPool, prost::Message};
 use prost_types::FileDescriptorSet;
 
 const PROTO_FILES: &[&str] = &[
-    "proto/account.proto",
-    "proto/collectable.proto",
-    "proto/endpoint.proto",
-    "proto/remote.proto",
+    "proto/auth.proto",
+    "proto/common.proto",
     "proto/summit.proto",
     "proto/vessel.proto",
 ];
