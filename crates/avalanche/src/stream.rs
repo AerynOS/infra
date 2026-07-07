@@ -109,30 +109,10 @@ async fn connect(
     building: Arc<Mutex<Option<Building>>>,
     notify_build_change: watch::Sender<()>,
 ) {
-    // Create auth credentials up here so it'll live longer than our `connect_inner` loop
-    // and we can reuse access tokens across broken connections / reconnect loop
-    let auth = CredentialsAuth::with_in_memory_storage(Credentials::Service {
-        service: Service::Avalanche,
-        key_pair: state.key_pair.clone(),
-    })
-    // Ensure the configured summit is who they say they are
-    //
-    // TLS should cover this, but this is an extra protection especially
-    // if TLS isn't enabled on the summit grpc server
-    .verify_server(summit.public_key);
-
     loop {
         debug!("Attempting to connect to summit");
 
-        if let Err(e) = connect_inner(
-            state,
-            summit,
-            auth.clone(),
-            building.clone(),
-            notify_build_change.clone(),
-        )
-        .await
-        {
+        if let Err(e) = connect_inner(state, summit, building.clone(), notify_build_change.clone()).await {
             let error = error::chain(&*e);
             error!(%error, "Stream error");
 
@@ -145,13 +125,24 @@ async fn connect(
 async fn connect_inner(
     state: &State,
     summit: &SummitConfig,
-    auth: CredentialsAuth<InMemoryTokenStorage>,
     building: Arc<Mutex<Option<Building>>>,
     notify_build_change: watch::Sender<()>,
 ) -> Result<()> {
-    let mut client = SummitServiceClient::connect_with_auth(summit.host_address.clone(), None, auth)
-        .await
-        .context("connect summit client")?;
+    let mut client = SummitServiceClient::connect_with_auth(
+        summit.host_address.clone(),
+        None,
+        CredentialsAuth::with_in_memory_storage(Credentials::Service {
+            service: Service::Avalanche,
+            key_pair: state.key_pair.clone(),
+        })
+        // Ensure the configured summit is who they say they are
+        //
+        // TLS should cover this, but this is an extra protection especially
+        // if TLS isn't enabled on the summit grpc server
+        .verify_server(summit.public_key),
+    )
+    .await
+    .context("connect summit client")?;
 
     let (sender, receiver) = mpsc::channel(1);
 

@@ -40,22 +40,10 @@ async fn connect(
     mut worker_sender: worker::Sender,
     mut worker_events: worker::EventReceiver,
 ) {
-    // Create auth credentials up here so it'll live longer than our `connect_inner` loop
-    // and we can reuse access tokens across broken connections / reconnect loop
-    let auth = CredentialsAuth::with_in_memory_storage(Credentials::Service {
-        service: Service::Vessel,
-        key_pair: state.service.key_pair.clone(),
-    })
-    // Ensure the configured summit is who they say they are
-    //
-    // TLS should cover this, but this is an extra protection especially
-    // if TLS isn't enabled on the summit grpc server
-    .verify_server(config.summit.public_key);
-
     loop {
         debug!("Attempting to connect to summit");
 
-        if let Err(e) = connect_inner(state, config, auth.clone(), &mut worker_sender, &mut worker_events).await {
+        if let Err(e) = connect_inner(state, config, &mut worker_sender, &mut worker_events).await {
             let error = error::chain(&*e);
             error!(%error, "Stream error");
 
@@ -68,13 +56,24 @@ async fn connect(
 async fn connect_inner(
     state: &State,
     config: &Config,
-    auth: CredentialsAuth<InMemoryTokenStorage>,
     worker_sender: &mut worker::Sender,
     worker_events: &mut worker::EventReceiver,
 ) -> Result<()> {
-    let mut client = SummitServiceClient::connect_with_auth(config.summit.host_address.clone(), None, auth)
-        .await
-        .context("connect summit client")?;
+    let mut client = SummitServiceClient::connect_with_auth(
+        config.summit.host_address.clone(),
+        None,
+        CredentialsAuth::with_in_memory_storage(Credentials::Service {
+            service: Service::Vessel,
+            key_pair: state.service.key_pair.clone(),
+        })
+        // Ensure the configured summit is who they say they are
+        //
+        // TLS should cover this, but this is an extra protection especially
+        // if TLS isn't enabled on the summit grpc server
+        .verify_server(config.summit.public_key),
+    )
+    .await
+    .context("connect summit client")?;
 
     let (sender, receiver) = mpsc::channel(1);
 
