@@ -4,7 +4,7 @@ use color_eyre::eyre::{Context, OptionExt, Result};
 use futures_util::{TryStreamExt, future::join_all};
 use service::{
     Service, State,
-    client::{AuthClient, Credentials, CredentialsAuth, InMemoryTokenStorage, SummitServiceClient},
+    client::{AuthClient, Credentials, CredentialsAuth, SummitServiceClient},
     crypto::PublicKey,
     error,
     grpc::proto::{common::Collectable, summit::builder_stream},
