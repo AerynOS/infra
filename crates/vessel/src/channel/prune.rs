@@ -1,12 +1,17 @@
-use std::time::Duration;
+use std::{
+    collections::BTreeSet,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use chrono::Utc;
 use color_eyre::eyre::{Context, Result};
+use futures_util::{TryStreamExt, future};
 use tokio::fs;
 use tracing::info;
 
 use crate::{
-    Package, State,
+    State,
     channel::{self, db},
     package,
 };
@@ -85,34 +90,47 @@ async fn prune_orphaned_packages(state: &State, channel: &str) -> Result<()> {
     info!("Checking for orphaned stones");
 
     // All stones on the filesystem
-    let mut stones = vec![];
+    let mut on_disk_stones = BTreeSet::new();
 
-    let pool_dir = state.public_dir().join(channel).join("pool");
-    let legacy_pool_dir = state.public_dir().join(channel).join("legacy/pool");
+    let base_dir = state.public_dir().join(channel);
+    let pool_dir = base_dir.join("pool");
+    let legacy_pool_dir = base_dir.join("legacy/pool");
 
     for path in [&pool_dir, &legacy_pool_dir] {
         if fs::try_exists(path).await? {
-            stones.extend(package::enumerate(path).await.context("enumerate stones")?);
+            on_disk_stones.extend(package::enumerate_paths(path).await.context("enumerate stones")?);
         }
     }
 
-    // Package id is the sha256 of the file on disk. We use this to detect
-    // orphaned stones that aren't part of any existing index.
-    let index_hashes = db::unique_package_ids(
-        state
-            .service_db()
-            .acquire()
-            .await
-            .context("acquire database connection")?
-            .as_mut(),
-        channel,
-    )
-    .await
-    .context("list unique package ids from db")?;
+    // All packages linked to from an active history & their resolved path
+    //
+    // Ensure we remove all orphaned DB packages caused from removed histories
+    // since the last time we ran this function
+    let (db_package_paths, db_package_ids) = {
+        let mut tx = state.service_db().begin().await.context("begin database tx")?;
 
-    let orphaned_stones = stones
+        db::delete_orphaned_packages(&mut tx, channel)
+            .await
+            .context("delete db orphaned packages")?;
+
+        let (paths, package_ids) = db::all_entries(tx.as_mut(), channel)
+            .try_fold((BTreeSet::new(), BTreeSet::new()), |(mut paths, mut ids), entry| {
+                paths.insert(base_dir.join(entry.relative_path()));
+                ids.insert(moss::package::Id::from(entry.package_id));
+                future::ready(Ok((paths, ids)))
+            })
+            .await
+            .context("list db all entries")?;
+
+        tx.commit().await.context("commit db tx")?;
+
+        (paths, package_ids)
+    };
+
+    // Any on-disk stone that isn't used by any remaining channel history
+    let orphaned_stones = on_disk_stones
         .into_iter()
-        .filter(|stone| !index_hashes.contains(&stone.sha256sum))
+        .filter(|path| !db_package_paths.contains(path))
         .collect::<Vec<_>>();
 
     if orphaned_stones.is_empty() {
@@ -122,40 +140,56 @@ async fn prune_orphaned_packages(state: &State, channel: &str) -> Result<()> {
 
     let num_stones = orphaned_stones.len();
 
-    remove_orphaned_packages(state, orphaned_stones)
+    remove_orphaned_stones(orphaned_stones)
         .await
-        .context("remove orphaned packages")?;
+        .context("remove orphaned stones")?;
+
+    remove_orphaned_meta_db_packages(state, db_package_ids)
+        .await
+        .context("remove orphaned meta db packages")?;
 
     info!(num_stones, "All orphaned stones removed");
 
     Ok(())
 }
 
-async fn remove_orphaned_packages(state: &State, packages: Vec<Package>) -> Result<()> {
+async fn remove_orphaned_stones(stones: Vec<PathBuf>) -> Result<()> {
     use rayon::prelude::*;
 
-    let state = state.clone();
-
     tokio::task::spawn_blocking(move || {
-        packages
+        stones
             .into_par_iter()
-            .try_for_each_with(state, |state, stone| remove_orphaned_package(state, stone))
+            .try_for_each(|path| remove_orphaned_stone(&path).context(format!("remove orphaned package {path:?}")))
     })
     .await
     .context("join handle")?
 }
 
-fn remove_orphaned_package(state: &State, stone: Package) -> Result<()> {
+fn remove_orphaned_stone(path: &Path) -> Result<()> {
     use std::fs;
 
-    fs::remove_file(&stone.path).context(format!("remove orphaned stone {:?}", stone.path))?;
+    fs::remove_file(path).context("remove stone")?;
 
-    state
-        .meta_db
-        .remove(&stone.sha256sum.clone().into())
-        .context("remove stone from metadb")?;
-
-    info!(path = ?stone.relative_path, "Orphaned stone removed");
+    info!(?path, "Orphaned stone removed");
 
     Ok(())
+}
+
+async fn remove_orphaned_meta_db_packages(state: &State, db_package_ids: BTreeSet<moss::package::Id>) -> Result<()> {
+    let state = state.clone();
+
+    tokio::task::spawn_blocking(move || {
+        let meta_db_ids = state.meta_db.package_ids().context("list meta db package ids")?;
+
+        let orphaned_meta_db_ids = meta_db_ids.difference(&db_package_ids);
+
+        state
+            .meta_db
+            .batch_remove(orphaned_meta_db_ids)
+            .context("remove orphaned meta db package ids")?;
+
+        Ok(())
+    })
+    .await
+    .context("join handle")?
 }
