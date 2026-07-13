@@ -425,10 +425,10 @@ pub async fn link_version_to_history(
     Ok(())
 }
 
-/// Delete all history versions that aren't currently linked against
+/// Returns all history versions that aren't currently linked against
 /// and are created before the provided time
-pub async fn delete_stale_history(
-    tx: &mut Transaction,
+pub async fn list_stale_history(
+    conn: &mut SqliteConnection,
     channel: &str,
     created_before: DateTime<Utc>,
 ) -> sqlx::Result<Vec<HistoryVersion>> {
@@ -443,24 +443,49 @@ pub async fn delete_stale_history(
             channel = ?
             AND history_id IS NOT NULL
         )
-        DELETE FROM
+        SELECT
+          channel_version_id,
+          version,
+          format
+        FROM
           channel_version
         WHERE
           channel = ?
           AND version LIKE 'history/%'
           AND channel_version_id NOT IN (SELECT * FROM referenced_history)
           AND created < ?
-        RETURNING
-          channel_version_id,
-          version,
-          format
         ",
     )
     .bind(channel)
     .bind(channel)
     .bind(created_before.timestamp())
-    .fetch_all(tx.as_mut())
+    .fetch_all(conn)
     .await
+}
+
+/// Delete the provided channel history
+pub async fn delete_history(tx: &mut Transaction, channel: &str, history: &HistoryVersion) -> Result<()> {
+    let result = sqlx::query(
+        "
+        DELETE FROM
+          channel_version
+        WHERE
+          channel = ?
+          AND channel_version_id = ?
+        ",
+    )
+    .bind(channel)
+    .bind(history.channel_version_id)
+    .execute(tx.as_mut())
+    .await?;
+
+    ensure!(
+        result.rows_affected() == 1,
+        "{} doesn't exist in channel {channel}",
+        history.version,
+    );
+
+    Ok(())
 }
 
 /// Add a tag
@@ -664,12 +689,14 @@ mod test {
         record_history(&mut tx, CHANNEL, &[], &FORMAT).await.unwrap();
 
         // Previous 3 states should be removable
-        let deleted = delete_stale_history(&mut tx, CHANNEL, cutoff)
-            .await
-            .unwrap()
-            .into_iter()
-            .map(|h| h.version)
-            .collect::<HashSet<_>>();
+        let stale = list_stale_history(tx.as_mut(), CHANNEL, cutoff).await.unwrap();
+
+        let mut deleted = HashSet::new();
+
+        for history in stale {
+            delete_history(&mut tx, CHANNEL, &history).await.unwrap();
+            deleted.insert(history.version);
+        }
 
         assert_eq!(deleted, deletable);
     }
