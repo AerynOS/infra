@@ -32,6 +32,8 @@ impl State {
             .await
             .context("apply database migrations")?;
 
+        service.service_db.vacuum().await.context("run db vacuum")?;
+
         Ok(Arc::new(Self {
             service,
             builders: Default::default(),

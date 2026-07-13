@@ -40,6 +40,12 @@ impl Database {
         Ok(())
     }
 
+    /// Runs VACUUM on the database
+    pub async fn vacuum(&self) -> Result<(), Error> {
+        sqlx::query("VACUUM").execute(&self.pool).await?;
+        Ok(())
+    }
+
     /// Acquire a database connection
     pub async fn acquire(&self) -> Result<PoolConnection<Sqlite>, Error> {
         Ok(self.pool.acquire().await?)
