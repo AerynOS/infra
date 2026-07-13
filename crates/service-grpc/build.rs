@@ -80,7 +80,7 @@ impl ServiceGenerator for Generator {
         buf.push_str("#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]");
         buf.push_str("pub enum Method {");
         for (method, _, _) in &methods {
-            buf.push_str(&format!("\n{},", &method.proto_name));
+            buf.push_str(&format!("\n{},", method.proto_name));
         }
         buf.push_str("\n}");
 

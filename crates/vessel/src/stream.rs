@@ -3,7 +3,7 @@ use std::{convert::Infallible, time::Duration};
 use color_eyre::eyre::{Context, OptionExt as _, Result, bail, eyre};
 use service::{
     Service,
-    client::{AuthClient as _, Credentials, CredentialsAuth, InMemoryTokenStorage, SummitServiceClient},
+    client::{AuthClient as _, Credentials, CredentialsAuth, SummitServiceClient},
     error,
     grpc::proto::{
         summit::repository_manager_stream,
