@@ -1,4 +1,4 @@
-use std::{collections::HashSet, time::Duration};
+use std::time::Duration;
 
 use chrono::Utc;
 use color_eyre::eyre::{Context, Result};
@@ -96,8 +96,9 @@ async fn prune_orphaned_packages(state: &State, channel: &str) -> Result<()> {
         }
     }
 
-    // Packages in any version
-    let indexed_packages = db::all_entries(
+    // Package id is the sha256 of the file on disk. We use this to detect
+    // orphaned stones that aren't part of any existing index.
+    let index_hashes = db::unique_package_ids(
         state
             .service_db()
             .acquire()
@@ -107,14 +108,7 @@ async fn prune_orphaned_packages(state: &State, channel: &str) -> Result<()> {
         channel,
     )
     .await
-    .context("list entries from collection db")?;
-
-    // Package id is the sha256 of the file on disk. We use this to detect
-    // orphaned packages that aren't part of the existing index
-    let index_hashes = indexed_packages
-        .into_iter()
-        .map(|entry| entry.package_id)
-        .collect::<HashSet<_>>();
+    .context("list unique package ids from db")?;
 
     let orphaned_stones = stones
         .into_iter()

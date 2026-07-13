@@ -77,28 +77,25 @@ pub async fn entries(conn: &mut SqliteConnection, channel: &str, version: &Versi
     .await
 }
 
-/// List all entries for the provided channel across all versions
-pub async fn all_entries(conn: &mut SqliteConnection, channel: &str) -> sqlx::Result<HashSet<Entry>> {
-    sqlx::query_as(
+/// List all unique package ids for the provided channel across all versions
+pub async fn unique_package_ids(conn: &mut SqliteConnection, channel: &str) -> sqlx::Result<HashSet<String>> {
+    sqlx::query_as::<_, (String,)>(
         "
-        SELECT
-          package_id,
-          name,
-          arch,
-          source_id,
-          source_version,
-          source_release,
-          build_release,
-          format
+        SELECT DISTINCT
+          cve.package_id
         FROM
-          channel_version_entry
+          channel_version_entry cve
+          JOIN channel_version cv USING (channel_version_id)
         WHERE
-          channel_version_id IN (SELECT channel_version_id FROM channel_version WHERE channel = ?);
+          cv.channel = ?;
         ",
     )
     .bind(channel)
     .fetch(conn)
-    .try_collect()
+    .try_fold(HashSet::new(), |mut acc, (item,)| async {
+        acc.insert(item);
+        Ok(acc)
+    })
     .await
 }
 
