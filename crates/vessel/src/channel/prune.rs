@@ -28,36 +28,54 @@ async fn prune_stale_versions(state: &State, channel: &str) -> Result<()> {
     // TODO: Configurable
     const STALE_AFTER: Duration = Duration::from_secs(60 * 60 * 24 * 14);
 
-    let mut tx = state.service_db().begin().await.context("begin db tx")?;
-
     let created_before = Utc::now() - chrono::Duration::from_std(STALE_AFTER).expect("within i64");
 
     info!(%created_before, "Checking for stale history");
 
-    let deleted = db::delete_stale_history(&mut tx, channel, created_before)
-        .await
-        .context("delete stale history")?;
+    let stale_history = db::list_stale_history(
+        state.service_db().acquire().await.context("acquire db conn")?.as_mut(),
+        channel,
+        created_before,
+    )
+    .await
+    .context("list stale history")?;
 
-    if deleted.is_empty() {
+    if stale_history.is_empty() {
         info!("No stale history");
         return Ok(());
     }
 
-    for d in &deleted {
-        // Only history versions are returned from prune stale history
-        let channel::Version::History { identifier: history } = &d.version else {
+    for history in &stale_history {
+        // Only history versions are returned from list stale history
+        let channel::Version::History { identifier } = &history.version else {
             continue;
         };
 
         // Remove from filesystem
-        let _ = fs::remove_dir_all(state.public_dir().join(channel).join(history.relative_base_dir())).await;
+        //
+        // Ignore error since DB operation can't be atomic w/ FS operation
+        // and the committed DB operation is the source of truth. If a DB commit
+        // fails _after_ the FS operation, we can safely retry and the
+        // folder will already be deleted, which is fine.
+        let _ = fs::remove_dir_all(state.public_dir().join(channel).join(identifier.relative_base_dir())).await;
 
-        info!(version = %d.version, "History deleted");
+        // Remove from DB
+        //
+        // Commits the removal of this history from state
+        {
+            let mut tx = state.service_db().begin().await.context("begin db tx")?;
+
+            db::delete_history(&mut tx, channel, history)
+                .await
+                .context("delete db history")?;
+
+            tx.commit().await.context("commit db tx")?;
+        }
+
+        info!(version = %history.version, "History deleted");
     }
 
-    info!("num_deleted" = deleted.len(), "Stale history deleted");
-
-    tx.commit().await.context("commit db tx")?;
+    info!("num_deleted" = stale_history.len(), "Stale history deleted");
 
     Ok(())
 }
