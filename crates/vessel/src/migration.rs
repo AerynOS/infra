@@ -18,6 +18,8 @@ pub async fn run_all(state: &State) -> Result<()> {
         .await
         .context("apply database migrations")?;
 
+    state.service_db().vacuum().await.context("run db vacuum")?;
+
     migrate_collection_model(state, &state.meta_db)
         .await
         .context("migrate channel versions")?;
