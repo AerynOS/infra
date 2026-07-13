@@ -1,8 +1,8 @@
-use std::{collections::HashSet, time::Duration};
+use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use color_eyre::eyre::{Context, Result, bail, ensure, eyre};
-use futures_util::TryStreamExt;
+use futures_util::{Stream, TryStreamExt};
 use moss::repository::Format;
 use service::database::Transaction;
 use sqlx::{FromRow, SqliteConnection};
@@ -10,6 +10,35 @@ use tokio::time;
 use tracing::debug;
 
 use crate::channel::version::{Entry, HistoryIdentifier, Identifier, TagIdentifier, Version};
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, FromRow)]
+struct ChannelPackageRow {
+    channel_package_id: i64,
+    package_id: String,
+    name: String,
+    arch: String,
+    source_id: String,
+    source_version: String,
+    source_release: i64,
+    build_release: i64,
+    #[sqlx(try_from = "&'a str")]
+    format: Format,
+}
+
+impl From<ChannelPackageRow> for Entry {
+    fn from(row: ChannelPackageRow) -> Self {
+        Self {
+            package_id: row.package_id,
+            name: row.name,
+            arch: row.arch,
+            source_id: row.source_id,
+            source_version: row.source_version,
+            source_release: row.source_release,
+            build_release: row.build_release,
+            format: row.format,
+        }
+    }
+}
 
 /// Lookup if a package name already exists in the provided channel version
 pub async fn lookup_entry(
@@ -26,20 +55,21 @@ pub async fn lookup_entry(
     sqlx::query_as(
         "
         SELECT
-          package_id,
-          name,
-          arch,
-          source_id,
-          source_version,
-          source_release,
-          build_release,
-          format
+          cp.package_id,
+          cp.name,
+          cp.arch,
+          cp.source_id,
+          cp.source_version,
+          cp.source_release,
+          cp.build_release,
+          cp.format
         FROM
-          channel_version_entry
+          channel_version_package cvp
+          JOIN channel_package cp USING (channel_package_id)
         WHERE
-          channel_version_id = ?
-          AND name = ?
-          AND arch = ?;
+          cvp.channel_version_id = ?
+          AND cp.name = ?
+          AND cp.arch = ?;
         ",
     )
     .bind(history.channel_version_id)
@@ -55,48 +85,16 @@ pub async fn entries(conn: &mut SqliteConnection, channel: &str, version: &Versi
         return Ok(vec![]);
     };
 
-    sqlx::query_as(
-        "
-        SELECT
-          package_id,
-          name,
-          arch,
-          source_id,
-          source_version,
-          source_release,
-          build_release,
-          format
-        FROM
-          channel_version_entry
-        WHERE
-          channel_version_id = ?;
-        ",
-    )
-    .bind(history.channel_version_id)
-    .fetch_all(conn)
-    .await
+    Ok(packages_for_version(conn, history.channel_version_id)
+        .await?
+        .into_iter()
+        .map(Entry::from)
+        .collect())
 }
 
-/// List all unique package ids for the provided channel across all versions
-pub async fn unique_package_ids(conn: &mut SqliteConnection, channel: &str) -> sqlx::Result<HashSet<String>> {
-    sqlx::query_as::<_, (String,)>(
-        "
-        SELECT DISTINCT
-          cve.package_id
-        FROM
-          channel_version_entry cve
-          JOIN channel_version cv USING (channel_version_id)
-        WHERE
-          cv.channel = ?;
-        ",
-    )
-    .bind(channel)
-    .fetch(conn)
-    .try_fold(HashSet::new(), |mut acc, (item,)| async {
-        acc.insert(item);
-        Ok(acc)
-    })
-    .await
+/// List all entries for the provided channel
+pub fn all_entries<'a>(conn: &'a mut SqliteConnection, channel: &str) -> impl Stream<Item = sqlx::Result<Entry>> + 'a {
+    packages_for_channel(conn, channel).map_ok(Entry::from)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -273,90 +271,47 @@ pub async fn record_history(
     .fetch_one(tx.as_mut())
     .await?;
 
-    // Copy entries from old version to new version
-    if let Some(prev_history) = prev_history {
-        sqlx::query(
-            "
-            INSERT INTO channel_version_entry
-            (
-              channel_version_id,
-              package_id,
-              name,
-              arch,
-              source_id,
-              source_version,
-              source_release,
-              build_release,
-              format
-            )
-            SELECT
-              ?,
-              package_id,
-              name,
-              arch,
-              source_id,
-              source_version,
-              source_release,
-              build_release,
-              format
-            FROM
-              channel_version_entry
-            WHERE
-              channel_version_id = ?
-            ",
-        )
-        .bind(new_id)
-        .bind(prev_history.channel_version_id)
-        .execute(tx.as_mut())
-        .await?;
+    // Insert each incoming entry as a new package
+    let mut new_packages = Vec::with_capacity(entries.len());
+
+    for entry in entries {
+        new_packages.push(insert_package(tx, channel, entry).await?);
     }
 
-    // Update new version with incoming entries
-    for chunk in entries.chunks(32766 / 8) {
-        let values_binds = ",(?,?,?,?,?,?,?,?,?)"
-            .repeat(chunk.len())
-            .chars()
-            .skip(1)
-            .collect::<String>();
+    let packages = if let Some(history) = &prev_history {
+        // Remove any name/arch collisions & layer in new packages
+        let mut existing_packages = packages_for_version(tx.as_mut(), history.channel_version_id).await?;
+
+        existing_packages.retain(|existing| {
+            !new_packages
+                .iter()
+                .any(|new| existing.name == new.name && existing.arch == new.arch)
+        });
+
+        existing_packages.into_iter().chain(new_packages).collect()
+    } else {
+        new_packages
+    };
+
+    // Link all packages to new version
+    for chunk in packages.chunks(32766 / 2) {
+        let values_binds = ",(?,?)".repeat(chunk.len()).chars().skip(1).collect::<String>();
 
         let query_str = format!(
             "
-            INSERT INTO channel_version_entry
+            INSERT INTO channel_version_package
             (
               channel_version_id,
-              package_id,
-              name,
-              arch,
-              source_id,
-              source_version,
-              source_release,
-              build_release,
-              format
+              channel_package_id
             )
             VALUES {values_binds}
-            ON CONFLICT(channel_version_id, name, arch) DO UPDATE SET
-              package_id=excluded.package_id,
-              source_id=excluded.source_id,
-              source_version=excluded.source_version,
-              source_release=excluded.source_release,
-              build_release=excluded.build_release,
-              format=excluded.format;
             "
         );
 
         let mut query = sqlx::query(&query_str);
 
-        for entry in chunk {
-            query = query
-                .bind(new_id)
-                .bind(&entry.package_id)
-                .bind(&entry.name)
-                .bind(&entry.arch)
-                .bind(&entry.source_id)
-                .bind(&entry.source_version)
-                .bind(entry.source_release)
-                .bind(entry.build_release)
-                .bind(entry.format.to_string());
+        for package in chunk {
+            query = query.bind(new_id).bind(package.channel_package_id);
         }
 
         query.execute(tx.as_mut()).await?;
@@ -372,6 +327,109 @@ pub async fn record_history(
     link_version_to_history(tx, channel, &Version::Volatile, &history).await?;
 
     Ok(history)
+}
+
+fn packages_for_channel<'a>(
+    conn: &'a mut SqliteConnection,
+    channel: &str,
+) -> impl Stream<Item = sqlx::Result<ChannelPackageRow>> + 'a {
+    sqlx::query_as(
+        "
+        SELECT
+          channel_package_id,
+          package_id,
+          name,
+          arch,
+          source_id,
+          source_version,
+          source_release,
+          build_release,
+          format
+        FROM
+          channel_package
+        WHERE
+          channel = ?
+        ",
+    )
+    .bind(channel.to_owned())
+    .fetch(conn)
+}
+
+async fn packages_for_version(
+    conn: &mut SqliteConnection,
+    channel_version_id: i64,
+) -> sqlx::Result<Vec<ChannelPackageRow>> {
+    sqlx::query_as(
+        "
+        SELECT
+          cp.channel_package_id,
+          cp.package_id,
+          cp.name,
+          cp.arch,
+          cp.source_id,
+          cp.source_version,
+          cp.source_release,
+          cp.build_release,
+          cp.format
+        FROM
+          channel_version_package cvp
+          JOIN channel_package cp USING (channel_package_id)
+        WHERE
+          cvp.channel_version_id = ?;
+        ",
+    )
+    .bind(channel_version_id)
+    .fetch_all(conn)
+    .await
+}
+
+async fn insert_package(tx: &mut Transaction, channel: &str, entry: &Entry) -> sqlx::Result<ChannelPackageRow> {
+    sqlx::query_as(
+        "
+        INSERT INTO channel_package
+        (
+          channel,
+          format,
+          package_id,
+          name,
+          arch,
+          source_id,
+          source_version,
+          source_release,
+          build_release
+        )
+        VALUES (?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(channel, format, package_id) DO UPDATE SET
+          name=excluded.name,
+          arch=excluded.arch,
+          source_id=excluded.source_id,
+          source_version=excluded.source_version,
+          source_release=excluded.source_release,
+          build_release=excluded.build_release
+        RETURNING
+          channel_package_id,
+          channel,
+          package_id,
+          name,
+          arch,
+          source_id,
+          source_version,
+          source_release,
+          build_release,
+          format
+        ",
+    )
+    .bind(channel)
+    .bind(entry.format.to_string())
+    .bind(&entry.package_id)
+    .bind(&entry.name)
+    .bind(&entry.arch)
+    .bind(&entry.source_id)
+    .bind(&entry.source_version)
+    .bind(entry.source_release)
+    .bind(entry.build_release)
+    .fetch_one(tx.as_mut())
+    .await
 }
 
 pub async fn link_version_to_history(
@@ -533,9 +591,37 @@ pub async fn delete_tag(tx: &mut Transaction, channel: &str, tag: &TagIdentifier
     Ok(())
 }
 
+pub async fn delete_orphaned_packages(tx: &mut Transaction, channel: &str) -> sqlx::Result<()> {
+    sqlx::query(
+        "
+        DELETE FROM
+          channel_package
+        WHERE
+          channel = ?
+          AND channel_package_id NOT IN (
+            SELECT DISTINCT
+              cvp.channel_package_id
+            FROM
+              channel_version_package cvp
+              JOIN channel_version cv USING (channel_version_id)
+            WHERE
+              cv.channel = ?
+          )
+        ",
+    )
+    .bind(channel)
+    .bind(channel)
+    .execute(tx.as_mut())
+    .await?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod test {
     #![allow(clippy::too_many_arguments)]
+
+    use std::collections::HashSet;
 
     use test_case::test_case;
     use url::Url;
