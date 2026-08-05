@@ -5,7 +5,7 @@ use color_eyre::eyre::{Context, Result, bail, ensure, eyre};
 use futures_util::{Stream, TryStreamExt};
 use moss::repository::Format;
 use service::database::Transaction;
-use sqlx::{FromRow, SqliteConnection};
+use sqlx::{AssertSqlSafe, FromRow, SqliteConnection};
 use tokio::time;
 use tracing::debug;
 
@@ -184,7 +184,7 @@ pub async fn find_related_history(
         "
     };
 
-    sqlx::query_as(&format!(
+    sqlx::query_as(AssertSqlSafe(format!(
         "
         SELECT
           channel_version_id,
@@ -194,7 +194,7 @@ pub async fn find_related_history(
           channel_version
         {where_clause}
         ",
-    ))
+    )))
     .bind(channel)
     .bind(version.slug())
     .fetch_optional(conn)
@@ -308,7 +308,7 @@ pub async fn record_history(
             "
         );
 
-        let mut query = sqlx::query(&query_str);
+        let mut query = sqlx::query(AssertSqlSafe(query_str.as_str()));
 
         for package in chunk {
             query = query.bind(new_id).bind(package.channel_package_id);

@@ -4,7 +4,7 @@ use chrono::{DateTime, TimeZone as _, Utc};
 use color_eyre::eyre::{Context, Result};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
-use sqlx::{Sqlite, SqliteConnection, prelude::FromRow, query::QueryAs, sqlite::SqliteArguments};
+use sqlx::{AssertSqlSafe, Sqlite, SqliteConnection, prelude::FromRow, query::QueryAs, sqlite::SqliteArguments};
 
 use crate::{profile, project, repository, task::AllocatedBuilder, use_mock_data};
 
@@ -182,8 +182,8 @@ impl Params {
 
     fn bind_where<'a, O>(
         &self,
-        mut query: QueryAs<'a, Sqlite, O, SqliteArguments<'a>>,
-    ) -> QueryAs<'a, Sqlite, O, SqliteArguments<'a>> {
+        mut query: QueryAs<'a, Sqlite, O, SqliteArguments>,
+    ) -> QueryAs<'a, Sqlite, O, SqliteArguments> {
         if let Some(id) = self.id {
             query = query.bind(i64::from(id));
         }
@@ -204,8 +204,8 @@ impl Params {
 
     fn bind_limit_offset<'a, O>(
         &self,
-        mut query: QueryAs<'a, Sqlite, O, SqliteArguments<'a>>,
-    ) -> QueryAs<'a, Sqlite, O, SqliteArguments<'a>> {
+        mut query: QueryAs<'a, Sqlite, O, SqliteArguments>,
+    ) -> QueryAs<'a, Sqlite, O, SqliteArguments> {
         if let Some(limit) = self.limit {
             query = query.bind(limit);
         }
@@ -293,7 +293,7 @@ pub async fn query(conn: &mut SqliteConnection, params: Params) -> Result<Query>
         ",
     );
 
-    let mut query = sqlx::query_as::<_, Row>(&query_str);
+    let mut query = sqlx::query_as::<_, Row>(AssertSqlSafe(query_str.as_str()));
     query = params.bind_where(query);
     query = params.bind_limit_offset(query);
 
@@ -307,7 +307,7 @@ pub async fn query(conn: &mut SqliteConnection, params: Params) -> Result<Query>
         "
     );
 
-    let mut query = sqlx::query_as::<_, (i64,)>(&query_str);
+    let mut query = sqlx::query_as::<_, (i64,)>(AssertSqlSafe(query_str.as_str()));
     query = params.bind_where(query);
 
     let (total,) = query.fetch_one(&mut *conn).await.context("fetch tasks count")?;
@@ -371,7 +371,7 @@ pub async fn query(conn: &mut SqliteConnection, params: Params) -> Result<Query>
             ",
         );
 
-        let mut query = sqlx::query_as::<_, (i64, String)>(&query_str);
+        let mut query = sqlx::query_as::<_, (i64, String)>(AssertSqlSafe(query_str.as_str()));
 
         for task in chunk.iter() {
             query = query.bind(i64::from(task.id));

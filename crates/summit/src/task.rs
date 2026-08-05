@@ -7,7 +7,7 @@ use http::Uri;
 use moss::{db::meta, dependency, package::Meta};
 use serde::{Deserialize, Serialize};
 use service::{crypto::PublicKey, database::Transaction};
-use sqlx::{SqliteConnection, prelude::FromRow};
+use sqlx::{AssertSqlSafe, SqliteConnection, prelude::FromRow};
 use strum::IntoEnumIterator;
 use tokio::task::spawn_blocking;
 use tracing::{Instrument, Span, debug, error, info, trace, warn};
@@ -658,7 +658,7 @@ async fn set_status(tx: &mut Transaction, task_id: Id, status: Status) -> Result
         ",
     );
 
-    sqlx::query(&query)
+    sqlx::query(AssertSqlSafe(query.as_str()))
         .bind(status.to_string())
         .bind(i64::from(task_id))
         .execute(tx.as_mut())
@@ -822,7 +822,7 @@ async fn collect_missing<'a>(
 
             let packages = spawn_blocking({
                 let repo_db = repo_db.clone();
-                move || repo_db.query(None)
+                move || repo_db.query(meta::Filter::All)
             })
             .await
             .context("join handle")?
@@ -837,7 +837,7 @@ async fn collect_missing<'a>(
                 {
                     let corresponding = spawn_blocking({
                         let profile_db = profile_db.clone();
-                        move || profile_db.query(Some(meta::Filter::Provider(name)))
+                        move || profile_db.query(meta::Filter::Provider(name))
                     })
                     .await
                     .context("join handle")?
